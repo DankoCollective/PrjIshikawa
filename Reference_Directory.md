@@ -3,6 +3,7 @@
 ## Normative repository references
 
 - Danko Lab operating reference: `danko_lab.md`
+- Node/Next.js runtime image definition: `node_nextjs_runtime_image.md`
 - Agent operation: `AGENT_OPERATION.md`
 - Agent persona: `AGENT_PERSONA.md`
 - Coding standard: `CODING_STANDARD.md`

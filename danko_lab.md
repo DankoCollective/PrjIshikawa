@@ -181,7 +181,9 @@ operating them.
 - Ishikawa v1.3 passed the disposable EmceeDanko gate with 486 native tests
   and 60/60 synthetic frontier cases; attended target-side human UI
   acceptance remains the next product gate at this snapshot.
-- The Chat UI is an on-demand container at `127.0.0.1:3000`.
+- The Chat UI is an on-demand container. Its portable packaged default remains
+  `127.0.0.1:3000`; the selected EmceeDanko deployment override is
+  `127.0.0.1:3384` to avoid the operator-reported port `3000` collision.
 - The Retrieval API is a native user service. Its portable packaged default
   remains `127.0.0.1:1384`; the selected EmceeDanko deployment override is
   `127.0.0.1:8384` so Anderson retains `1384`.
@@ -194,7 +196,8 @@ operating them.
 For EmceeDanko human review, configure both Ishikawa YAML profiles for port
 `8384`: the deployment profile's Retrieval API port and web retrieval URL,
 and the Retrieval API service profile's default port. Keep Anderson on
-`127.0.0.1:1384`. Inventory both ports before either launch.
+`127.0.0.1:1384`. Configure the deployment profile's Chat UI port as `3384`.
+Inventory all three ports before launch.
 
 The earlier demo wrapper used `127.0.0.1:8080`. Treat that as historical
 unless a current inventory proves the service and listener are intentionally
@@ -223,7 +226,7 @@ applications. Do not repoint a client based only on the role label.
 | `ChiefDanko` | `3389` | GNOME Remote Desktop | lab RDP listener in the accepted proof |
 | `EmceeDanko` | `1384` | Anderson | loopback; reserved for Anderson |
 | `EmceeDanko` | `8384` | Ishikawa Retrieval API | loopback; selected deployment override |
-| `EmceeDanko` | `3000` | Ishikawa Chat UI | loopback |
+| `EmceeDanko` | `3384` | Ishikawa Chat UI | loopback; selected deployment override |
 | `EmceeDanko` | `5432` | PostgreSQL | loopback for the accepted Ishikawa layout |
 
 SSH-forward ports such as `18000` or `18001` are operator-session choices,
@@ -261,7 +264,7 @@ sudo dalton-admin service status
 On `EmceeDanko`, verify port ownership before launching an application:
 
 ```bash
-ss -H -ltnp '( sport = :1384 or sport = :8384 or sport = :3000 or sport = :5432 )'
+ss -H -ltnp '( sport = :1384 or sport = :3384 or sport = :8384 or sport = :5432 )'
 systemctl --user status ishikawa-retrieval-api.service --no-pager
 ```
 

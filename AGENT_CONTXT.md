@@ -32,6 +32,7 @@ source text. Nomic provides query and document embeddings.
 ## Authoritative files
 
 - Danko Lab systems and services: `danko_lab.md`
+- Shared Node/Next.js runtime image: `node_nextjs_runtime_image.md`
 - Agent behavior: `AGENT_OPERATION.md` and `AGENT_PERSONA.md`
 - Code and package rules: `CODING_STANDARD.md`
 - Operator-run and remote rules: `LAB_RUN_PATH_STANDARD.md`

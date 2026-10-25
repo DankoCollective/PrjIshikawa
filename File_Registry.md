@@ -3,6 +3,7 @@
 | Path | Role | Git posture |
 |---|---|---|
 | `danko_lab.md` | Shared non-secret Danko Lab systems, addresses, hardware roles, installed services, ports, collisions, and operating reference | Tracked |
+| `node_nextjs_runtime_image.md` | Product-neutral definition, exact runtime contract, usage boundary, and adoption checklist for the shared Node 24 and Next.js 16.4.1 container image | Tracked |
 | `Ishikawa/` | Canonical product source and tests | Tracked |
 | `docs/operations/ISHIKAWA_V1_3_OPERATING_SURFACE.md` | Accounts, roles, services, commands, paths, and permission inventory | Tracked |
 | `docs/operations/CORPUS_INGESTION_RUNBOOK.md` | Operator catalog, manifest, validation, publication, and verification guide | Tracked |

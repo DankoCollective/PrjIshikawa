@@ -31,6 +31,8 @@ of target mutation, or successful cleanup does not reduce the violation.
 
 - Read `danko_lab.md` before lab-specific planning or execution; verify its
   recorded snapshot against fresh read-only inventory when current state matters.
+- Read `node_nextjs_runtime_image.md` before selecting, changing, packaging,
+  or using the shared Node/Next.js container runtime.
 - Read the relevant local docs before changing procedure or evidence.
 - Follow `CODING_STANDARD.md` for script and code file style.
 - Follow `LAB_RUN_PATH_STANDARD.md` for lab script sequencing, local report write-back, remote payload handling, artifact/advisory verification, and reviewed evidence promotion.

@@ -513,8 +513,10 @@ application_stage="$artifact_root/.ishikawa-current.${timestamp}.$$"
 corpus_publication_stage="$artifact_root/.ishikawa-corpus-v3-current.${timestamp}.$$"
 mkdir -p -- "$application_stage" "$corpus_publication_stage" "$artifact_root/superseded"
 cp -- "$archive_a" "$application_stage/$bundle_name.tar.gz"
-sha256sum "$application_stage/$bundle_name.tar.gz" \
-  >"$application_stage/$bundle_name.tar.gz.sha256"
+(
+  cd -- "$application_stage"
+  sha256sum "$bundle_name.tar.gz" >"$bundle_name.tar.gz.sha256"
+)
 cp -- "$source_manifest" "$application_stage/ISHIKAWA_V1_3_SOURCE_SHA256SUMS"
 python3 -B - "$application_stage/release-receipt.json" "$application_archive_sha256" \
   "$source_manifest_sha256" "$frontier_artifact_sha256" "$frontier_report_sha256" <<'PY'
@@ -536,8 +538,10 @@ record = {
 Path(output).write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
 cp -- "$corpus_archive" "$corpus_publication_stage/$corpus_bundle_name.tar.gz"
-sha256sum "$corpus_publication_stage/$corpus_bundle_name.tar.gz" \
-  >"$corpus_publication_stage/$corpus_bundle_name.tar.gz.sha256"
+(
+  cd -- "$corpus_publication_stage"
+  sha256sum "$corpus_bundle_name.tar.gz" >"$corpus_bundle_name.tar.gz.sha256"
+)
 
 (cd -- "$application_stage" && sha256sum --check --strict "$bundle_name.tar.gz.sha256" >/dev/null) \
   || block application_publication_checksum_failed \

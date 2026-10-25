@@ -100,7 +100,7 @@ if find "$package_root" -type f \( -name '*.key' -o -name '*.pem' -o -name '*.p1
   fail secret_material_found
 fi
 if grep -R -I -E -n '/mnt/|Prj00DankoDeux|phase-28-apisachi-tokuli|local/artifacts' \
-  "$package_root" --exclude=SHA256SUMS >/dev/null; then
+  "$package_root" --exclude=SHA256SUMS --exclude=verify-ishikawa-release >/dev/null; then
   fail repository_reference_found
 fi
 

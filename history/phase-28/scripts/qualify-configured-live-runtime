@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Exercise one configured HTTP request through live model, embedding,
+# tokenization, and read-only database dependencies. Forwarding is external.
+
+umask 077
+export SYSTEMD_PAGER=cat SYSTEMD_LESS=FRX NO_COLOR=1
+
+emit() { printf '%s\n' "$1"; }
+block() { emit "configured_live_runtime=blocked;reason=$1"; exit 1; }
+clear_secrets() {
+  gemma_key=''
+  nomic_key=''
+  database_password=''
+  unset gemma_key nomic_key database_password
+}
+
+(( $# == 5 )) || block invalid_argument_count
+expected_hostname="$1"
+expected_os_version="$2"
+transfer_root="$3"
+expected_manifest_sha256="$4"
+expected_manifest_entries="$5"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_manifest_sha256
+[[ "$expected_manifest_entries" =~ ^[1-9][0-9]{0,2}$ ]] || block invalid_manifest_entry_count
+[[ "$transfer_root" == /tmp/configured-live-runtime-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || block invalid_transfer_root
+(( EUID == 0 )) || block root_authority_required
+operator_user="${SUDO_USER:-}"
+[[ "$operator_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$operator_user" != root ]] || block operator_user_invalid
+[[ "$(stat -c '%U' "$transfer_root")" == "$operator_user" ]] || block transfer_root_owner_invalid
+
+for required in awk dpkg grep hostname pg_conftool pg_isready pg_lsclusters python3 runuser sed sha256sum sleep ss stat systemctl timeout tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+for binary in pg_isready postgres psql; do
+  [[ -x "/usr/lib/postgresql/16/bin/$binary" ]] || block "missing_postgresql_binary_$binary"
+done
+
+manifest_path="$transfer_root/payload.sha256"
+[[ -f "$manifest_path" && ! -L "$manifest_path" && -r "$manifest_path" ]] || block payload_manifest_missing
+[[ "$(sha256sum "$manifest_path" | awk '{print $1}')" == "$expected_manifest_sha256" ]] || block payload_manifest_checksum_mismatch
+[[ "$(awk 'NF {count++} END {print count+0}' "$manifest_path")" == "$expected_manifest_entries" ]] || block payload_manifest_entry_count_invalid
+if ! awk '
+  !/^[0-9a-f]{64}  (payload\/ishikawa\/[A-Za-z0-9_]+\.py|payload\/config\/[A-Za-z0-9_]+\.yaml|qualify_configured_live_runtime\.py)$/ {bad=1}
+  END {exit bad}
+' "$manifest_path"; then block payload_manifest_path_invalid; fi
+(cd "$transfer_root" && sha256sum --check --strict payload.sha256 >/dev/null) || block payload_checksum_verification_failed
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+postgresql_version="$(/usr/lib/postgresql/16/bin/postgres --version | awk '{print $3}')"
+[[ "$postgresql_version" == 16.15 ]] || block postgresql_version_mismatch
+vector_default_version="$(sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/p" /usr/share/postgresql/16/extension/vector.control)"
+[[ "$vector_default_version" == 0.8.7 ]] || block vector_extension_version_mismatch
+python_version="$(python3 -c 'import sys; print(".".join(map(str,sys.version_info[:3])))')"
+[[ "$python_version" == 3.12.* ]] || block python_version_mismatch
+pyyaml_version="$(python3 -c 'import yaml; print(yaml.__version__)' 2>/dev/null || true)"
+[[ "$pyyaml_version" == 6.0.1 ]] || block pyyaml_version_mismatch
+psycopg_version="$(python3 -c 'import psycopg; print(psycopg.__version__)' 2>/dev/null || true)"
+[[ "$psycopg_version" == 3.1.17 ]] || block psycopg_version_mismatch
+
+for port in 8000 8001; do
+  ss -H -ltn4 "sport = :$port" 2>/dev/null | awk -v expected="127.0.0.1:$port" '$4 == expected {found=1} END {exit !found}' \
+    || block "operator_forward_port_${port}_not_listening"
+done
+before_8000="$(ss -H -ltn4 'sport = :8000' 2>/dev/null | sha256sum | awk '{print $1}')"
+before_8001="$(ss -H -ltn4 'sport = :8001' 2>/dev/null | sha256sum | awk '{print $1}')"
+if ss -H -ltn4 'sport = :1384' 2>/dev/null | grep -q .; then block retrieval_port_in_use_before_test; fi
+
+cluster_line="$(pg_lsclusters --no-header 2>/dev/null || true)"
+[[ "$(awk 'NF {count++} END {print count+0}' <<<"$cluster_line")" == 1 ]] || block database_cluster_count_mismatch
+read -r cluster_version cluster_name cluster_port cluster_status cluster_owner cluster_data_directory cluster_log_file <<<"$cluster_line"
+[[ "$cluster_version" == 16 && "$cluster_name" == main && "$cluster_port" == 5432 && "$cluster_status" == down && "$cluster_owner" == postgres && "$cluster_data_directory" == /var/lib/postgresql/16/main && "$cluster_log_file" == /var/log/postgresql/postgresql-16-main.log ]] || block database_cluster_contract_mismatch
+[[ "$(sed -n 's/^[[:space:]]*\([^#[:space:]][^#[:space:]]*\)[[:space:]]*$/\1/p' /etc/postgresql/16/main/start.conf)" == manual ]] || block database_cluster_start_policy_mismatch
+[[ "$(pg_conftool 16 main show -s listen_addresses 2>/dev/null || true)" == 127.0.0.1 ]] || block database_cluster_listen_address_mismatch
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" == disabled ]] || block postgresql_service_not_disabled
+[[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] || block postgresql_cluster_already_active
+if ss -H -ltn4 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_port_in_use_before_start; fi
+
+cluster_started=false
+gemma_key=''
+nomic_key=''
+database_password=''
+cleanup() {
+  local status="$?" stop_status=0
+  trap - EXIT INT TERM
+  set +e
+  clear_secrets
+  if [[ "$cluster_started" == true ]] || systemctl --quiet is-active postgresql@16-main.service 2>/dev/null; then
+    systemctl stop postgresql@16-main.service >/dev/null 2>&1 || stop_status=$?
+    emit "cluster_stop_cleanup_exit_code=$stop_status"
+    (( stop_status == 0 )) || status=1
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+postgres_scalar() {
+  runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align --dbname="$1" --command="$2" 2>/dev/null | sed -n '1p'
+}
+production_contract_query="SELECT
+  (SELECT string_agg(migration_id || '|' || migration_sha256 || '|' || schema_version, ';' ORDER BY schema_version) FROM rag.schema_migrations) || '#' ||
+  ((SELECT count(*) FROM rag.document_classes) + (SELECT count(*) FROM rag.documents) +
+   (SELECT count(*) FROM rag.ingestion_runs) + (SELECT count(*) FROM rag.publication_batches) +
+   (SELECT count(*) FROM rag.document_versions) + (SELECT count(*) FROM rag.document_artifact_sets) +
+   (SELECT count(*) FROM rag.structural_units) + (SELECT count(*) FROM rag.chunks) +
+   (SELECT count(*) FROM rag.chunk_structural_units) + (SELECT count(*) FROM rag.citation_anchors) +
+   (SELECT count(*) FROM rag.embedding_spaces) + (SELECT count(*) FROM rag.chunk_embeddings) +
+   (SELECT count(*) FROM rag.relationship_types) + (SELECT count(*) FROM rag.relationships) +
+   (SELECT count(*) FROM rag.publication_batch_changes) + (SELECT count(*) FROM rag.active_document_versions) +
+   (SELECT count(*) FROM rag_private.artifact_manifests) + (SELECT count(*) FROM rag_private.ingestion_stages) +
+   (SELECT count(*) FROM rag_private.quarantine_records));"
+expected_production_contract="0001_initial_rag_catalog|3e2f5e61bd8038bc29764024e21b8bec754fad8a282f89abaf6130e345d6380a|1;0002_align_ingestion_ownership|74b08adb8aac9828ac076744fedfd22619751326c911bf17f1fa8690e01345e4|2;0003_separate_special_token_count|5e833d8ff556c0e6158daf0419b1013235a11e1a94f1f560206ba813e1fc3761|3;0004_preserve_relationship_override_audit|5764f6e12a74b18747163c61ef3f314e8dff140a3586b298c62be616a1dc185f|4#0"
+
+emit 'purpose=qualify_configured_live_runtime_against_empty_catalog'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture;python_version=$python_version;pyyaml_version=$pyyaml_version;psycopg_version=$psycopg_version"
+emit "postgresql_version=$postgresql_version;vector_default_version=$vector_default_version"
+emit 'transport_owner=operator;ports_required_preexisting=true;forwarding_changed=false'
+emit 'authorized_actions=start_existing_postgresql_cluster_verify_empty_accepted_database_prompt_for_three_runtime_credentials_bind_temporary_loopback_listener_send_one_synthetic_professional_question_call_scope_embedding_database_and_tokenizer_stop_listener_verify_database_unchanged_stop_postgresql'
+emit 'non_actions=no_forward_start_stop_or_change_no_package_firewall_schema_or_data_change_no_organizational_content_no_grounded_generation_no_secret_or_raw_content_retention'
+
+systemctl start postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_start_failed
+cluster_started=true
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_isready --quiet --host=/var/run/postgresql --port=5432 --dbname=rag_catalog; then ready=true; break; fi
+  sleep 1
+done
+[[ "$ready" == true ]] || block postgresql_cluster_not_ready
+production_contract_before="$(postgres_scalar rag_catalog "$production_contract_query")" || block production_database_contract_read_failed
+[[ "$production_contract_before" == "$expected_production_contract" ]] || block production_database_contract_mismatch
+emit 'accepted_database=rag_catalog;schema_version=4;row_count=0;state=verified'
+
+printf 'Gemma API key (input hidden): ' >/dev/tty
+IFS= read -r -s gemma_key </dev/tty || block gemma_credential_read_failed
+printf '\nNomic API key (input hidden): ' >/dev/tty
+IFS= read -r -s nomic_key </dev/tty || block nomic_credential_read_failed
+printf '\nPostgreSQL rag_retrieval password (input hidden): ' >/dev/tty
+IFS= read -r -s database_password </dev/tty || block database_credential_read_failed
+printf '\n' >/dev/tty
+[[ ${#gemma_key} -ge 32 && ${#gemma_key} -le 1024 && "$gemma_key" != *$'\r'* ]] || block gemma_credential_format_invalid
+[[ ${#nomic_key} -ge 32 && ${#nomic_key} -le 1024 && "$nomic_key" != *$'\r'* ]] || block nomic_credential_format_invalid
+[[ -n "$database_password" && ${#database_password} -le 1024 && "$database_password" != *$'\r'* ]] || block database_credential_format_invalid
+
+result="$transfer_root/runtime-result.txt"
+artifact="$transfer_root/configured-live-runtime.json"
+error="$transfer_root/runtime-error.txt"
+set +e
+printf '%s\n%s\n%s' "$gemma_key" "$nomic_key" "$database_password" | \
+  timeout --foreground 600 runuser -u "$operator_user" -- env \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$transfer_root/payload" \
+    python3 -B "$transfer_root/qualify_configured_live_runtime.py" \
+      --credential-stdin \
+      --config-root "$transfer_root/payload/config" \
+      --output "$artifact" >"$result" 2>"$error"
+runner_status="${PIPESTATUS[1]}"
+set -e
+clear_secrets
+if (( runner_status != 0 )); then
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^configured_live_runtime=blocked\;reason=[a-z0-9_]+$ ]] \
+      || [[ "$line" =~ ^response_observation=http_[0-9]{3}\;status=[a-z-]+\;error_code=([A-Z][A-Z0-9_]{2,63}|none|unrecognized)$ ]] \
+      || [[ "$line" =~ ^response_headers_contract=(pass|blocked)\;response_envelope_contract=(pass|blocked)\;response_trace_contract=(pass|blocked)\;response_event_contract=(pass|blocked)$ ]] \
+      || [[ "$line" =~ ^observed_stage_trace=[a-z0-9,-]+\;observed_event=[a-z0-9_-]+$ ]] \
+      || [[ "$line" =~ ^scope_calls=[0-9]+\;embedding_calls=[0-9]+\;database_connections=[0-9]+\;tokenization_calls=[0-9]+\;generation_calls=[0-9]+$ ]]; then
+      emit "$line"
+    fi
+  done <"$result"
+  emit "runtime_runner_exit_code=$runner_status;error_sha256=$(sha256sum "$error" | awk '{print $1}');error_bytes=$(wc -c <"$error" | tr -d ' ');raw_error_retained=false"
+  block runtime_runner_failed
+fi
+
+output_contract=pass
+while IFS= read -r line; do
+  if (( ${#line} > 2048 )) || [[ "$line" == *$'\t'* ]] || ! [[ "$line" =~ ^[A-Za-z0-9_.-]+=[A-Za-z0-9_.:+@/~,-]+(\;[A-Za-z0-9_.-]+=[A-Za-z0-9_.:+@/~,-]+)*$ ]]; then
+    output_contract=blocked
+    continue
+  fi
+  emit "$line"
+done <"$result"
+[[ "$output_contract" == pass ]] || block runtime_runner_output_contract_invalid
+[[ "$(grep -Fxc 'configured_live_runtime_qualification=pass' "$result" || true)" == 1 ]] || block runtime_runner_pass_marker_invalid
+[[ -f "$artifact" && ! -L "$artifact" ]] || block runtime_artifact_missing
+
+production_contract_after="$(postgres_scalar rag_catalog "$production_contract_query")" || block production_database_post_test_read_failed
+[[ "$production_contract_after" == "$production_contract_before" ]] || block production_database_changed
+if ss -H -ltn4 'sport = :1384' 2>/dev/null | grep -q .; then block retrieval_listener_remains_after_test; fi
+for port in 8000 8001; do
+  ss -H -ltn4 "sport = :$port" 2>/dev/null | awk -v expected="127.0.0.1:$port" '$4 == expected {found=1} END {exit !found}' \
+    || block "operator_forward_port_${port}_not_listening_after_test"
+done
+after_8000="$(ss -H -ltn4 'sport = :8000' 2>/dev/null | sha256sum | awk '{print $1}')"
+after_8001="$(ss -H -ltn4 'sport = :8001' 2>/dev/null | sha256sum | awk '{print $1}')"
+[[ "$before_8000" == "$after_8000" && "$before_8001" == "$after_8001" ]] || block operator_forward_listener_identity_changed
+
+systemctl stop postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_stop_failed
+cluster_started=false
+[[ "$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {print $4}')" == down ]] || block database_cluster_not_stopped
+if ss -H -ltn4 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_listener_remains_after_stop; fi
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" == disabled ]] || block postgresql_service_final_state_mismatch
+
+emit 'accepted_database_unchanged=true;accepted_database_rows=0;postgresql_restored_stopped_disabled=true'
+emit 'retrieval_listener_stopped=true;port_1384=free'
+emit 'operator_forward_ports_after_test=listening;forwarding_changed=false'
+emit 'credentials_retained=false;raw_request_retained=false;raw_response_retained=false;vectors_retained=false'
+emit 'configured_live_runtime_target=pass'

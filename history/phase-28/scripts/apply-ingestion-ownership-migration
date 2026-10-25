@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Apply and verify the reviewed ingestion-ownership migration against an
+# existing empty application catalog. The cluster is started only for this
+# operation, restarted once to prove persistence, and stopped before exit.
+
+umask 077
+export SYSTEMD_PAGER=cat
+export SYSTEMD_LESS=FRX
+export NO_COLOR=1
+
+emit() { printf '%s\n' "$1"; }
+block() { emit "ingestion_ownership_migration=blocked;reason=$1"; exit 1; }
+
+(( $# == 9 )) || block invalid_argument_count
+
+expected_hostname="$1"
+expected_os_version="$2"
+database_name="$3"
+owner_role="$4"
+ingest_role="$5"
+retrieval_role="$6"
+migration_path="$7"
+expected_migration_sha256="$8"
+expected_prior_migration_sha256="$9"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+for identifier in "$database_name" "$owner_role" "$ingest_role" "$retrieval_role"; do
+  [[ "$identifier" =~ ^[a-z][a-z0-9_]{0,62}$ ]] || block invalid_database_identifier
+done
+[[ "$expected_migration_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_migration_sha256
+[[ "$expected_prior_migration_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_prior_migration_sha256
+[[ "$migration_path" == /* && -f "$migration_path" && ! -L "$migration_path" && -r "$migration_path" ]] \
+  || block invalid_migration_path
+(( EUID == 0 )) || block root_authority_required
+
+for required in awk dpkg-query grep hostname pg_conftool pg_isready pg_lsclusters runuser sed sha256sum sleep ss stat systemctl tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+for binary in pg_isready postgres psql; do
+  [[ -x "/usr/lib/postgresql/16/bin/$binary" ]] || block "missing_postgresql_binary_$binary"
+done
+
+actual_migration_sha256="$(sha256sum "$migration_path" | awk '{print $1}')"
+[[ "$actual_migration_sha256" == "$expected_migration_sha256" ]] || block migration_checksum_mismatch
+migration_bytes="$(wc -c <"$migration_path" | tr -d ' ')"
+(( migration_bytes > 0 && migration_bytes <= 131072 )) || block migration_size_out_of_bounds
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+
+postgresql_version="$(/usr/lib/postgresql/16/bin/postgres --version | awk '{print $3}')"
+[[ "$postgresql_version" == 16.15 ]] || block postgresql_version_mismatch
+[[ -f /usr/share/postgresql/16/extension/vector.control ]] || block vector_extension_control_missing
+vector_default_version="$(sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/p" /usr/share/postgresql/16/extension/vector.control)"
+[[ "$vector_default_version" == 0.8.7 ]] || block vector_extension_version_mismatch
+
+cluster_line="$(pg_lsclusters --no-header 2>/dev/null || true)"
+cluster_count="$(awk 'NF {count++} END {print count+0}' <<<"$cluster_line")"
+(( cluster_count == 1 )) || block database_cluster_count_mismatch
+read -r cluster_version cluster_name cluster_port cluster_status cluster_owner cluster_data_directory cluster_log_file <<<"$cluster_line"
+[[ "$cluster_version" == 16 && "$cluster_name" == main && "$cluster_port" == 5432 \
+    && "$cluster_status" == down && "$cluster_owner" == postgres \
+    && "$cluster_data_directory" == /var/lib/postgresql/16/main \
+    && "$cluster_log_file" == /var/log/postgresql/postgresql-16-main.log ]] \
+  || block database_cluster_contract_mismatch
+[[ "$(stat -c '%U:%G|%a' /var/lib/postgresql/16/main)" == 'postgres:postgres|700' ]] \
+  || block database_cluster_data_identity_mismatch
+[[ "$(sed -n 's/^[[:space:]]*\([^#[:space:]][^#[:space:]]*\)[[:space:]]*$/\1/p' /etc/postgresql/16/main/start.conf)" == manual ]] \
+  || block database_cluster_start_policy_mismatch
+[[ "$(pg_conftool 16 main show -s listen_addresses 2>/dev/null || true)" == 127.0.0.1 ]] \
+  || block database_cluster_listen_address_mismatch
+[[ "$(pg_conftool 16 main show -s password_encryption 2>/dev/null || true)" == scram-sha-256 ]] \
+  || block database_cluster_password_encryption_mismatch
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_port_in_use_before_start; fi
+[[ "$(systemctl is-active postgresql.service 2>/dev/null || true)" != active ]] || block postgresql_service_active_before_migration
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" == disabled ]] || block postgresql_service_not_disabled
+[[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] || block postgresql_cluster_service_active_before_migration
+[[ "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] || block postgresql_cluster_service_enabled_before_migration
+
+cluster_started=false
+migration_error_file=''
+
+cleanup() {
+  local status="$?" stop_status=0
+  trap - EXIT INT TERM ERR
+  set +e
+  if [[ "$cluster_started" == true ]] || systemctl --quiet is-active postgresql@16-main.service 2>/dev/null; then
+    systemctl stop postgresql@16-main.service >/dev/null 2>&1 || stop_status=$?
+    emit "cluster_stop_cleanup_exit_code=$stop_status"
+    (( stop_status == 0 )) || status=1
+  fi
+  if [[ "$migration_error_file" == /tmp/ingestion-ownership-migration-error.* && -f "$migration_error_file" ]]; then
+    rm -f -- "$migration_error_file"
+  fi
+  exit "$status"
+}
+
+unexpected_failure() {
+  local status="$1" line="$2"
+  trap - ERR
+  set +e
+  emit "ingestion_ownership_migration=blocked;reason=unexpected_failure;exit_code=$status;line=$line"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+emit 'purpose=apply_ingestion_ownership_migration'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit "postgresql_version=$postgresql_version;vector_default_version=$vector_default_version"
+emit "database_name=$database_name;owner_role=$owner_role;ingest_role=$ingest_role;retrieval_role=$retrieval_role"
+emit "migration_id=0002_align_ingestion_ownership;migration_sha256=$actual_migration_sha256;migration_bytes=$migration_bytes"
+emit "required_prior_migration=0001_initial_rag_catalog;required_prior_migration_sha256=$expected_prior_migration_sha256"
+emit 'authorized_actions=start_existing_local_cluster_verify_empty_prior_schema_apply_or_verify_one_reviewed_transactional_sql_migration_verify_schema_and_privileges_stop_restart_verify_persistence_stop_cluster'
+emit 'non_actions=no_network_access_no_package_change_no_role_or_database_change_no_document_or_embedding_content_no_vector_ann_index_no_secret_processing_no_service_enablement'
+
+if ! systemctl start postgresql@16-main.service >/dev/null 2>&1; then block postgresql_cluster_start_failed; fi
+cluster_started=true
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_isready --quiet --host=/var/run/postgresql --port=5432 --dbname="$database_name"; then
+    ready=true
+    break
+  fi
+  sleep 1
+done
+[[ "$ready" == true ]] || block postgresql_cluster_not_ready
+listener_lines="$(ss -H -ltn 'sport = :5432' 2>/dev/null || true)"
+[[ "$(awk 'NF {count++} END {print count+0}' <<<"$listener_lines")" == 1 ]] || block postgresql_listener_count_mismatch
+grep -Eq '[[:space:]]127\.0\.0\.1:5432[[:space:]]' <<<"$listener_lines" || block postgresql_listener_not_loopback
+emit 'cluster_start=pass;readiness=pass;listener_address=127.0.0.1;listener_port=5432'
+
+query_scalar() {
+  runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align \
+    --dbname="$database_name" --command="$1" 2>/dev/null | sed -n '1p'
+}
+
+database_contract="$(runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+  --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align --dbname=postgres \
+  --command="SELECT datname || '|' || pg_get_userbyid(datdba) || '|' || pg_encoding_to_char(encoding) FROM pg_database WHERE datname = '$database_name';" \
+  2>/dev/null | sed -n '1p')" || block application_database_verification_failed
+[[ "$database_contract" == "$database_name|$owner_role|UTF8" ]] || block application_database_contract_mismatch
+installed_vector_version="$(query_scalar "SELECT extversion FROM pg_extension WHERE extname = 'vector';")" || block vector_extension_verification_failed
+[[ "$installed_vector_version" == 0.8.7 ]] || block vector_extension_contract_mismatch
+
+for role_contract in \
+  "$owner_role|false|false|false|false|false|false" \
+  "$ingest_role|true|false|false|false|false|false" \
+  "$retrieval_role|true|false|false|false|false|false"; do
+  actual_role="$(query_scalar "SELECT rolname || '|' || rolcanlogin || '|' || rolsuper || '|' || rolcreatedb || '|' || rolcreaterole || '|' || rolreplication || '|' || rolbypassrls FROM pg_roles WHERE rolname = split_part('$role_contract', '|', 1);")" \
+    || block application_role_verification_failed
+  [[ "$actual_role" == "$role_contract" ]] || block application_role_contract_mismatch
+done
+retrieval_read_only="$(query_scalar "SELECT EXISTS (SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid=s.setrole JOIN pg_database d ON d.oid=s.setdatabase WHERE r.rolname='$retrieval_role' AND d.datname='$database_name' AND 'default_transaction_read_only=on'=ANY(s.setconfig));")" \
+  || block retrieval_read_only_verification_failed
+[[ "$retrieval_read_only" == t ]] || block retrieval_read_only_not_configured
+
+ledger_contract="$(query_scalar "SELECT COALESCE(string_agg(migration_id || '|' || migration_sha256 || '|' || schema_version, ';' ORDER BY schema_version), 'absent') FROM rag.schema_migrations;")" \
+  || block migration_ledger_verification_failed
+prior_contract="0001_initial_rag_catalog|$expected_prior_migration_sha256|1"
+current_contract="0002_align_ingestion_ownership|$actual_migration_sha256|2"
+migration_action=apply
+if [[ "$ledger_contract" == "$prior_contract" ]]; then
+  schema_contract_before="$(query_scalar "SELECT count(*) || '|' || count(*) FILTER (WHERE pg_get_userbyid(nspowner) = '$owner_role') FROM pg_namespace WHERE nspname IN ('rag','rag_private','rag_search');")" \
+    || block prior_schema_verification_failed
+  [[ "$schema_contract_before" == '3|3' ]] || block prior_schema_contract_mismatch
+  relation_contract_before="$(query_scalar "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private') AND c.relkind='r') || '|' || (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='rag_search' AND c.relkind='v');")" \
+    || block prior_relation_verification_failed
+  [[ "$relation_contract_before" == '20|5' ]] || block prior_relation_contract_mismatch
+elif [[ "$ledger_contract" == "$prior_contract;$current_contract" ]]; then
+  migration_action=verify_existing
+else
+  block migration_ledger_contract_mismatch
+fi
+
+corpus_row_count="$(query_scalar "SELECT
+  (SELECT count(*) FROM rag.document_classes) + (SELECT count(*) FROM rag.documents) +
+  (SELECT count(*) FROM rag.ingestion_runs) + (SELECT count(*) FROM rag.publication_batches) +
+  (SELECT count(*) FROM rag.document_versions) + (SELECT count(*) FROM rag.document_artifact_sets) +
+  (SELECT count(*) FROM rag.structural_units) + (SELECT count(*) FROM rag.chunks) +
+  (SELECT count(*) FROM rag.chunk_structural_units) + (SELECT count(*) FROM rag.citation_anchors) +
+  (SELECT count(*) FROM rag.embedding_spaces) + (SELECT count(*) FROM rag.chunk_embeddings) +
+  (SELECT count(*) FROM rag.relationship_types) + (SELECT count(*) FROM rag.relationships) +
+  (SELECT count(*) FROM rag.publication_batch_changes) + (SELECT count(*) FROM rag.active_document_versions) +
+  (SELECT count(*) FROM rag_private.artifact_manifests) + (SELECT count(*) FROM rag_private.ingestion_stages) +
+  (SELECT count(*) FROM rag_private.quarantine_records);")" || block empty_catalog_verification_failed
+[[ "$corpus_row_count" == 0 ]] || block migration_requires_empty_catalog
+
+if [[ "$migration_action" == apply ]]; then
+  migration_error_file="$(mktemp /tmp/ingestion-ownership-migration-error.XXXXXX)"
+  if runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+      --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$database_name" \
+      --set=VERBOSITY=verbose --set=owner_role="$owner_role" \
+      --set=ingest_role="$ingest_role" --set=retrieval_role="$retrieval_role" \
+      --set=migration_sha256="$actual_migration_sha256" \
+      <"$migration_path" >/dev/null 2>"$migration_error_file"; then
+    migration_exit_code=0
+  else
+    migration_exit_code=$?
+  fi
+  if (( migration_exit_code != 0 )); then
+    migration_error_sha256="$(sha256sum "$migration_error_file" | awk '{print $1}')"
+    migration_error_bytes="$(wc -c <"$migration_error_file" | tr -d ' ')"
+    migration_sqlstate="$(grep -Eo '[0-9A-Z]{5}:' "$migration_error_file" | sed -n '1{s/:$//;p;}' || true)"
+    migration_error_line="$(sed -n 's#^psql:[^:]*:\([0-9][0-9]*\):.*#\1#p' "$migration_error_file" | sed -n '1p' || true)"
+    emit "migration_execution_exit_code=$migration_exit_code;migration_sqlstate=${migration_sqlstate:-unknown};migration_error_line=${migration_error_line:-unknown}"
+    emit "migration_error_sha256=$migration_error_sha256;migration_error_bytes=$migration_error_bytes;raw_error_retained=false"
+    block ingestion_ownership_migration_failed
+  fi
+fi
+
+schema_contract="$(query_scalar "SELECT count(*) || '|' || count(*) FILTER (WHERE pg_get_userbyid(nspowner) = '$owner_role') FROM pg_namespace WHERE nspname IN ('rag','rag_private','rag_search');")" || block schema_contract_verification_failed
+[[ "$schema_contract" == '3|3' ]] || block schema_contract_mismatch
+table_contract="$(query_scalar "SELECT count(*) || '|' || count(*) FILTER (WHERE pg_get_userbyid(c.relowner) = '$owner_role') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private') AND c.relkind='r';")" || block table_contract_verification_failed
+[[ "$table_contract" == '20|20' ]] || block table_contract_mismatch
+view_contract="$(query_scalar "SELECT count(*) || '|' || count(*) FILTER (WHERE pg_get_userbyid(c.relowner) = '$owner_role') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='rag_search' AND c.relkind='v';")" || block view_contract_verification_failed
+[[ "$view_contract" == '5|5' ]] || block view_contract_mismatch
+
+ledger_contract="$(query_scalar "SELECT string_agg(migration_id || '|' || migration_sha256 || '|' || schema_version, ';' ORDER BY schema_version) FROM rag.schema_migrations;")" || block migration_record_verification_failed
+[[ "$ledger_contract" == "$prior_contract;$current_contract" ]] || block migration_record_mismatch
+corpus_row_count="$(query_scalar "SELECT
+  (SELECT count(*) FROM rag.document_classes) + (SELECT count(*) FROM rag.documents) +
+  (SELECT count(*) FROM rag.ingestion_runs) + (SELECT count(*) FROM rag.publication_batches) +
+  (SELECT count(*) FROM rag.document_versions) + (SELECT count(*) FROM rag.document_artifact_sets) +
+  (SELECT count(*) FROM rag.structural_units) + (SELECT count(*) FROM rag.chunks) +
+  (SELECT count(*) FROM rag.chunk_structural_units) + (SELECT count(*) FROM rag.citation_anchors) +
+  (SELECT count(*) FROM rag.embedding_spaces) + (SELECT count(*) FROM rag.chunk_embeddings) +
+  (SELECT count(*) FROM rag.relationship_types) + (SELECT count(*) FROM rag.relationships) +
+  (SELECT count(*) FROM rag.publication_batch_changes) + (SELECT count(*) FROM rag.active_document_versions) +
+  (SELECT count(*) FROM rag_private.artifact_manifests) + (SELECT count(*) FROM rag_private.ingestion_stages) +
+  (SELECT count(*) FROM rag_private.quarantine_records);")" || block post_migration_empty_catalog_verification_failed
+[[ "$corpus_row_count" == 0 ]] || block migration_wrote_unexpected_catalog_content
+
+legacy_column_count="$(query_scalar "SELECT count(*) FROM information_schema.columns WHERE (table_schema='rag' AND table_name='documents' AND column_name='class_id') OR (table_schema='rag' AND table_name='document_versions' AND column_name IN ('assigned_class_id','class_registry_version','ingestion_manifest_digest'));")" || block legacy_column_verification_failed
+[[ "$legacy_column_count" == 0 ]] || block legacy_ownership_columns_present
+new_column_count="$(query_scalar "SELECT count(*) FROM information_schema.columns WHERE (table_schema='rag' AND table_name='ingestion_runs' AND column_name IN ('class_registry_digest','document_catalog_digest')) OR (table_schema='rag' AND table_name='document_artifact_sets' AND column_name IN ('assigned_class_id','class_registry_digest','ingestion_manifest_digest','manifest_entry_identity')) OR (table_schema='rag_private' AND table_name='quarantine_records' AND column_name IN ('manifest_entry_identity','resolved_by_run_id','resolution_code'));")" || block new_column_verification_failed
+[[ "$new_column_count" == 9 ]] || block new_ownership_columns_missing
+digest_column_count="$(query_scalar "SELECT count(*) FROM information_schema.columns WHERE (table_schema='rag' AND table_name='document_classes' AND column_name='registry_digest' AND domain_name='sha256_hex') OR (table_schema='rag' AND table_name='documents' AND column_name='catalog_digest' AND domain_name='sha256_hex');")" || block digest_column_verification_failed
+[[ "$digest_column_count" == 2 ]] || block digest_column_contract_mismatch
+
+constraint_count="$(query_scalar "SELECT count(*) FROM pg_constraint WHERE conname IN ('document_artifact_sets_semantic_inputs_key','document_artifact_sets_run_provenance_fkey','quarantine_records_subject_check','quarantine_records_document_version_subject_check','quarantine_records_resolution_v1_check');")" || block constraint_verification_failed
+[[ "$constraint_count" == 5 ]] || block constraint_contract_mismatch
+active_documents_definition="$(query_scalar "SELECT regexp_replace(pg_get_viewdef('rag_search.active_documents'::regclass, true), '[[:space:]]+', ' ', 'g');")" || block active_view_verification_failed
+[[ "$active_documents_definition" == *'das.assigned_class_id'* && "$active_documents_definition" != *'dv.assigned_class_id'* ]] || block active_view_class_ownership_mismatch
+
+embedding_column_type="$(query_scalar "SELECT format_type(a.atttypid,a.atttypmod) FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='rag' AND c.relname='chunk_embeddings' AND a.attname='embedding' AND NOT a.attisdropped;")" || block embedding_column_verification_failed
+[[ "$embedding_column_type" == 'vector(768)' ]] || block embedding_column_contract_mismatch
+lexical_index_count="$(query_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname='rag' AND tablename='chunks' AND indexdef ILIKE '%USING gin (lexical_vector)%';")" || block lexical_index_verification_failed
+[[ "$lexical_index_count" == 1 ]] || block lexical_index_contract_mismatch
+vector_ann_index_count="$(query_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname='rag' AND indexdef ~* ' USING (hnsw|ivfflat) ';")" || block vector_index_verification_failed
+[[ "$vector_ann_index_count" == 0 ]] || block premature_vector_ann_index_present
+
+retrieval_base_select_count="$(query_scalar "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private') AND c.relkind='r' AND has_table_privilege('$retrieval_role',c.oid,'SELECT');")" || block retrieval_base_privilege_verification_failed
+retrieval_view_select_count="$(query_scalar "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='rag_search' AND c.relkind='v' AND has_table_privilege('$retrieval_role',c.oid,'SELECT');")" || block retrieval_view_privilege_verification_failed
+retrieval_write_count="$(query_scalar "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private','rag_search') AND c.relkind IN ('r','v') AND (has_table_privilege('$retrieval_role',c.oid,'INSERT') OR has_table_privilege('$retrieval_role',c.oid,'UPDATE') OR has_table_privilege('$retrieval_role',c.oid,'DELETE'));")" || block retrieval_write_privilege_verification_failed
+[[ "$retrieval_base_select_count|$retrieval_view_select_count|$retrieval_write_count" == '0|5|0' ]] || block retrieval_privilege_contract_mismatch
+ingest_select_count="$(query_scalar "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private') AND c.relkind='r' AND has_table_privilege('$ingest_role',c.oid,'SELECT');")" || block ingestion_select_privilege_verification_failed
+ingest_write_count="$(query_scalar "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private') AND c.relkind='r' AND has_table_privilege('$ingest_role',c.oid,'INSERT') AND has_table_privilege('$ingest_role',c.oid,'UPDATE') AND has_table_privilege('$ingest_role',c.oid,'DELETE');")" || block ingestion_write_privilege_verification_failed
+[[ "$ingest_select_count|$ingest_write_count" == '20|19' ]] || block ingestion_privilege_contract_mismatch
+public_privilege_count="$(query_scalar "SELECT count(*) FROM information_schema.table_privileges WHERE grantee='PUBLIC' AND table_schema IN ('rag','rag_private','rag_search');")" || block public_privilege_verification_failed
+[[ "$public_privilege_count" == 0 ]] || block public_privilege_contract_mismatch
+
+systemctl stop postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_stop_failed
+cluster_started=false
+[[ "$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {print $4}')" == down ]] || block database_cluster_not_stopped_before_persistence_check
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_listener_remains_before_persistence_check; fi
+
+systemctl start postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_restart_failed
+cluster_started=true
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_isready --quiet --host=/var/run/postgresql --port=5432 --dbname="$database_name"; then ready=true; break; fi
+  sleep 1
+done
+[[ "$ready" == true ]] || block postgresql_cluster_not_ready_after_restart
+persistence_contract="$(query_scalar "SELECT
+  (SELECT count(*) FROM pg_namespace WHERE nspname IN ('rag','rag_private','rag_search')) || '|' ||
+  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private') AND c.relkind='r') || '|' ||
+  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='rag_search' AND c.relkind='v') || '|' ||
+  (SELECT count(*) FROM rag.schema_migrations WHERE migration_id='0001_initial_rag_catalog' AND migration_sha256='$expected_prior_migration_sha256' AND schema_version=1) || '|' ||
+  (SELECT count(*) FROM rag.schema_migrations WHERE migration_id='0002_align_ingestion_ownership' AND migration_sha256='$actual_migration_sha256' AND schema_version=2) || '|' ||
+  (SELECT count(*) FROM information_schema.columns WHERE table_schema='rag' AND table_name='document_artifact_sets' AND column_name IN ('assigned_class_id','class_registry_digest','ingestion_manifest_digest','manifest_entry_identity')) || '|' ||
+  (SELECT count(*) FROM information_schema.columns WHERE table_schema='rag_private' AND table_name='quarantine_records' AND column_name IN ('manifest_entry_identity','resolved_by_run_id','resolution_code'));")" || block restart_persistence_contract_verification_failed
+[[ "$persistence_contract" == '3|20|5|1|1|4|3' ]] || block restart_persistence_contract_mismatch
+
+systemctl stop postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_stop_after_persistence_check_failed
+cluster_started=false
+cluster_status_after="$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {print $4}')"
+[[ "$cluster_status_after" == down ]] || block database_cluster_not_stopped
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_listener_remains_after_stop; fi
+service_active_after="$(systemctl is-active postgresql.service 2>/dev/null || true)"
+service_enabled_after="$(systemctl is-enabled postgresql.service 2>/dev/null || true)"
+cluster_service_active_after="$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)"
+cluster_service_enabled_after="$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)"
+[[ "$service_active_after" != active && "$service_enabled_after" == disabled \
+    && "$cluster_service_active_after" != active && "$cluster_service_enabled_after" != enabled ]] \
+  || block postgresql_service_final_state_mismatch
+
+emit "prior_migration_record=0001_initial_rag_catalog;schema_version=1;migration_sha256=$expected_prior_migration_sha256"
+emit "migration_record=0002_align_ingestion_ownership;schema_version=2;migration_sha256=$actual_migration_sha256"
+emit "migration_action=$migration_action;restart_persistence_verification=pass"
+emit 'schema_count=3;table_count=20;active_search_view_count=5'
+emit 'document_class_owner=artifact_set;source_revision_reclassification=true'
+emit 'legacy_ownership_column_count=0;new_ownership_column_count=9;digest_domain_column_count=2'
+emit 'quarantine_retry_contract=manifest_identity_and_successful_retry_linkage'
+emit "vector_extension_version=$installed_vector_version;embedding_column=vector_768;vector_ann_index_created=false"
+emit 'lexical_column=tsvector;lexical_gin_index_created=true'
+emit 'retrieval_base_table_select_count=0;retrieval_active_view_select_count=5;retrieval_write_count=0'
+emit 'ingestion_base_table_select_count=20;ingestion_writable_table_count=19;schema_migration_write=false'
+emit "migration_metadata_row_count=2;corpus_content_row_count=$corpus_row_count"
+emit 'private_storage_location_exposed_to_retrieval=false;public_table_privilege_count=0'
+emit 'database_or_role_changed=false;document_or_embedding_content_written=false;vector_ann_index_deferred=true'
+emit "cluster_status=$cluster_status_after;postgresql_port_5432=free;postgresql_service_active=$service_active_after;postgresql_service_enabled=$service_enabled_after"
+emit 'ingestion_ownership_migration=pass'

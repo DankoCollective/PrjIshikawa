@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Qualify configured live model dependencies through pre-existing loopback
+# endpoints. The operator owns transport setup and teardown; this helper never
+# starts, changes, or stops forwarding.
+
+umask 077
+emit() { printf '%s\n' "$1"; }
+block() { emit "configured_model_dependencies=blocked;reason=$1"; exit 1; }
+clear_secrets() { gemma_key=''; nomic_key=''; unset gemma_key nomic_key; }
+trap clear_secrets EXIT
+trap 'clear_secrets; exit 130' INT
+trap 'clear_secrets; exit 143' TERM
+
+(( $# == 7 )) || block invalid_argument_count
+expected_hostname="$1"
+expected_os_version="$2"
+transfer_root="$3"
+expected_manifest_sha256="$4"
+expected_manifest_entries="$5"
+runtime_config_sha256="$6"
+reconstruction_profile_sha256="$7"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_manifest_sha256
+[[ "$expected_manifest_entries" =~ ^[1-9][0-9]{0,2}$ ]] || block invalid_manifest_entry_count
+[[ "$runtime_config_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_runtime_config_sha256
+[[ "$reconstruction_profile_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_reconstruction_profile_sha256
+[[ "$transfer_root" == /tmp/configured-model-dependencies-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || block invalid_transfer_root
+(( EUID != 0 )) || block nonroot_execution_required
+
+for required in awk dpkg grep hostname python3 sha256sum ss tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+manifest_path="$transfer_root/payload.sha256"
+[[ -f "$manifest_path" && ! -L "$manifest_path" && -r "$manifest_path" ]] || block payload_manifest_missing
+[[ "$(sha256sum "$manifest_path" | awk '{print $1}')" == "$expected_manifest_sha256" ]] || block payload_manifest_checksum_mismatch
+[[ "$(awk 'NF {count++} END {print count+0}' "$manifest_path")" == "$expected_manifest_entries" ]] || block payload_manifest_entry_count_invalid
+if ! awk '
+  !/^[0-9a-f]{64}  (payload\/ishikawa\/[A-Za-z0-9_]+\.py|payload\/config\/(runtime_dependencies|reconstruction_profile)\.yaml|qualify_configured_model_dependencies\.py)$/ {bad=1}
+  END {exit bad}
+' "$manifest_path"; then block payload_manifest_path_invalid; fi
+(cd "$transfer_root" && sha256sum --check --strict payload.sha256 >/dev/null) || block payload_checksum_verification_failed
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+python_version="$(python3 -c 'import sys; print(".".join(map(str,sys.version_info[:3])))')"
+[[ "$python_version" == 3.12.* ]] || block python_version_mismatch
+pyyaml_version="$(python3 -c 'import yaml; print(yaml.__version__)' 2>/dev/null || true)"
+[[ "$pyyaml_version" == 6.0.1 ]] || block pyyaml_version_mismatch
+
+for port in 8000 8001; do
+  ss -H -ltn4 "sport = :$port" 2>/dev/null | awk -v expected="127.0.0.1:$port" '$4 == expected {found=1} END {exit !found}' \
+    || block "operator_forward_port_${port}_not_listening"
+done
+before_8000="$(ss -H -ltn4 'sport = :8000' 2>/dev/null | sha256sum | awk '{print $1}')"
+before_8001="$(ss -H -ltn4 'sport = :8001' 2>/dev/null | sha256sum | awk '{print $1}')"
+
+output="$transfer_root/configured-model-dependencies.json"
+result="$transfer_root/configured-model-dependencies.txt"
+error="$transfer_root/configured-model-dependencies-error.txt"
+[[ ! -e "$output" && ! -L "$output" && ! -e "$result" && ! -L "$result" ]] || block output_path_exists
+
+emit 'purpose=qualify_configured_live_model_dependencies'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture;python_version=$python_version;pyyaml_version=$pyyaml_version"
+emit 'transport_owner=operator;ports_required_preexisting=true;forwarding_changed=false'
+emit 'authorized_actions=verify_checksum_bound_runtime_read_endpoint_configuration_prompt_for_two_runtime_credentials_make_two_synthetic_tokenization_calls_make_two_singleton_synthetic_embedding_calls_retain_content_free_measurement'
+emit 'non_actions=no_forward_start_stop_or_change_no_sudo_no_package_service_firewall_or_configuration_change_no_database_contact_no_generation_call_no_organizational_content'
+
+printf 'Gemma API key (input hidden): ' >/dev/tty
+IFS= read -r -s gemma_key </dev/tty || block gemma_credential_read_failed
+printf '\n' >/dev/tty
+printf 'Nomic API key (input hidden): ' >/dev/tty
+IFS= read -r -s nomic_key </dev/tty || block nomic_credential_read_failed
+printf '\n' >/dev/tty
+[[ ${#gemma_key} -ge 32 && ${#gemma_key} -le 1024 && "$gemma_key" != *$'\r'* ]] || block gemma_credential_format_invalid
+[[ ${#nomic_key} -ge 32 && ${#nomic_key} -le 1024 && "$nomic_key" != *$'\r'* ]] || block nomic_credential_format_invalid
+
+set +e
+printf '%s\n%s' "$gemma_key" "$nomic_key" | \
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$transfer_root/payload" python3 -B \
+    "$transfer_root/qualify_configured_model_dependencies.py" \
+    --credential-stdin \
+    --runtime-config "$transfer_root/payload/config/runtime_dependencies.yaml" \
+    --runtime-config-sha256 "$runtime_config_sha256" \
+    --reconstruction-profile "$transfer_root/payload/config/reconstruction_profile.yaml" \
+    --reconstruction-profile-sha256 "$reconstruction_profile_sha256" \
+    --output "$output" >"$result" 2>"$error"
+runner_status=$?
+set -e
+clear_secrets
+if (( runner_status != 0 )); then
+  while IFS= read -r line; do
+    [[ "$line" =~ ^configured_model_dependencies=blocked\;reason=[a-z0-9_]+$ ]] && emit "$line"
+  done <"$result"
+  emit "dependency_runner_exit_code=$runner_status;error_sha256=$(sha256sum "$error" | awk '{print $1}');error_bytes=$(wc -c <"$error" | tr -d ' ');raw_error_retained=false"
+  block dependency_runner_failed
+fi
+while IFS= read -r line; do emit "$line"; done <"$result"
+
+for port in 8000 8001; do
+  ss -H -ltn4 "sport = :$port" 2>/dev/null | awk -v expected="127.0.0.1:$port" '$4 == expected {found=1} END {exit !found}' \
+    || block "operator_forward_port_${port}_not_listening_after_test"
+done
+after_8000="$(ss -H -ltn4 'sport = :8000' 2>/dev/null | sha256sum | awk '{print $1}')"
+after_8001="$(ss -H -ltn4 'sport = :8001' 2>/dev/null | sha256sum | awk '{print $1}')"
+[[ "$before_8000" == "$after_8000" && "$before_8001" == "$after_8001" ]] || block operator_forward_listener_identity_changed
+emit 'operator_forward_ports_after_test=listening;forwarding_changed=false'
+emit 'configured_model_dependencies_qualification=pass'

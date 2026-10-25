@@ -1,0 +1,42 @@
+{
+  "files": [
+    {
+      "bytes": 5169,
+      "doc_id": "SYN-003",
+      "filename": "31_SCH_2003.pdf",
+      "sha256": "00f4489faa8f15ed50ed3095c476fcdc9dd05852d56daf08bec33f0faafbaa02"
+    },
+    {
+      "bytes": 4725,
+      "doc_id": "SYN-004",
+      "filename": "Form_TST9001.pdf",
+      "sha256": "96a91dab4d748cb5d80ae211bdf4aa435a8d679b0fc7dd3668cfdde066909000"
+    },
+    {
+      "bytes": 14864,
+      "doc_id": "SYN-005",
+      "filename": "Governance_Manual_2005_Revision_3.pdf",
+      "sha256": "4cef995f8ae67b2184b52ddf59635ea5adf05d8df6e40ac110eff0c04357dd47"
+    },
+    {
+      "bytes": 4514,
+      "doc_id": "SYN-001",
+      "filename": "OPS_17_CTL_2001.pdf",
+      "sha256": "32d3cc0361e4b2a26ea552c1e8e6013c6a1635f036ad759b50d0e29b447b0e79"
+    },
+    {
+      "bytes": 2850,
+      "doc_id": "SYN-002",
+      "filename": "OPS_17_CTL_2002_RevA.pdf",
+      "sha256": "1c44ff8c5f1b30046e265b619a08e76a9c1139e15e6eb85164ebcf3655b6b442"
+    },
+    {
+      "bytes": 4539,
+      "doc_id": "SYN-006",
+      "filename": "SOP_42_IR_2006.pdf",
+      "sha256": "962f8c6dd5835fc713cea6292ee1f30cb18d0abe6db38efe91f9a4ecea8d5175"
+    }
+  ],
+  "fixture_status": "fully_synthetic_no_source_text",
+  "schema_version": 1
+}

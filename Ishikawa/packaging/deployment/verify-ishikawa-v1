@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Verify every file in one final Ishikawa v1 deployment package.
+#
+# Mental model:
+#   Reject links and unexpected files, verify the outer and component checksum
+#   manifests, then confirm the accepted application correction and final
+#   database schema identities.
+#
+# Inputs or prerequisites:
+#   An extracted package containing application, database, and SHA256SUMS.
+#
+# Outputs:
+#   One content-free pass or blocked marker. Nothing is installed or changed.
+#
+# Usage:
+#   bash ./verify-ishikawa-v1
+
+usage() {
+  printf '%s\n' 'Usage: verify-ishikawa-v1'
+}
+
+fail() {
+  printf 'ishikawa_v1_verification=blocked;reason=%s\n' "$1" >&2
+  exit 1
+}
+
+if (( $# > 0 )); then
+  [[ $# == 1 && ( "$1" == --help || "$1" == -h ) ]] || fail 'argument_invalid'
+  usage
+  exit 0
+fi
+
+readonly package_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly manifest="$package_root/SHA256SUMS"
+readonly application_root="$package_root/application"
+readonly database_root="$package_root/database"
+readonly corrected_module="$application_root/payload/application/python/ishikawa/ingestion_runtime.py"
+readonly final_schema="$database_root/schema.sql"
+readonly corrected_module_sha256='8e64799a02b6c6f6833e19c29c8157602f94647009d25d78bb1e9be083ebb029'
+readonly final_schema_sha256='5cfd397152b726aedc97be84d8a06fc8f21cad6e1a11563e5e9dd3a1f026d568'
+
+for required in awk cmp find grep mktemp rm sha256sum sort; do
+  command -v "$required" >/dev/null 2>&1 || fail 'required_command_missing'
+done
+for directory in "$package_root" "$application_root" "$database_root"; do
+  [[ -d "$directory" && ! -L "$directory" ]] || fail 'package_directory_unsafe'
+done
+for file in \
+  "$manifest" \
+  "$application_root/SHA256SUMS" \
+  "$database_root/SHA256SUMS" \
+  "$corrected_module" \
+  "$final_schema"; do
+  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || fail 'package_file_unsafe'
+done
+find "$package_root" -type l -print -quit | grep -q . && fail 'package_symlink_found'
+
+temporary_root="$(mktemp -d /tmp/ishikawa-v1-verification.XXXXXX)"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  [[ "$temporary_root" == /tmp/ishikawa-v1-verification.* && -d "$temporary_root" ]] \
+    && rm -rf -- "$temporary_root"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+(cd -- "$package_root" && find . -type f ! -path './SHA256SUMS' -printf '%P\n' | sort) \
+  >"$temporary_root/actual-files.txt"
+awk '{print $2}' "$manifest" | sort >"$temporary_root/manifest-files.txt"
+cmp -s "$temporary_root/actual-files.txt" "$temporary_root/manifest-files.txt" \
+  || fail 'package_inventory_mismatch'
+
+(cd -- "$package_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail 'package_checksum_failed'
+(cd -- "$application_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail 'application_checksum_failed'
+(cd -- "$database_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail 'database_checksum_failed'
+
+[[ "$(sha256sum "$corrected_module" | awk '{print $1}')" == "$corrected_module_sha256" ]] \
+  || fail 'corrected_module_identity_mismatch'
+[[ "$(sha256sum "$final_schema" | awk '{print $1}')" == "$final_schema_sha256" ]] \
+  || fail 'final_schema_identity_mismatch'
+
+if find "$package_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q . \
+  || find "$package_root" -type d -name __pycache__ -print -quit | grep -q .; then
+  fail 'generated_python_file_found'
+fi
+if find "$package_root" -type f \( -iname '*migration*' -o -iname '*mutation*' -o -iname '*patch*' -o -iname '*repair*' \) -print -quit | grep -q .; then
+  fail 'historical_mutation_file_found'
+fi
+
+printf 'ishikawa_v1_verification=pass;application=final;database_schema=version_4;historical_mutation_files=0\n'

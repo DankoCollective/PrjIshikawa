@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Qualify one complete Ishikawa v1.2 deployment package on its intended host.
+#
+# Mental model:
+#   Verify the host and package, install the application into a disposable
+#   sibling directory, install the final schema into a disposable database,
+#   compare that schema with the accepted database, then remove both temporary
+#   targets while proving the active installation and corpus remain unchanged.
+#
+# Inputs or prerequisites:
+#   Root authority through attended sudo, Ubuntu AMD64, the accepted native
+#   runtime dependencies and roles, and a checksum-bound deployment archive.
+#
+# Outputs:
+#   Content-free qualification facts. No temporary application or database is
+#   retained, no model is contacted, and managed services are not changed.
+#
+# Usage:
+#   sudo bash ./qualify-ishikawa-v1.2-deployment-package HOST OS ARCHIVE SHA256 \
+#     ACCEPTED_DATABASE OWNER_ROLE INGEST_ROLE RETRIEVAL_ROLE v1.2
+
+umask 077
+export SYSTEMD_PAGER=cat SYSTEMD_LESS=FRX NO_COLOR=1
+
+emit() { printf '%s\n' "$1"; }
+qualification_marker='ishikawa_deployment_host_qualification'
+block() { emit "$qualification_marker=blocked;reason=$1"; exit 1; }
+
+(( $# == 8 || $# == 9 )) || block invalid_argument_count
+expected_hostname="$1"
+expected_os_version="$2"
+archive_path="$3"
+expected_archive_sha256="$4"
+accepted_database="$5"
+owner_role="$6"
+ingest_role="$7"
+retrieval_role="$8"
+release_version="${9:-v1}"
+
+case "$release_version" in
+  v1)
+    qualification_marker='ishikawa_v1_host_qualification'
+    release_slug='v1'
+    bundle_name='ishikawa-v1-deployment-package'
+    verifier_name='verify-ishikawa-v1'
+    verifier_contract='ishikawa_v1_verification=pass;application=final;database_schema=version_4;historical_mutation_files=0'
+    expected_package_files=104
+    expected_application_files=97
+    expected_python_modules=47
+    expected_installed_files=94
+    ;;
+  v1.1)
+    qualification_marker='ishikawa_v1_1_host_qualification'
+    release_slug='v1.1'
+    bundle_name='ishikawa-v1.1-deployment-package'
+    verifier_name='verify-ishikawa-v1.1'
+    verifier_contract='ishikawa_v1_1_verification=pass;application=final;database_schema=version_4;python_modules=48;operator_documents=10;t09_profile=bound;t10_retry=bound;historical_mutation_files=0'
+    expected_package_files=111
+    expected_application_files=104
+    expected_python_modules=48
+    expected_installed_files=101
+    ;;
+  v1.2)
+    qualification_marker='ishikawa_v1_2_host_qualification'
+    release_slug='v1.2'
+    bundle_name='ishikawa-v1.2-deployment-package'
+    verifier_name='verify-ishikawa-v1.2'
+    verifier_contract='ishikawa_v1_2_verification=pass;application=final;database_schema=version_4;python_modules=48;operator_documents=10;document_page_routing=bound;structured_generation=bound;historical_mutation_files=0'
+    expected_package_files=111
+    expected_application_files=104
+    expected_python_modules=48
+    expected_installed_files=101
+    ;;
+  *) block release_version_invalid ;;
+esac
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+[[ "$expected_archive_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_archive_identity
+for identifier in "$accepted_database" "$owner_role" "$ingest_role" "$retrieval_role"; do
+  [[ "$identifier" =~ ^[a-z][a-z0-9_]{0,62}$ ]] || block invalid_database_identifier
+done
+[[ "$owner_role" != "$ingest_role" && "$owner_role" != "$retrieval_role" && "$ingest_role" != "$retrieval_role" ]] || block roles_not_distinct
+case "$release_version" in
+  v1) [[ "$archive_path" == /tmp/ishikawa-v1-host-qualification-*/*.tar.gz ]] || block archive_path_unsafe ;;
+  v1.1) [[ "$archive_path" == /tmp/ishikawa-v1.1-host-qualification-*/*.tar.gz ]] || block archive_path_unsafe ;;
+  v1.2) [[ "$archive_path" == /tmp/ishikawa-v1.2-host-qualification-*/*.tar.gz ]] || block archive_path_unsafe ;;
+esac
+[[ -f "$archive_path" && ! -L "$archive_path" && -r "$archive_path" ]] || block archive_path_unsafe
+(( EUID == 0 )) || block root_authority_required
+[[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root && "$SUDO_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || block operator_identity_missing
+
+for required in awk bash cmp createdb dpkg dropdb find getent grep hostname mktemp pg_conftool pg_dump pg_isready pg_lsclusters psql python3 readlink rm runuser sed sha256sum sleep ss stat systemctl tar uname wc; do
+  command -v "$required" >/dev/null 2>&1 || block "command_missing_$required"
+done
+for binary in createdb dropdb pg_dump pg_isready postgres psql; do
+  [[ -x "/usr/lib/postgresql/16/bin/$binary" ]] || block "postgresql_binary_missing_$binary"
+done
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 && "$(uname -m)" == x86_64 ]] || block architecture_mismatch
+operator_home="$(getent passwd "$SUDO_USER" | awk -F: 'NR == 1 {print $6}')"
+[[ "$operator_home" == /home/* && -d "$operator_home" && ! -L "$operator_home" ]] || block operator_home_unsafe
+
+actual_archive_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+[[ "$actual_archive_sha256" == "$expected_archive_sha256" ]] || block archive_checksum_mismatch
+archive_bytes="$(wc -c <"$archive_path" | tr -d ' ')"
+(( archive_bytes > 0 && archive_bytes <= 2097152 )) || block archive_size_out_of_bounds
+if tar -tzf "$archive_path" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then block archive_member_path_unsafe; fi
+
+postgresql_version="$(/usr/lib/postgresql/16/bin/postgres --version | awk '{print $3}')"
+[[ "$postgresql_version" == 16.15 ]] || block postgresql_version_mismatch
+vector_default_version="$(sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/p" /usr/share/postgresql/16/extension/vector.control)"
+[[ "$vector_default_version" == 0.8.7 ]] || block vector_extension_version_mismatch
+cluster_line="$(pg_lsclusters --no-header 2>/dev/null || true)"
+[[ "$(awk 'NF {count++} END {print count+0}' <<<"$cluster_line")" == 1 ]] || block database_cluster_count_mismatch
+read -r cluster_version cluster_name cluster_port initial_cluster_status cluster_owner cluster_data_directory cluster_log_file <<<"$cluster_line"
+[[ "$cluster_version" == 16 && "$cluster_name" == main && "$cluster_port" == 5432 && "$cluster_owner" == postgres && "$cluster_data_directory" == /var/lib/postgresql/16/main && "$cluster_log_file" == /var/log/postgresql/postgresql-16-main.log ]] || block database_cluster_contract_mismatch
+[[ "$initial_cluster_status" == down || "$initial_cluster_status" == online ]] || block database_cluster_status_invalid
+[[ "$(stat -c '%U:%G|%a' /var/lib/postgresql/16/main)" == 'postgres:postgres|700' ]] || block database_cluster_data_identity_mismatch
+[[ "$(sed -n 's/^[[:space:]]*\([^#[:space:]][^#[:space:]]*\)[[:space:]]*$/\1/p' /etc/postgresql/16/main/start.conf)" == manual ]] || block database_cluster_start_policy_mismatch
+[[ "$(pg_conftool 16 main show -s listen_addresses 2>/dev/null || true)" == 127.0.0.1 ]] || block database_cluster_listen_address_mismatch
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" == disabled ]] || block postgresql_service_not_disabled
+
+private_root="$(mktemp -d "/tmp/ishikawa-$release_slug-package-work.XXXXXX")"
+chmod 0755 "$private_root"
+disposable_database="ishikawa_${release_slug//./_}_qualification_$$"
+install_root="$operator_home/Documents/.Ishikawa-$release_slug-qualification-$$"
+cluster_started=false
+disposable_created=false
+temporary_install_created=false
+cleanup() {
+  local status="$?" drop_status=0 stop_status=0 install_status=0 work_status=0
+  trap - EXIT INT TERM ERR
+  set +e
+  if [[ "$disposable_created" == true ]] && systemctl --quiet is-active postgresql@16-main.service 2>/dev/null; then
+    runuser -u postgres -- /usr/lib/postgresql/16/bin/dropdb --if-exists "$disposable_database" >/dev/null 2>&1 || drop_status=$?
+    emit "cleanup_disposable_database_exit_code=$drop_status"
+    (( drop_status == 0 )) || status=1
+  fi
+  if [[ "$temporary_install_created" == true && "$install_root" == "$operator_home"/Documents/.Ishikawa-*-qualification-* && -d "$install_root" ]]; then
+    rm -rf -- "$install_root" || install_status=$?
+    emit "cleanup_temporary_application_exit_code=$install_status"
+    (( install_status == 0 )) || status=1
+  fi
+  if [[ "$cluster_started" == true ]]; then
+    systemctl stop postgresql@16-main.service >/dev/null 2>&1 || stop_status=$?
+    emit "cleanup_cluster_stop_exit_code=$stop_status"
+    (( stop_status == 0 )) || status=1
+  fi
+  if [[ "$private_root" == /tmp/ishikawa-*-package-work.* && -d "$private_root" ]]; then
+    rm -rf -- "$private_root" || work_status=$?
+    emit "cleanup_private_work_exit_code=$work_status"
+    (( work_status == 0 )) || status=1
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tar -xzf "$archive_path" -C "$private_root" || block archive_extraction_failed
+bundle_root="$private_root/$bundle_name"
+[[ -d "$bundle_root" && ! -L "$bundle_root" ]] || block bundle_root_invalid
+if find "$bundle_root" -type l -print -quit | grep -q .; then block package_symlink_found; fi
+package_file_count="$(find "$bundle_root" -type f | awk 'END {print NR+0}')"
+application_file_count="$(find "$bundle_root/application" -type f | awk 'END {print NR+0}')"
+database_file_count="$(find "$bundle_root/database" -type f | awk 'END {print NR+0}')"
+[[ "$package_file_count" == "$expected_package_files" && "$application_file_count" == "$expected_application_files" && "$database_file_count" == 4 ]] || block package_file_inventory_invalid
+verify_output="$private_root/package-verification.txt"
+bash "$bundle_root/$verifier_name" >"$verify_output" || block package_verification_failed
+grep -Fxq "$verifier_contract" "$verify_output" || block package_verification_contract_failed
+
+schema_sha256="$(sha256sum "$bundle_root/database/schema.sql" | awk '{print $1}')"
+corrected_module_sha256="$(sha256sum "$bundle_root/application/payload/application/python/ishikawa/ingestion_runtime.py" | awk '{print $1}')"
+[[ "$schema_sha256" == 5cfd397152b726aedc97be84d8a06fc8f21cad6e1a11563e5e9dd3a1f026d568 ]] || block schema_identity_mismatch
+[[ "$corrected_module_sha256" == 8e64799a02b6c6f6833e19c29c8157602f94647009d25d78bb1e9be083ebb029 ]] || block application_correction_identity_mismatch
+if [[ "$release_version" == v1.1 || "$release_version" == v1.2 ]]; then
+  retrieval_service_sha256="$(sha256sum "$bundle_root/application/payload/application/python/ishikawa/retrieval_service.py" | awk '{print $1}')"
+  method_profile_sha256="$(sha256sum "$bundle_root/application/payload/config/method_profile.yaml" | awk '{print $1}')"
+  [[ "$retrieval_service_sha256" == b297358b691fdfaf987c89b9e5b5539f083545c22b2be7cbabd1cf1a08b9c6b1 ]] || block retrieval_service_identity_mismatch
+  [[ "$method_profile_sha256" == 0d329981f1259e5d5f8138350af538a08a3d70a704241b384da6714f3b17724c ]] || block method_profile_identity_mismatch
+else
+  retrieval_service_sha256='not_applicable'
+  method_profile_sha256='not_applicable'
+fi
+
+emit "purpose=qualify_complete_ishikawa_${release_slug//./_}_deployment_package"
+emit "release_version=$release_version"
+emit "target_hostname=$actual_hostname;os_id=ubuntu;os_version=$VERSION_ID;architecture=$architecture"
+emit "archive_sha256=$actual_archive_sha256;archive_bytes=$archive_bytes;package_checksums=pass"
+emit "package_files=$package_file_count;application_files=$application_file_count;database_files=$database_file_count;historical_mutation_files=0"
+emit "schema_sha256=$schema_sha256;corrected_module_sha256=$corrected_module_sha256"
+emit "retrieval_service_sha256=$retrieval_service_sha256;method_profile_sha256=$method_profile_sha256"
+emit "postgresql_version=$postgresql_version;vector_default_version=$vector_default_version;cluster_initial_status=$initial_cluster_status"
+emit 'authorized_actions=verify_package_install_and_remove_disposable_application_start_cluster_if_needed_snapshot_accepted_database_create_install_verify_and_drop_disposable_database_restore_initial_cluster_state'
+emit 'non_actions=no_active_application_change_no_accepted_database_write_no_service_enablement_no_model_call_no_credential_read_no_source_document_copy_no_port_forwarding_change'
+
+[[ ! -e "$install_root" && ! -L "$install_root" ]] || block temporary_install_path_exists
+install_output="$private_root/application-install.txt"
+runuser -u "$SUDO_USER" -- bash "$bundle_root/application/install-ishikawa" --install-root "$install_root" >"$install_output" || block application_install_failed
+temporary_install_created=true
+grep -Fq 'ishikawa_install=pass;' "$install_output" || block application_install_contract_failed
+installed_file_count="$(find "$install_root" -type f | awk 'END {print NR+0}')"
+installed_python_modules="$(find "$install_root/application/python/ishikawa" -maxdepth 1 -type f -name '*.py' | awk 'END {print NR+0}')"
+installed_unit_files="$(find "$install_root/systemd" -maxdepth 1 -type f | awk 'END {print NR+0}')"
+[[ "$installed_file_count" == "$expected_installed_files" && "$installed_python_modules" == "$expected_python_modules" && "$installed_unit_files" == 3 ]] || block installed_application_inventory_mismatch
+[[ "$(sha256sum "$install_root/application/python/ishikawa/ingestion_runtime.py" | awk '{print $1}')" == "$corrected_module_sha256" ]] || block installed_application_identity_mismatch
+runuser -u "$SUDO_USER" -- env PYTHONDONTWRITEBYTECODE=1 "$install_root/scripts/ishikawa-retrieval-api" --check-config >/dev/null || block installed_retrieval_configuration_failed
+runuser -u "$SUDO_USER" -- env PYTHONDONTWRITEBYTECODE=1 "$install_root/scripts/ishikawa-observability-retention" --check-config >/dev/null || block installed_retention_configuration_failed
+runuser -u "$SUDO_USER" -- "$install_root/scripts/ishikawa-stack" --help >/dev/null || block installed_stack_command_failed
+rm -rf -- "$install_root"
+temporary_install_created=false
+[[ ! -e "$install_root" && ! -L "$install_root" ]] || block temporary_application_removal_failed
+emit "fresh_application_install=pass;installed_files=$installed_file_count;python_modules=$installed_python_modules;unit_files=3;temporary_application_removed=true;active_application_changed=false"
+
+if [[ "$initial_cluster_status" == down ]]; then
+  systemctl start postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_start_failed
+  cluster_started=true
+fi
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_isready --quiet --host=/var/run/postgresql --port=5432 --dbname="$accepted_database"; then
+    ready=true
+    break
+  fi
+  sleep 1
+done
+[[ "$ready" == true ]] || block postgresql_cluster_not_ready
+listener_lines="$(ss -H -ltn 'sport = :5432' 2>/dev/null || true)"
+[[ "$(awk 'NF {count++} END {print count+0}' <<<"$listener_lines")" == 1 ]] || block postgresql_listener_count_mismatch
+grep -Eq '[[:space:]]127\.0\.0\.1:5432[[:space:]]' <<<"$listener_lines" || block postgresql_listener_not_loopback
+
+query_scalar() {
+  local database="$1" query="$2"
+  runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align \
+    --dbname="$database" --command="$query" 2>/dev/null | sed -n '1p'
+}
+
+normalize_schema_dump() {
+  local database="$1" output="$2"
+  runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_dump \
+    --schema-only --no-owner --dbname="$database" | sed \
+      -e '/^\\restrict /d' \
+      -e '/^\\unrestrict /d' \
+      -e '/^-- Dumped from database version /d' \
+      -e '/^-- Dumped by pg_dump version /d' \
+      -e '/^-- Started on /d' \
+      -e '/^-- Completed on /d' >"$output"
+}
+
+database_contract="$(query_scalar postgres "SELECT datname || '|' || pg_get_userbyid(datdba) || '|' || pg_encoding_to_char(encoding) FROM pg_database WHERE datname='$accepted_database';")" || block accepted_database_verification_failed
+[[ "$database_contract" == "$accepted_database|$owner_role|UTF8" ]] || block accepted_database_contract_mismatch
+accepted_ledger_before="$(query_scalar "$accepted_database" "SELECT string_agg(migration_id || '|' || migration_sha256 || '|' || schema_version, ';' ORDER BY schema_version) FROM rag.schema_migrations;")" || block accepted_ledger_read_failed
+[[ "$(awk -F';' '{print NF}' <<<"$accepted_ledger_before")" == 4 && "$accepted_ledger_before" == *'|4' ]] || block accepted_ledger_contract_mismatch
+accepted_counts_query="SELECT concat_ws('|',
+  (SELECT count(*) FROM rag.document_classes),(SELECT count(*) FROM rag.documents),
+  (SELECT count(*) FROM rag.ingestion_runs),(SELECT count(*) FROM rag.publication_batches),
+  (SELECT count(*) FROM rag.document_versions),(SELECT count(*) FROM rag.document_artifact_sets),
+  (SELECT count(*) FROM rag.structural_units),(SELECT count(*) FROM rag.chunks),
+  (SELECT count(*) FROM rag.chunk_structural_units),(SELECT count(*) FROM rag.citation_anchors),
+  (SELECT count(*) FROM rag.embedding_spaces),(SELECT count(*) FROM rag.chunk_embeddings),
+  (SELECT count(*) FROM rag.relationship_types),(SELECT count(*) FROM rag.relationships),
+  (SELECT count(*) FROM rag.publication_batch_changes),(SELECT count(*) FROM rag.active_document_versions),
+  (SELECT count(*) FROM rag_private.artifact_manifests),(SELECT count(*) FROM rag_private.ingestion_stages),
+  (SELECT count(*) FROM rag_private.quarantine_records));"
+accepted_counts_before="$(query_scalar "$accepted_database" "$accepted_counts_query")" || block accepted_counts_read_failed
+accepted_active_before="$(query_scalar "$accepted_database" "SELECT count(*) || '|' || coalesce(sum(page_count),0) || '|' || (SELECT count(*) FROM rag_search.active_chunks) || '|' || (SELECT count(*) FROM rag_search.active_embeddings) FROM rag_search.active_documents;")" || block accepted_active_inventory_read_failed
+[[ "$accepted_active_before" == '6|27|126|126' ]] || block accepted_active_inventory_mismatch
+accepted_identity_before="$(query_scalar "$accepted_database" "SELECT string_agg(document_key || '|' || source_digest, ';' ORDER BY document_key) FROM rag_search.active_documents;")" || block accepted_identity_read_failed
+[[ -n "$accepted_identity_before" ]] || block accepted_identity_missing
+normalize_schema_dump "$accepted_database" "$private_root/accepted-before.sql"
+accepted_schema_before_sha256="$(sha256sum "$private_root/accepted-before.sql" | awk '{print $1}')"
+
+[[ "$(query_scalar postgres "SELECT count(*) FROM pg_database WHERE datname='$disposable_database';")" == 0 ]] || block disposable_database_already_exists
+runuser -u postgres -- /usr/lib/postgresql/16/bin/createdb --owner="$owner_role" "$disposable_database" >/dev/null || block disposable_database_create_failed
+disposable_created=true
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$disposable_database" --command='CREATE EXTENSION vector;' >/dev/null || block vector_extension_create_failed
+installer_output="$private_root/schema-install.txt"
+runuser -u postgres -- env PATH="/usr/lib/postgresql/16/bin:/usr/bin:/bin" \
+  bash "$bundle_root/database/install-schema" \
+  --database "$disposable_database" \
+  --owner-role "$owner_role" \
+  --ingest-role "$ingest_role" \
+  --retrieval-role "$retrieval_role" >"$installer_output" || block packaged_schema_install_failed
+grep -Fxq "ishikawa_schema_install=pass;schema_version=4;schema_sha256=$schema_sha256" "$installer_output" || block schema_installer_contract_failed
+
+normalize_schema_dump "$disposable_database" "$private_root/disposable.sql"
+cmp -s "$private_root/accepted-before.sql" "$private_root/disposable.sql" || block accepted_and_disposable_catalogs_differ
+object_contract="$(query_scalar "$disposable_database" "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('rag','rag_private') AND c.relkind='r') || '|' || (SELECT count(*) FROM pg_views WHERE schemaname='rag_search') || '|' || (SELECT count(*) FROM pg_indexes WHERE indexname IN ('artifact_manifests_document_idx','artifact_sets_document_version_idx','chunks_artifact_set_idx','chunks_lexical_gin_idx','citations_chunk_idx','document_versions_document_idx','embedding_spaces_one_active_idx','embeddings_space_chunk_idx','ingestion_stages_run_idx','publication_changes_document_idx','quarantine_run_idx','relationships_source_idx','relationships_target_idx','structural_units_parent_idx')) || '|' || (SELECT count(*) FROM pg_constraint WHERE conname IN ('chunks_total_embedding_token_count_v2_check','document_classes_registry_version_check','document_artifact_sets_run_provenance_fkey','document_artifact_sets_semantic_inputs_key','documents_catalog_version_check','ingestion_runs_artifact_provenance_key','quarantine_records_document_version_document_fkey','quarantine_records_document_version_subject_check','quarantine_records_resolution_v1_check','quarantine_records_subject_check','relationships_override_audit_check'));")" || block object_inventory_read_failed
+[[ "$object_contract" == '20|5|14|11' ]] || block object_inventory_mismatch
+baseline_contract="$(query_scalar "$disposable_database" "SELECT count(*) || '|' || min(migration_id) || '|' || min(migration_sha256) || '|' || max(schema_version) FROM rag.schema_migrations;")" || block baseline_read_failed
+[[ "$baseline_contract" == "1|ishikawa_consolidated_schema_v4|$schema_sha256|4" ]] || block baseline_contract_mismatch
+retrieval_contract="$(query_scalar "$disposable_database" "SELECT (SELECT bool_and(has_table_privilege('$retrieval_role', format('%I.%I', schemaname, viewname), 'SELECT')) FROM pg_views WHERE schemaname='rag_search') || '|' || (SELECT bool_and(NOT has_table_privilege('$retrieval_role', format('%I.%I', schemaname, tablename), 'SELECT')) FROM pg_tables WHERE schemaname IN ('rag','rag_private'));")" || block retrieval_privilege_read_failed
+[[ "$retrieval_contract" == 'true|true' ]] || block retrieval_privilege_mismatch
+
+runuser -u postgres -- /usr/lib/postgresql/16/bin/dropdb "$disposable_database" >/dev/null || block disposable_database_drop_failed
+disposable_created=false
+[[ "$(query_scalar postgres "SELECT count(*) FROM pg_database WHERE datname='$disposable_database';")" == 0 ]] || block disposable_database_remains
+accepted_ledger_after="$(query_scalar "$accepted_database" "SELECT string_agg(migration_id || '|' || migration_sha256 || '|' || schema_version, ';' ORDER BY schema_version) FROM rag.schema_migrations;")" || block accepted_ledger_recheck_failed
+accepted_counts_after="$(query_scalar "$accepted_database" "$accepted_counts_query")" || block accepted_counts_recheck_failed
+accepted_active_after="$(query_scalar "$accepted_database" "SELECT count(*) || '|' || coalesce(sum(page_count),0) || '|' || (SELECT count(*) FROM rag_search.active_chunks) || '|' || (SELECT count(*) FROM rag_search.active_embeddings) FROM rag_search.active_documents;")" || block accepted_active_inventory_recheck_failed
+accepted_identity_after="$(query_scalar "$accepted_database" "SELECT string_agg(document_key || '|' || source_digest, ';' ORDER BY document_key) FROM rag_search.active_documents;")" || block accepted_identity_recheck_failed
+normalize_schema_dump "$accepted_database" "$private_root/accepted-after.sql"
+accepted_schema_after_sha256="$(sha256sum "$private_root/accepted-after.sql" | awk '{print $1}')"
+[[ "$accepted_ledger_after" == "$accepted_ledger_before" && "$accepted_counts_after" == "$accepted_counts_before" && "$accepted_active_after" == "$accepted_active_before" && "$accepted_identity_after" == "$accepted_identity_before" && "$accepted_schema_after_sha256" == "$accepted_schema_before_sha256" ]] || block accepted_database_changed
+
+if [[ "$cluster_started" == true ]]; then
+  systemctl stop postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_stop_failed
+  cluster_started=false
+fi
+final_cluster_status="$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {print $4}')"
+[[ "$final_cluster_status" == "$initial_cluster_status" ]] || block database_cluster_state_not_restored
+if [[ "$initial_cluster_status" == down ]] && ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_listener_remains; fi
+if [[ "$initial_cluster_status" == down && "$(systemctl is-active postgresql.service 2>/dev/null || true)" == active ]]; then block postgresql_service_remains_active; fi
+
+rm -rf -- "$private_root"
+private_root=''
+emit 'fresh_database_install=pass;schema_version=4;catalog_equivalence=exact;tables=20;views=5;explicit_indexes=14;required_named_constraints=11'
+emit 'baseline_identity=ishikawa_consolidated_schema_v4;baseline_rows=1;retrieval_privileges=pass'
+IFS='|' read -r active_documents active_pages active_chunks active_embeddings <<<"$accepted_active_after"
+emit "accepted_active_documents=$active_documents;accepted_active_pages=$active_pages;accepted_active_chunks=$active_chunks;accepted_active_embeddings=$active_embeddings"
+emit 'accepted_database_unchanged=true;temporary_database_dropped=true'
+emit "cluster_final_status=$final_cluster_status;cluster_initial_state_restored=true;service_enablement_changed=false"
+emit 'model_contact=false;credential_read=false;source_documents_copied=false;port_forwarding_changed=false'
+emit "$qualification_marker=pass"

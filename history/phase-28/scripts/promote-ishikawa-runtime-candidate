@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Promote one checksum-bound immutable runtime correction from a qualified
+#   sibling installation while preserving all operator and application state.
+#
+# Mental model:
+#   Require a stopped application, prove the sibling tree against the complete
+#   corrected payload manifest, prove the active immutable tree against its
+#   accepted predecessor, replace exactly one module atomically, and verify the
+#   corrected connection contract without contacting PostgreSQL or a model.
+#
+# Inputs or prerequisites:
+#   Exact old/new immutable manifests, the exact new full-payload manifest, a
+#   qualified sibling installation, and a stopped active installation.
+#
+# Outputs:
+#   One corrected immutable module in the active installation and a bounded
+#   content-free receipt. Configuration, corpus, state, database, services,
+#   credentials, forwarding, and the qualified sibling remain unchanged.
+
+usage() {
+  printf '%s\n' \
+    'Usage: promote-ishikawa-runtime-candidate HOST OS TRANSFER OLD-MANIFEST-SHA NEW-MANIFEST-SHA FULL-MANIFEST-SHA OLD-MODULE-SHA NEW-MODULE-SHA RESULT'
+}
+
+fail() {
+  local failure_line="ishikawa_runtime_candidate_promotion=blocked;reason=$1"
+  printf '%s\n' "$failure_line"
+  if [[ -n "${result_path:-}" && -f "${result_path:-}" ]]; then
+    printf '%s\n' "$failure_line" >>"$result_path"
+  fi
+  exit 1
+}
+
+(( $# == 9 )) || { usage >&2; exit 2; }
+readonly expected_hostname="$1"
+readonly expected_os_version="$2"
+readonly transfer_root="$3"
+readonly old_manifest_sha256="$4"
+readonly new_manifest_sha256="$5"
+readonly full_manifest_sha256="$6"
+readonly old_module_sha256="$7"
+readonly new_module_sha256="$8"
+readonly result_path="$9"
+readonly active_root="$HOME/Documents/Ishikawa"
+readonly candidate_root="$HOME/Documents/Ishikawa-v1-candidate"
+readonly relative_module='application/python/ishikawa/ingestion_runtime.py'
+readonly active_module="$active_root/$relative_module"
+readonly candidate_module="$candidate_root/$relative_module"
+readonly old_manifest="$transfer_root/old-immutable.sha256"
+readonly new_manifest="$transfer_root/new-immutable.sha256"
+readonly full_manifest="$transfer_root/new-payload.sha256"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail 'expected_hostname_invalid'
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail 'expected_os_version_invalid'
+[[ "$transfer_root" == /tmp/ishikawa-runtime-candidate-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || fail 'transfer_root_invalid'
+for digest in "$old_manifest_sha256" "$new_manifest_sha256" "$full_manifest_sha256" "$old_module_sha256" "$new_module_sha256"; do
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || fail 'identity_invalid'
+done
+[[ "$old_module_sha256" != "$new_module_sha256" ]] || fail 'module_identity_not_changed'
+[[ "$result_path" == "$transfer_root/qualification-result.txt" ]] || fail 'result_path_invalid'
+(( EUID != 0 )) || fail 'regular_operator_required'
+
+umask 077
+: >"$result_path"
+
+for required in awk bash chmod cmp cp date dirname dpkg find grep hostname install mktemp mv python3 rm sed sha256sum sort ss stat systemctl tee; do
+  command -v "$required" >/dev/null 2>&1 || fail 'required_command_missing'
+done
+for directory in "$active_root" "$candidate_root"; do
+  [[ -d "$directory" && ! -L "$directory" ]] || fail 'installation_root_unsafe'
+done
+for file in "$old_manifest" "$new_manifest" "$full_manifest" "$active_module" "$candidate_module"; do
+  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || fail 'required_file_unsafe'
+done
+
+emit() {
+  printf '%s\n' "$1" | tee -a "$result_path"
+}
+
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || fail 'operating_system_mismatch'
+readonly actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || fail 'hostname_mismatch'
+[[ "$(dpkg --print-architecture)" == amd64 ]] || fail 'architecture_mismatch'
+
+for unit in postgresql@16-main.service; do
+  [[ "$(systemctl is-active "$unit" 2>/dev/null || true)" != active ]] || fail 'system_service_active'
+done
+[[ "$(systemctl --user is-active ishikawa-retrieval-api.service 2>/dev/null || true)" != active ]] || fail 'user_service_active'
+[[ ! -e "$active_root/state/run/stack.state" && ! -L "$active_root/state/run/stack.state" ]] || fail 'managed_stack_state_present'
+for port in 5432 1384 3000; do
+  if ss -H -ltn "( sport = :$port )" | grep -q .; then
+    fail 'application_port_in_use'
+  fi
+done
+
+[[ "$(sha256sum "$old_manifest" | awk '{print $1}')" == "$old_manifest_sha256" ]] || fail 'old_manifest_identity_mismatch'
+[[ "$(sha256sum "$new_manifest" | awk '{print $1}')" == "$new_manifest_sha256" ]] || fail 'new_manifest_identity_mismatch'
+[[ "$(sha256sum "$full_manifest" | awk '{print $1}')" == "$full_manifest_sha256" ]] || fail 'full_manifest_identity_mismatch'
+for manifest in "$old_manifest" "$new_manifest" "$full_manifest"; do
+  if ! awk '
+    !/^[0-9a-f]{64}  (application|config|docs|scripts|systemd)\/[A-Za-z0-9_.\/-]+$/ {bad=1}
+    /(^|\/)\.\.($|\/)/ {bad=1}
+    END {exit bad}
+  ' "$manifest"; then
+    fail 'manifest_path_invalid'
+  fi
+done
+
+candidate_inventory="$(mktemp "$transfer_root/.candidate-inventory.XXXXXX")"
+manifest_inventory="$(mktemp "$transfer_root/.manifest-inventory.XXXXXX")"
+find "$candidate_root" -type l -print -quit | grep -q . && fail 'candidate_symlink_found'
+(cd -- "$candidate_root" && find . -type f -printf '%P\n' | sort) >"$candidate_inventory"
+awk '{print $2}' "$full_manifest" | sort >"$manifest_inventory"
+cmp -s "$candidate_inventory" "$manifest_inventory" || fail 'candidate_inventory_mismatch'
+(cd -- "$candidate_root" && sha256sum --check --strict "$full_manifest" >/dev/null) || fail 'candidate_payload_mismatch'
+
+find "$active_root/application" "$active_root/docs" "$active_root/scripts" "$active_root/systemd" -type l -print -quit | grep -q . \
+  && fail 'active_immutable_symlink_found'
+[[ "$(sha256sum "$candidate_module" | awk '{print $1}')" == "$new_module_sha256" ]] || fail 'candidate_module_identity_mismatch'
+
+active_inventory="$(mktemp "$transfer_root/.active-inventory.XXXXXX")"
+old_inventory="$(mktemp "$transfer_root/.old-inventory.XXXXXX")"
+readonly runtime_cache_root="$active_root/application/python/ishikawa/__pycache__"
+runtime_cache_count=0
+if [[ -e "$runtime_cache_root" || -L "$runtime_cache_root" ]]; then
+  [[ -d "$runtime_cache_root" && ! -L "$runtime_cache_root" ]] || fail 'runtime_cache_root_unsafe'
+  if find "$runtime_cache_root" -mindepth 1 -maxdepth 1 \( ! -type f -o ! -name '*.cpython-312.pyc' \) -print -quit | grep -q .; then
+    fail 'runtime_cache_entry_unsafe'
+  fi
+  while IFS= read -r -d '' cache_file; do
+    cache_name="$(basename -- "$cache_file")"
+    [[ "$cache_name" =~ ^([A-Za-z_][A-Za-z0-9_]*)\.cpython-312\.pyc$ ]] || fail 'runtime_cache_name_invalid'
+    [[ -f "$active_root/application/python/ishikawa/${BASH_REMATCH[1]}.py" ]] || fail 'runtime_cache_source_missing'
+    runtime_cache_count=$((runtime_cache_count + 1))
+  done < <(find "$runtime_cache_root" -mindepth 1 -maxdepth 1 -type f -name '*.cpython-312.pyc' -print0)
+fi
+(cd -- "$active_root" && find application docs scripts systemd -type f \
+  ! -path 'application/python/ishikawa/__pycache__/*.pyc' -printf '%p\n' | sort) >"$active_inventory"
+awk '{print $2}' "$old_manifest" | sort >"$old_inventory"
+cmp -s "$active_inventory" "$old_inventory" || fail 'active_immutable_inventory_mismatch'
+
+promotion_action='promoted_corrected_module'
+if (cd -- "$active_root" && sha256sum --check --strict "$old_manifest" >/dev/null); then
+  [[ "$(sha256sum "$active_module" | awk '{print $1}')" == "$old_module_sha256" ]] || fail 'active_module_identity_mismatch'
+elif (cd -- "$active_root" && sha256sum --check --strict "$new_manifest" >/dev/null); then
+  [[ "$(sha256sum "$active_module" | awk '{print $1}')" == "$new_module_sha256" ]] || fail 'active_module_identity_mismatch'
+  promotion_action='reused_exact_corrected_module'
+else
+  fail 'active_immutable_identity_mismatch'
+fi
+
+temporary_module=''
+backup_module=''
+promotion_complete=false
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  set +e
+  [[ -z "$temporary_module" ]] || rm -f -- "$temporary_module"
+  if [[ "$promotion_complete" != true && -n "$backup_module" && -f "$backup_module" ]]; then
+    mv -- "$backup_module" "$active_module"
+  else
+    [[ -z "$backup_module" ]] || rm -f -- "$backup_module"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [[ "$promotion_action" == promoted_corrected_module ]]; then
+  temporary_module="$(mktemp "$(dirname -- "$active_module")/.ingestion-runtime.XXXXXX")"
+  backup_module="$(mktemp "$(dirname -- "$active_module")/.ingestion-runtime-backup.XXXXXX")"
+  cp -- "$active_module" "$backup_module"
+  chmod 0644 "$backup_module"
+  install -m 0644 -- "$candidate_module" "$temporary_module"
+  mv -- "$temporary_module" "$active_module"
+fi
+[[ "$(sha256sum "$active_module" | awk '{print $1}')" == "$new_module_sha256" ]] || fail 'active_module_post_install_mismatch'
+(cd -- "$active_root" && sha256sum --check --strict "$new_manifest" >/dev/null) || fail 'active_corrected_immutable_mismatch'
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$active_root/application/python" \
+  python3 -B - "$active_root/config/deployment.yaml" "$active_root/config/ingestion_dependencies.yaml" <<'PY' \
+  || fail 'corrected_connection_contract_failed'
+from pathlib import Path
+import sys
+
+from ishikawa.deployment import validate_deployment_profile
+from ishikawa.ingestion_runtime import NativeIngestionConnectionFactory, validate_ingestion_dependencies
+from ishikawa.runtime import ProtectedEnvironmentValue
+from ishikawa.yaml_loader import load_restricted_yaml
+
+deployment = validate_deployment_profile(
+    load_restricted_yaml(Path(sys.argv[1]), label="deployment profile")
+)
+dependencies = validate_ingestion_dependencies(
+    load_restricted_yaml(Path(sys.argv[2]), label="ingestion dependencies")
+)
+observed = []
+factory = NativeIngestionConnectionFactory(
+    deployment.postgresql,
+    dependencies,
+    ProtectedEnvironmentValue(
+        dependencies.database_credential_environment,
+        {dependencies.database_credential_environment: "runtime-probe"},
+    ),
+    lambda **parameters: observed.append(parameters) or object(),
+)
+factory()
+if len(observed) != 1 or observed[0].get("autocommit") is not True:
+    raise SystemExit(1)
+PY
+
+promotion_complete=true
+[[ -z "$backup_module" ]] || rm -f -- "$backup_module"
+readonly immutable_file_count="$(awk 'END {print NR+0}' "$new_manifest")"
+readonly candidate_file_count="$(awk 'END {print NR+0}' "$full_manifest")"
+emit "target_hostname=$actual_hostname;os_id=ubuntu;os_version=$VERSION_ID;architecture=amd64"
+emit "promotion_action=$promotion_action;immutable_files=$immutable_file_count;candidate_files=$candidate_file_count"
+emit "runtime_cache_files=$runtime_cache_count;runtime_cache_classification=generated_cpython312_bytecode"
+emit "module_identity=$new_module_sha256;connection_autocommit=true;atomic_writer_boundary=explicit_transaction"
+emit 'operator_configuration=preserved;corpus=preserved;application_state=preserved;candidate_retained=true'
+emit 'database_changed=false;service_changed=false;container_changed=false;model_contact=false;credential_read=false;port_forwarding_changed=false'
+emit 'ishikawa_runtime_candidate_promotion=pass'

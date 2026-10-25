@@ -1,0 +1,22 @@
+schema_version: 2
+
+measurement:
+  text_search_config: english
+  fused_depth: 3
+  evidence_fields:
+    - chunk_retrieval_text
+    - document_display_name
+    - assigned_class
+    - citation_structural_path
+    - citation_page
+  evidence_order: response_envelope_rank
+
+decision:
+  minimum_supported_numerator: 3
+  minimum_supported_denominator: 5
+  comparison: greater_than_or_equal
+  qualified_status: qualified
+  insufficient_status: insufficient
+  exact_reference_routing: preserved
+  retrieval_ranking: unchanged
+  model_authority: false

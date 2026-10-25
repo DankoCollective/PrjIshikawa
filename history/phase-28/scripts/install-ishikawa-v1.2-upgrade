@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Replace one stopped Ishikawa application tree with the checksum-bound v1.2
+#   application while preserving its operator configuration and runtime data.
+#
+# Mental model:
+#   Verify the host and release archive, install v1.2 into a sibling candidate,
+#   copy only the documented mutable paths, swap directories, install the exact
+#   user units, and roll back the swap if any post-change check fails.
+#
+# Inputs or prerequisites:
+#   An accepted v1.2 archive, the canonical application at
+#   ~/Documents/Ishikawa, and a complete stack stop performed by the operator.
+#
+# Outputs:
+#   v1.2 at ~/Documents/Ishikawa, the prior complete tree at
+#   ~/Documents/Ishikawa-before-v1.2, and one content-free result. Services and
+#   the database remain stopped and no credential or model endpoint is read.
+#
+# Usage:
+#   install-ishikawa-v1.2-upgrade HOST 24.04 ARCHIVE SHA256 RESULT
+
+usage() {
+  printf '%s\n' \
+    'Usage: install-ishikawa-v1.2-upgrade EXPECTED-HOSTNAME EXPECTED-OS-VERSION ARCHIVE SHA256 RESULT'
+}
+
+fail() {
+  local reason="$1"
+  if [[ -n "${result_path:-}" && -n "${working_root:-}" && "$result_path" == "$working_root"/* ]]; then
+    printf 'ishikawa_v1_2_upgrade=blocked;reason=%s\n' "$reason" >>"$result_path" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+[[ "${1:-}" != '--help' && "${1:-}" != '-h' ]] || { usage; exit 0; }
+(( $# == 5 )) || { usage >&2; exit 2; }
+
+readonly expected_hostname="$1"
+readonly expected_os_version="$2"
+readonly archive_path="$3"
+readonly expected_archive_sha256="$4"
+result_path="$5"
+readonly working_root="$(pwd -P)"
+readonly active_root="$HOME/Documents/Ishikawa"
+readonly candidate_root="$HOME/Documents/Ishikawa-v1.2-candidate"
+readonly rollback_root="$HOME/Documents/Ishikawa-before-v1.2"
+readonly user_unit_root="$HOME/.config/systemd/user"
+readonly -a unit_names=(
+  ishikawa-observability-retention.service
+  ishikawa-observability-retention.timer
+  ishikawa-retrieval-api.service
+)
+readonly -a preserved_files=(
+  config/product.yaml
+  config/deployment.yaml
+  config/document_classes.yaml
+  config/document_catalog.yaml
+)
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail 'expected_hostname_invalid'
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail 'expected_os_version_invalid'
+[[ "$archive_path" == "$working_root"/* && -f "$archive_path" && ! -L "$archive_path" ]] || fail 'archive_path_invalid'
+[[ "$expected_archive_sha256" =~ ^[0-9a-f]{64}$ ]] || fail 'archive_digest_invalid'
+[[ "$result_path" == "$working_root"/* && ! -e "$result_path" && ! -L "$result_path" ]] || fail 'result_path_invalid'
+
+for required in awk bash cmp cp curl dpkg find grep hostname install mkdir mktemp mv python3 rm sha256sum sort systemctl tar uname; do
+  command -v "$required" >/dev/null 2>&1 || fail 'required_command_missing'
+done
+
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || fail 'operating_system_mismatch'
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || fail 'hostname_mismatch'
+[[ "$(dpkg --print-architecture)" == amd64 && "$(uname -m)" == x86_64 ]] || fail 'architecture_mismatch'
+actual_archive_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+[[ "$actual_archive_sha256" == "$expected_archive_sha256" ]] || fail 'archive_checksum_mismatch'
+
+readonly extract_root="$(mktemp -d "$working_root/extracted.XXXXXX")"
+candidate_created=false
+active_moved=false
+candidate_moved=false
+upgrade_complete=false
+
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$upgrade_complete" != true ]]; then
+    if [[ "$candidate_moved" == true && -d "$active_root" && ! -e "$candidate_root" ]]; then
+      mv -- "$active_root" "$candidate_root"
+    fi
+    if [[ "$active_moved" == true && -d "$rollback_root" && ! -e "$active_root" ]]; then
+      mv -- "$rollback_root" "$active_root"
+      for unit_name in "${unit_names[@]}"; do
+        install -m 0644 -- "$active_root/systemd/$unit_name" "$user_unit_root/$unit_name"
+      done
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
+    if [[ "$candidate_created" == true && -d "$candidate_root" ]]; then
+      rm -rf -- "$candidate_root"
+    fi
+  fi
+  if [[ "$extract_root" == "$working_root"/extracted.* && -d "$extract_root" ]]; then
+    rm -rf -- "$extract_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+mkdir -p -- "$extract_root/release"
+tar -xzf "$archive_path" -C "$extract_root/release" || fail 'archive_extraction_failed'
+readonly release_root="$extract_root/release/ishikawa-v1.2-deployment-package"
+readonly application_package="$release_root/application"
+readonly application_payload="$application_package/payload"
+[[ -d "$release_root" && ! -L "$release_root" ]] || fail 'release_root_invalid'
+bash "$release_root/verify-ishikawa-v1.2" >/dev/null || fail 'release_verification_failed'
+
+[[ -d "$active_root" && ! -L "$active_root" ]] || fail 'active_installation_missing_or_unsafe'
+for required_path in \
+  application/python/ishikawa/__init__.py \
+  application/web/package.json \
+  config/product.yaml \
+  config/deployment.yaml \
+  config/document_classes.yaml \
+  config/document_catalog.yaml \
+  config/ingestion \
+  corpus \
+  state \
+  scripts/ishikawa-retrieval-api \
+  scripts/ishikawa-stack \
+  systemd/ishikawa-retrieval-api.service; do
+  [[ -e "$active_root/$required_path" && ! -L "$active_root/$required_path" ]] || fail 'active_installation_contract_failed'
+done
+
+# The application and all three managed runtime layers must be stopped before
+# files or user units can change. A successful ishikawa-stack stop removes the
+# owner state file only after every layer has stopped.
+[[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] || fail 'postgresql_running'
+[[ "$(systemctl --user is-active ishikawa-retrieval-api.service 2>/dev/null || true)" != active ]] || fail 'retrieval_running'
+[[ "$(systemctl --user is-active ishikawa-observability-retention.timer 2>/dev/null || true)" != active ]] || fail 'retention_timer_running'
+[[ ! -e "$active_root/state/run/stack.state" && ! -L "$active_root/state/run/stack.state" ]] || fail 'managed_stack_state_present'
+
+for unit_name in "${unit_names[@]}"; do
+  [[ -f "$active_root/systemd/$unit_name" && ! -L "$active_root/systemd/$unit_name" ]] || fail 'active_unit_missing'
+  [[ -f "$user_unit_root/$unit_name" && ! -L "$user_unit_root/$unit_name" ]] || fail 'installed_unit_missing'
+  cmp -s "$active_root/systemd/$unit_name" "$user_unit_root/$unit_name" || fail 'installed_unit_not_owned_by_active_application'
+done
+
+for preserved_root in "$active_root/config/ingestion" "$active_root/corpus" "$active_root/state"; do
+  if find "$preserved_root" ! -type d ! -type f -print -quit | grep -q .; then
+    fail 'preserved_tree_contains_unsafe_object'
+  fi
+done
+for preserved_file in "${preserved_files[@]}"; do
+  [[ -f "$active_root/$preserved_file" && ! -L "$active_root/$preserved_file" ]] || fail 'preserved_file_unsafe'
+done
+
+immutable_tree_matches_release() {
+  local installed_root="$1"
+  local relative_path
+  while IFS= read -r relative_path; do
+    case "$relative_path" in
+      config/product.yaml|config/deployment.yaml|config/document_classes.yaml|config/document_catalog.yaml)
+        continue
+        ;;
+    esac
+    [[ -f "$installed_root/$relative_path" && ! -L "$installed_root/$relative_path" ]] || return 1
+    cmp -s "$application_payload/$relative_path" "$installed_root/$relative_path" || return 1
+  done < <(cd -- "$application_payload" && find . -type f -printf '%P\n' | sort)
+}
+
+upgrade_action='promoted_new'
+if [[ -e "$candidate_root" || -L "$candidate_root" ]]; then
+  fail 'candidate_path_exists'
+fi
+if [[ -e "$rollback_root" || -L "$rollback_root" ]]; then
+  if immutable_tree_matches_release "$active_root" \
+    && [[ -d "$rollback_root" && ! -L "$rollback_root" ]]; then
+    upgrade_action='reused_exact'
+  else
+    fail 'rollback_path_exists'
+  fi
+fi
+
+if [[ "$upgrade_action" == promoted_new ]]; then
+  bash "$application_package/install-ishikawa" --install-root "$candidate_root" >/dev/null || fail 'candidate_installation_failed'
+  candidate_created=true
+
+  cp -a -- "$active_root/config/ingestion/." "$candidate_root/config/ingestion/" || fail 'ingestion_configuration_preservation_failed'
+  cp -a -- "$active_root/corpus/." "$candidate_root/corpus/" || fail 'corpus_preservation_failed'
+  cp -a -- "$active_root/state/." "$candidate_root/state/" || fail 'state_preservation_failed'
+  for preserved_file in "${preserved_files[@]}"; do
+    cp -a -- "$active_root/$preserved_file" "$candidate_root/$preserved_file" || fail 'operator_configuration_preservation_failed'
+  done
+
+  immutable_tree_matches_release "$candidate_root" || fail 'candidate_release_identity_failed'
+  PYTHONDONTWRITEBYTECODE=1 "$candidate_root/scripts/ishikawa-retrieval-api" --check-config >/dev/null || fail 'candidate_retrieval_configuration_failed'
+  PYTHONDONTWRITEBYTECODE=1 "$candidate_root/scripts/ishikawa-observability-retention" --check-config >/dev/null || fail 'candidate_retention_configuration_failed'
+  "$candidate_root/scripts/ishikawa-stack" --help >/dev/null || fail 'candidate_stack_command_failed'
+
+  mv -- "$active_root" "$rollback_root" || fail 'rollback_tree_creation_failed'
+  active_moved=true
+  mv -- "$candidate_root" "$active_root" || fail 'candidate_activation_failed'
+  candidate_moved=true
+  candidate_created=false
+
+  mkdir -p -- "$user_unit_root"
+  [[ -d "$user_unit_root" && ! -L "$user_unit_root" ]] || fail 'user_unit_root_unsafe'
+  for unit_name in "${unit_names[@]}"; do
+    install -m 0644 -- "$active_root/systemd/$unit_name" "$user_unit_root/$unit_name" || fail 'unit_installation_failed'
+  done
+  systemctl --user daemon-reload >/dev/null 2>&1 || fail 'user_unit_reload_failed'
+fi
+
+immutable_tree_matches_release "$active_root" || fail 'active_release_identity_failed'
+[[ -d "$rollback_root" && ! -L "$rollback_root" ]] || fail 'rollback_tree_missing'
+for unit_name in "${unit_names[@]}"; do
+  cmp -s "$active_root/systemd/$unit_name" "$user_unit_root/$unit_name" || fail 'installed_unit_verification_failed'
+done
+[[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] || fail 'postgresql_started_unexpectedly'
+[[ "$(systemctl --user is-active ishikawa-retrieval-api.service 2>/dev/null || true)" != active ]] || fail 'retrieval_started_unexpectedly'
+[[ "$(systemctl --user is-enabled ishikawa-retrieval-api.service 2>/dev/null || true)" != enabled ]] || fail 'retrieval_boot_enabled'
+[[ "$(systemctl --user is-enabled ishikawa-observability-retention.timer 2>/dev/null || true)" != enabled ]] || fail 'retention_boot_enabled'
+[[ ! -e "$active_root/state/run/stack.state" && ! -L "$active_root/state/run/stack.state" ]] || fail 'managed_stack_state_reappeared'
+
+source_document_count="$(find "$active_root/corpus" -type f | awk 'END {print NR+0}')"
+state_file_count="$(find "$active_root/state" -type f | awk 'END {print NR+0}')"
+ingestion_record_count="$(find "$active_root/config/ingestion" -type f | awk 'END {print NR+0}')"
+upgrade_complete=true
+{
+  printf 'target_hostname=%s;os_id=ubuntu;os_version=%s;architecture=amd64\n' "$actual_hostname" "$expected_os_version"
+  printf 'release_version=v1.2;archive_sha256=%s;package_checksums=pass\n' "$actual_archive_sha256"
+  printf 'upgrade_action=%s;active_root=HOME/Documents/Ishikawa;rollback_root=HOME/Documents/Ishikawa-before-v1.2\n' "$upgrade_action"
+  printf 'operator_configuration=preserved;corpus=preserved;state=preserved;source_documents=%s;state_files=%s;ingestion_records=%s\n' \
+    "$source_document_count" "$state_file_count" "$ingestion_record_count"
+  printf 'schema_version=4;database_changed=false;services_started=false;boot_enabled=false\n'
+  printf 'user_units=3;unit_identity=exact;model_contact=false;credential_read=false;port_forwarding_changed=false\n'
+  printf 'ishikawa_v1_2_upgrade=pass\n'
+} >"$result_path"

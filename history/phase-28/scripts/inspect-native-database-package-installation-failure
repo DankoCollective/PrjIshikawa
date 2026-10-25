@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Read-only inspection of a failed native database package installation. The
+# helper reports only bounded package, apt, service, and cluster facts. It
+# performs no package, database, service, or configuration mutation.
+
+emit() {
+  printf '%s\n' "$1"
+}
+
+block() {
+  emit "native_database_package_installation_failure_inspection=blocked;reason=$1"
+  exit 1
+}
+
+unexpected_failure() {
+  local status="$1" line="$2"
+  trap - ERR
+  set +e
+  emit "native_database_package_installation_failure_inspection=blocked;reason=unexpected_failure;exit_code=$status;line=$line"
+  exit "$status"
+}
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+if (( $# != 4 )); then
+  block invalid_argument_count
+fi
+
+expected_hostname="$1"
+expected_os_version="$2"
+bundle_name="$3"
+expected_bundle_sha256="$4"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] \
+  || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] \
+  || block invalid_expected_os_version
+[[ "$bundle_name" =~ ^[A-Za-z0-9._+-]+\.tar\.gz$ && "$bundle_name" != */* ]] \
+  || block invalid_bundle_name
+[[ "$expected_bundle_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || block invalid_bundle_sha256
+(( EUID == 0 )) || block root_authority_required
+
+for required in apt-get awk bash cat cut dpkg dpkg-deb dpkg-query find grep hostname mkdir mktemp rm sed sha256sum sort ss systemctl tail tar tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] \
+  || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+
+bundle_path="$PWD/$bundle_name"
+[[ -f "$bundle_path" && ! -L "$bundle_path" && -r "$bundle_path" ]] \
+  || block bundle_missing_or_unsafe
+actual_bundle_sha256="$(sha256sum "$bundle_path" | awk '{print $1}')"
+[[ "$actual_bundle_sha256" == "$expected_bundle_sha256" ]] \
+  || block bundle_checksum_mismatch
+
+work_root="$(mktemp -d /tmp/native-database-installation-inspection.XXXXXX)"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM ERR
+  if [[ "$work_root" == /tmp/native-database-installation-inspection.* && -d "$work_root" ]]; then
+    rm -rf -- "$work_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+sanitize_line() {
+  printf '%s' "$1" \
+    | tr '\t ' '__' \
+    | sed -E 's/[^A-Za-z0-9_.:+@\/~,-]/_/g; s/_+/_/g' \
+    | cut -c1-512
+}
+
+emit_diagnostic_lines() {
+  local prefix="$1" source="$2" limit="$3" count=0 line
+  [[ -f "$source" ]] || return 0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    count=$((count + 1))
+    emit "${prefix}_${count}=$(sanitize_line "$line")"
+    (( count >= limit )) && break
+  done < <(grep -Ei 'error|failed|failure|dependency|unable|unmet|held|sub-process|policy-rc|invoke-rc|dpkg:|start-date|end-date|commandline|install:' "$source" 2>/dev/null | tail -n "$limit" || true)
+  emit "${prefix}_count=$count"
+}
+
+emit 'purpose=inspect_failed_native_database_package_installation_without_mutation'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit "bundle_sha256=$actual_bundle_sha256"
+emit 'authorized_actions=read_exact_package_state_read_bounded_package_manager_diagnostics_simulate_local_package_plan_read_service_and_cluster_state_remove_temporary_files'
+emit 'non_actions=no_network_download_no_package_install_no_package_repair_no_database_initialization_no_service_or_configuration_change_no_secret_or_content_read'
+
+if tar -tzf "$bundle_path" \
+    | awk '$0 ~ /^\// || $0 ~ /(^|\/)\.\.($|\/)/ {bad=1} END {exit bad ? 0 : 1}'; then
+  block unsafe_archive_path
+fi
+extract_root="$work_root/extracted"
+mkdir -p -- "$extract_root"
+tar -xzf "$bundle_path" -C "$extract_root"
+mapfile -t roots < <(find "$extract_root" -mindepth 1 -maxdepth 1 -type d -print | sort)
+(( ${#roots[@]} == 1 )) || block invalid_bundle_root_count
+root="${roots[0]}"
+[[ -f "$root/SHA256SUMS" && ! -L "$root/SHA256SUMS" ]] || block internal_checksums_missing
+(cd "$root" && sha256sum -c SHA256SUMS) >"$work_root/checksums.out" 2>"$work_root/checksums.err" \
+  || block internal_checksum_failure
+
+expected_packages="$work_root/expected-packages.tsv"
+printf '%s\n' \
+  $'libjson-perl\t4.10000-1\tall' \
+  $'libllvm19\t1:19.1.1-1ubuntu1~24.04.2\tamd64' \
+  $'libpq5\t16.15-0ubuntu0.24.04.1\tamd64' \
+  $'postgresql-16\t16.15-1.pgdg24.04+2\tamd64' \
+  $'postgresql-16-pgvector\t0.8.7-1.pgdg24.04+1\tamd64' \
+  $'postgresql-client-16\t16.15-0ubuntu0.24.04.1\tamd64' \
+  $'postgresql-client-common\t257build1.1\tall' \
+  $'postgresql-common\t257build1.1\tall' \
+  $'python3-psycopg\t3.1.17-2\tall' \
+  | sort >"$expected_packages"
+
+exact_installed_count=0
+absent_count=0
+nonconfigured_count=0
+while IFS=$'\t' read -r package_name expected_version expected_architecture; do
+  installed="$(dpkg-query -W -f='${db:Status-Abbrev}\t${Version}\t${Architecture}' "$package_name" 2>/dev/null || true)"
+  key="$(printf '%s' "$package_name" | tr '-' '_')"
+  if [[ -z "$installed" ]]; then
+    emit "package_${key}=absent;expected_version=$expected_version;expected_architecture=$expected_architecture"
+    absent_count=$((absent_count + 1))
+    continue
+  fi
+  IFS=$'\t' read -r installed_status installed_version installed_architecture <<<"$installed"
+  installed_status="$(printf '%s' "$installed_status" | tr -d ' ')"
+  emit "package_${key}=$installed_status;version=$installed_version;architecture=$installed_architecture"
+  if [[ "$installed_status" == ii && "$installed_version" == "$expected_version" \
+      && "$installed_architecture" == "$expected_architecture" ]]; then
+    exact_installed_count=$((exact_installed_count + 1))
+  elif [[ "$installed_status" != ii ]]; then
+    nonconfigured_count=$((nonconfigured_count + 1))
+  fi
+done <"$expected_packages"
+emit "exact_installed_count=$exact_installed_count;absent_count=$absent_count;nonconfigured_count=$nonconfigured_count"
+
+dpkg_audit="$work_root/dpkg-audit.txt"
+dpkg --audit >"$dpkg_audit" 2>&1 || true
+emit "dpkg_audit_lines=$(awk 'NF {count++} END {print count+0}' "$dpkg_audit");dpkg_audit_sha256=$(sha256sum "$dpkg_audit" | awk '{print $1}')"
+emit_diagnostic_lines dpkg_audit_diagnostic "$dpkg_audit" 12
+
+term_log="$work_root/term-log-tail.txt"
+history_log="$work_root/history-log-tail.txt"
+if [[ -r /var/log/apt/term.log ]]; then
+  tail -n 300 /var/log/apt/term.log >"$term_log"
+else
+  : >"$term_log"
+fi
+if [[ -r /var/log/apt/history.log ]]; then
+  tail -n 120 /var/log/apt/history.log >"$history_log"
+else
+  : >"$history_log"
+fi
+emit "apt_term_tail_sha256=$(sha256sum "$term_log" | awk '{print $1}');apt_history_tail_sha256=$(sha256sum "$history_log" | awk '{print $1}')"
+emit_diagnostic_lines apt_term_diagnostic "$term_log" 20
+emit_diagnostic_lines apt_history_diagnostic "$history_log" 12
+
+support_packages=(
+  "$root/packages/libjson-perl_4.10000-1_all.deb"
+  "$root/packages/libpq5_16.15-0ubuntu0.24.04.1_amd64.deb"
+  "$root/packages/postgresql-client-16_16.15-0ubuntu0.24.04.1_amd64.deb"
+  "$root/packages/postgresql-client-common_257build1.1_all.deb"
+  "$root/packages/postgresql-common_257build1.1_all.deb"
+  "$root/packages/python3-psycopg_3.1.17-2_all.deb"
+)
+simulation_stdout="$work_root/support-simulation.stdout"
+simulation_stderr="$work_root/support-simulation.stderr"
+if apt-get -s --no-install-recommends --no-download \
+    -o Debug::NoLocking=1 \
+    -o Dir::Etc::sourcelist=/dev/null \
+    -o Dir::Etc::sourceparts=/dev/null \
+    -o APT::Get::List-Cleanup=0 \
+    -o Acquire::Languages=none \
+    install "${support_packages[@]}" \
+    >"$simulation_stdout" 2>"$simulation_stderr"; then
+  simulation_exit_code=0
+else
+  simulation_exit_code=$?
+fi
+simulation_install_count="$(awk '/^Inst / {print $2}' "$simulation_stdout" | sort -u | wc -l | tr -d ' ')"
+simulation_remove_count="$(grep -Ec '^Remv ' "$simulation_stdout" || true)"
+emit "support_simulation_exit_code=$simulation_exit_code;install_count=$simulation_install_count;remove_count=$simulation_remove_count"
+emit "support_simulation_stdout_sha256=$(sha256sum "$simulation_stdout" | awk '{print $1}');support_simulation_stderr_sha256=$(sha256sum "$simulation_stderr" | awk '{print $1}')"
+simulation_combined="$work_root/support-simulation-combined.txt"
+{ cat "$simulation_stdout"; cat "$simulation_stderr"; } >"$simulation_combined"
+emit_diagnostic_lines support_simulation_diagnostic "$simulation_combined" 12
+
+apt_check_stdout="$work_root/apt-check.stdout"
+apt_check_stderr="$work_root/apt-check.stderr"
+if apt-get -s check \
+    -o Debug::NoLocking=1 \
+    -o Dir::Etc::sourcelist=/dev/null \
+    -o Dir::Etc::sourceparts=/dev/null \
+    -o APT::Get::List-Cleanup=0 \
+    >"$apt_check_stdout" 2>"$apt_check_stderr"; then
+  apt_check_exit_code=0
+else
+  apt_check_exit_code=$?
+fi
+emit "apt_check_exit_code=$apt_check_exit_code;stdout_sha256=$(sha256sum "$apt_check_stdout" | awk '{print $1}');stderr_sha256=$(sha256sum "$apt_check_stderr" | awk '{print $1}')"
+apt_check_combined="$work_root/apt-check-combined.txt"
+{ cat "$apt_check_stdout"; cat "$apt_check_stderr"; } >"$apt_check_combined"
+emit_diagnostic_lines apt_check_diagnostic "$apt_check_combined" 12
+
+policy_state=absent
+[[ -e /usr/sbin/policy-rc.d ]] && policy_state=present
+service_active="$(systemctl is-active postgresql.service 2>/dev/null || true)"
+service_enabled="$(systemctl is-enabled postgresql.service 2>/dev/null || true)"
+if command -v pg_lsclusters >/dev/null 2>&1; then
+  cluster_count="$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+else
+  cluster_count=0
+fi
+port_state=free
+ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q . && port_state=in_use
+cluster_policy=unavailable
+if command -v pg_conftool >/dev/null 2>&1 && [[ -f /etc/postgresql-common/createcluster.conf ]]; then
+  cluster_policy="$(pg_conftool /etc/postgresql-common/createcluster.conf show -bs create_main_cluster 2>/dev/null || true)"
+  [[ -n "$cluster_policy" ]] || cluster_policy=unset
+fi
+emit "service_start_policy=$policy_state;postgresql_service_active=$service_active;postgresql_service_enabled=$service_enabled"
+emit "automatic_cluster_creation=$cluster_policy;postgresql_clusters=$cluster_count;postgresql_port_5432=$port_state"
+emit 'target_mutation=false;network_download=false'
+emit 'native_database_package_installation_failure_inspection=pass'

@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Read-only preflight for one checksum-bound native database package bundle.
+# The caller stages this helper and bundle in private temporary storage. This
+# helper verifies and extracts only there, simulates installation without
+# downloading packages, emits bounded facts, and removes extracted state.
+
+emit() {
+  printf '%s\n' "$1"
+}
+
+block() {
+  emit "native_database_compatible_installation_preflight=blocked;reason=$1"
+  exit 1
+}
+
+unexpected_failure() {
+  local status="$1" line="$2"
+  trap - ERR
+  set +e
+  emit "native_database_compatible_installation_preflight=blocked;reason=unexpected_failure;exit_code=$status;line=$line"
+  exit "$status"
+}
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+if (( $# != 4 )); then
+  block invalid_argument_count
+fi
+
+expected_hostname="$1"
+expected_os_version="$2"
+bundle_name="$3"
+expected_bundle_sha256="$4"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] \
+  || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] \
+  || block invalid_expected_os_version
+[[ "$bundle_name" =~ ^[A-Za-z0-9._+-]+\.tar\.gz$ && "$bundle_name" != */* ]] \
+  || block invalid_bundle_name
+[[ "$expected_bundle_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || block invalid_bundle_sha256
+
+for required in apt-get awk bash cmp cut df dpkg dpkg-deb dpkg-query find grep gzip hostname mkdir mktemp rm sed sha256sum sort ss tar tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] \
+  || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+
+bundle_path="$PWD/$bundle_name"
+[[ -f "$bundle_path" && ! -L "$bundle_path" && -r "$bundle_path" ]] \
+  || block bundle_missing_or_unsafe
+actual_bundle_sha256="$(sha256sum "$bundle_path" | awk '{print $1}')"
+[[ "$actual_bundle_sha256" == "$expected_bundle_sha256" ]] \
+  || block bundle_checksum_mismatch
+
+work_root="$(mktemp -d /tmp/native-database-compatible-preflight.XXXXXX)"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM ERR
+  if [[ "$work_root" == /tmp/native-database-compatible-preflight.* && -d "$work_root" ]]; then
+    rm -rf -- "$work_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+emit 'purpose=preflight_compatible_native_database_installation_without_mutation'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit "bundle_sha256=$actual_bundle_sha256"
+emit 'authorized_actions=read_host_and_package_state_extract_verified_bundle_to_temporary_storage_simulate_install_without_download_remove_temporary_storage'
+emit 'non_actions=no_network_download_no_package_install_no_database_initialization_no_service_or_configuration_change_no_secret_or_content_read'
+
+if tar -tzf "$bundle_path" \
+    | awk '$0 ~ /^\// || $0 ~ /(^|\/)\.\.($|\/)/ {bad=1} END {exit bad ? 0 : 1}'; then
+  block unsafe_archive_path
+fi
+archive_member_count="$(tar -tzf "$bundle_path" | wc -l | tr -d ' ')"
+
+extract_root="$work_root/extracted"
+mkdir -p -- "$extract_root"
+tar -xzf "$bundle_path" -C "$extract_root"
+mapfile -t roots < <(find "$extract_root" -mindepth 1 -maxdepth 1 -type d -print | sort)
+(( ${#roots[@]} == 1 )) || block invalid_bundle_root_count
+root="${roots[0]}"
+
+for required_file in capture_summary.env package_register.tsv license_manifest.tsv advisories/review.tsv SHA256SUMS; do
+  [[ -f "$root/$required_file" && ! -L "$root/$required_file" ]] \
+    || block "missing_$required_file"
+done
+(cd "$root" && sha256sum -c SHA256SUMS) >"$work_root/checksums.out" 2>"$work_root/checksums.err" \
+  || block internal_checksum_failure
+internal_checksum_count="$(wc -l <"$root/SHA256SUMS" | tr -d ' ')"
+
+for expected_summary in \
+  'schema=native-postgresql-compatible-capture/v1' \
+  'target_os=ubuntu24.04' \
+  'target_architecture=amd64' \
+  'captured_package_count=9' \
+  'postgresql_version=16.15-1.pgdg24.04+2' \
+  'pgvector_version=0.8.7-1.pgdg24.04+1' \
+  'llvm_version=1:19.1.1-1ubuntu1~24.04.2' \
+  'pre_download_advisory_gate=pass' \
+  'advisory_reviewed_source_count=7' \
+  'install_authorized=false' \
+  'target_contact=false' \
+  'package_install=false' \
+  'database_initialization=false' \
+  'service_mutation=false'; do
+  grep -Fxq "$expected_summary" "$root/capture_summary.env" \
+    || block capture_summary_mismatch
+done
+
+mapfile -t package_files < <(find "$root/packages" -maxdepth 1 -type f -name '*.deb' -print | sort)
+(( ${#package_files[@]} == 9 )) || block package_count_mismatch
+
+expected_packages="$work_root/expected-packages.tsv"
+actual_packages="$work_root/actual-packages.tsv"
+expected_names="$work_root/expected-package-names.txt"
+required_install_names="$work_root/required-install-names.txt"
+actual_plan_names="$work_root/actual-plan-names.txt"
+printf '%s\n' \
+  $'libjson-perl\t4.10000-1\tall' \
+  $'libllvm19\t1:19.1.1-1ubuntu1~24.04.2\tamd64' \
+  $'libpq5\t16.15-0ubuntu0.24.04.1\tamd64' \
+  $'postgresql-16\t16.15-1.pgdg24.04+2\tamd64' \
+  $'postgresql-16-pgvector\t0.8.7-1.pgdg24.04+1\tamd64' \
+  $'postgresql-client-16\t16.15-0ubuntu0.24.04.1\tamd64' \
+  $'postgresql-client-common\t257build1.1\tall' \
+  $'postgresql-common\t257build1.1\tall' \
+  $'python3-psycopg\t3.1.17-2\tall' \
+  | sort >"$expected_packages"
+: >"$actual_packages"
+for package_file in "${package_files[@]}"; do
+  printf '%s\t%s\t%s\n' \
+    "$(dpkg-deb -f "$package_file" Package)" \
+    "$(dpkg-deb -f "$package_file" Version)" \
+    "$(dpkg-deb -f "$package_file" Architecture)" \
+    >>"$actual_packages"
+done
+sort -o "$actual_packages" "$actual_packages"
+cmp -s "$expected_packages" "$actual_packages" || block package_identity_mismatch
+cut -f1 "$expected_packages" >"$expected_names"
+grep -Fvx 'libllvm19' "$expected_names" >"$required_install_names"
+
+server_file="$root/packages/postgresql-16_16.15-1.pgdg24.04+2_amd64.deb"
+vector_file="$root/packages/postgresql-16-pgvector_0.8.7-1.pgdg24.04+1_amd64.deb"
+[[ "$(dpkg-deb -f "$server_file" Provides)" == *'postgresql-16-jit-llvm (= 19)'* \
+    && "$(dpkg-deb -f "$server_file" Depends)" == *'libllvm19'* ]] \
+  || block postgresql_jit_contract_mismatch
+[[ "$(dpkg-deb -f "$vector_file" Breaks)" == *'postgresql-16-jit-llvm (<< 19)'* \
+    && "$(dpkg-deb -f "$vector_file" Depends)" == *'postgresql-16'* ]] \
+  || block pgvector_jit_contract_mismatch
+
+register_rows="$(awk -F '\t' 'NR > 1 {count++} END {print count+0}' "$root/package_register.tsv")"
+register_hash_mismatches="$(awk -F '\t' 'NR > 1 && $7 != $8 {count++} END {print count+0}' "$root/package_register.tsv")"
+old_server_rows="$(awk -F '\t' 'NR > 1 && $2 == "postgresql-16" && $3 == "16.15-0ubuntu0.24.04.1" {count++} END {print count+0}' "$root/package_register.tsv")"
+new_server_rows="$(awk -F '\t' 'NR > 1 && $2 == "postgresql-16" && $3 == "16.15-1.pgdg24.04+2" {count++} END {print count+0}' "$root/package_register.tsv")"
+llvm19_rows="$(awk -F '\t' 'NR > 1 && $2 == "libllvm19" && $3 == "1:19.1.1-1ubuntu1~24.04.2" {count++} END {print count+0}' "$root/package_register.tsv")"
+llvm17_rows="$(awk -F '\t' 'NR > 1 && $2 == "libllvm17t64" {count++} END {print count+0}' "$root/package_register.tsv")"
+[[ "$register_rows" == 9 && "$register_hash_mismatches" == 0 \
+    && "$old_server_rows" == 0 && "$new_server_rows" == 1 \
+    && "$llvm19_rows" == 1 && "$llvm17_rows" == 0 ]] \
+  || block package_register_mismatch
+
+license_rows="$(awk -F '\t' 'NR > 1 {count++} END {print count+0}' "$root/license_manifest.tsv")"
+missing_license_rows="$(awk -F '\t' 'NR > 1 && $3 != "present" {count++} END {print count+0}' "$root/license_manifest.tsv")"
+advisory_rows="$(awk -F '\t' 'NR > 1 {count++} END {print count+0}' "$root/advisories/review.tsv")"
+unaccepted_advisory_rows="$(awk -F '\t' 'NR > 1 && $5 !~ /^accepted/ {count++} END {print count+0}' "$root/advisories/review.tsv")"
+[[ "$license_rows" == 9 && "$missing_license_rows" == 0 \
+    && "$advisory_rows" == 7 && "$unaccepted_advisory_rows" == 0 ]] \
+  || block review_manifest_mismatch
+
+llvm_state="$(dpkg-query -W -f='${db:Status-Abbrev}\t${Version}' libllvm19 2>/dev/null || true)"
+IFS=$'\t' read -r llvm_status llvm_version <<<"$llvm_state"
+[[ "$llvm_status" == ii* && "$llvm_version" == '1:19.1.1-1ubuntu1~24.04.2' ]] \
+  || block libllvm19_installed_state_mismatch
+
+unexpected_installed_count=0
+while IFS= read -r package_name; do
+  status="$(dpkg-query -W -f='${db:Status-Abbrev}' "$package_name" 2>/dev/null || true)"
+  if [[ "$status" == ii* ]]; then
+    unexpected_installed_count=$((unexpected_installed_count + 1))
+  fi
+done <"$required_install_names"
+(( unexpected_installed_count == 0 )) || block selected_package_state_drift
+
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then
+  block postgresql_port_in_use
+fi
+if command -v systemctl >/dev/null 2>&1 && [[ "$(systemctl is-active postgresql 2>/dev/null || true)" == active ]]; then
+  block postgresql_service_active
+fi
+if command -v pg_lsclusters >/dev/null 2>&1; then
+  cluster_count="$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+  (( cluster_count == 0 )) || block postgresql_cluster_state_drift
+else
+  cluster_count=0
+fi
+
+available_var_kib="$(df -Pk /var | awk 'NR == 2 {print $4}')"
+[[ "$available_var_kib" =~ ^[0-9]+$ ]] || block invalid_var_capacity
+(( available_var_kib >= 2097152 )) || block insufficient_var_capacity
+
+simulation_stdout="$work_root/apt-simulation.stdout"
+simulation_stderr="$work_root/apt-simulation.stderr"
+if apt-get -s --no-install-recommends \
+    -o Debug::NoLocking=1 install "${package_files[@]}" \
+    >"$simulation_stdout" 2>"$simulation_stderr"; then
+  simulation_exit_code=0
+else
+  simulation_exit_code=$?
+fi
+if (( simulation_exit_code != 0 )); then
+  simulation_diagnostic=unclassified
+  if grep -Eiq 'permission denied|could not open file' "$simulation_stdout" "$simulation_stderr"; then
+    simulation_diagnostic=temporary_package_access_denied
+  elif grep -Eiq 'wrong architecture|not supported on this architecture' "$simulation_stdout" "$simulation_stderr"; then
+    simulation_diagnostic=architecture_rejected
+  elif grep -Eiq 'unmet dependencies|held broken packages|dependency problems' "$simulation_stdout" "$simulation_stderr"; then
+    simulation_diagnostic=dependency_resolution_failed
+  elif grep -Eiq 'unsupported file|option .* not understood' "$simulation_stdout" "$simulation_stderr"; then
+    simulation_diagnostic=argument_rejected
+  elif grep -Eiq 'no such file|not found' "$simulation_stdout" "$simulation_stderr"; then
+    simulation_diagnostic=required_input_missing
+  fi
+  emit "apt_simulation_exit_code=$simulation_exit_code;diagnostic=$simulation_diagnostic;stdout_sha256=$(sha256sum "$simulation_stdout" | awk '{print $1}');stderr_sha256=$(sha256sum "$simulation_stderr" | awk '{print $1}')"
+  block apt_simulation_failed
+fi
+awk '/^Inst / {print $2}' "$simulation_stdout" | sort -u >"$actual_plan_names"
+simulation_install_count="$(wc -l <"$actual_plan_names" | tr -d ' ')"
+simulation_remove_count="$(grep -Ec '^Remv ' "$simulation_stdout" || true)"
+[[ "$simulation_remove_count" == 0 ]] || block apt_simulation_removal_detected
+grep -Fvx -f "$expected_names" "$actual_plan_names" | grep -q . \
+  && block apt_simulation_unexpected_package
+while IFS= read -r required_name; do
+  grep -Fxq "$required_name" "$actual_plan_names" \
+    || block apt_simulation_required_package_missing
+done <"$required_install_names"
+[[ "$simulation_install_count" == 8 || "$simulation_install_count" == 9 ]] \
+  || block apt_simulation_package_count_mismatch
+
+package_set="$(tr '\n' ',' <"$expected_names" | sed 's/,$//')"
+emit "archive_member_count=$archive_member_count;internal_checksum_count=$internal_checksum_count"
+emit "package_count=9;package_set=$package_set"
+emit 'postgresql_version=16.15-1.pgdg24.04+2;postgresql_jit_virtual_version=19'
+emit 'pgvector_version=0.8.7-1.pgdg24.04+1;pgvector_architecture=amd64'
+emit 'libllvm19_version=1:19.1.1-1ubuntu1~24.04.2;libllvm19_preexisting=exact'
+emit "license_rows=$license_rows;missing_license_rows=$missing_license_rows;advisory_rows=$advisory_rows"
+emit "pending_packages_already_installed=$unexpected_installed_count;postgresql_clusters=$cluster_count;postgresql_port_5432=free"
+emit "apt_simulation_install_count=$simulation_install_count;apt_simulation_remove_count=$simulation_remove_count;network_download=disabled"
+emit "available_var_kib=$available_var_kib"
+emit 'native_database_compatible_installation_preflight=pass'

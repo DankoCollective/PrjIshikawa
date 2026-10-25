@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Install the complete Ishikawa database schema into one clean PostgreSQL
+#   database from the canonical final schema packaged beside this command.
+#
+# Mental model:
+#   Validate operator-supplied PostgreSQL identifiers, verify every packaged
+#   file, compute the final schema identity, and ask psql to create the entire
+#   empty schema in one transaction. This is a fresh installer, not an upgrader.
+#
+# Inputs or prerequisites:
+#   PostgreSQL 16 with pgvector already available, an empty target database,
+#   three existing roles, psql access with authority to create owned schemas,
+#   and package files whose SHA256SUMS entries still verify.
+#
+# Outputs:
+#   The final empty Ishikawa schema at version 5 and a content-free pass or
+#   blocked marker. It never accepts a password or secret as an argument.
+#
+# Usage:
+#   bash ./install-schema --database NAME --owner-role NAME \
+#     --ingest-role NAME --retrieval-role NAME
+
+usage() {
+  sed -n '3,25p' "${BASH_SOURCE[0]}"
+  printf '%s\n' \
+    'Options:' \
+    '  --database NAME        Existing empty target database.' \
+    '  --owner-role NAME      Existing schema-owner role.' \
+    '  --ingest-role NAME     Existing ingestion role.' \
+    '  --retrieval-role NAME  Existing read-only retrieval role.' \
+    '  --help                 Show this help.'
+}
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCHEMA_PATH="$SCRIPT_DIR/schema.sql"
+readonly CHECKSUM_PATH="$SCRIPT_DIR/SHA256SUMS"
+
+database=''
+owner_role=''
+ingest_role=''
+retrieval_role=''
+while (( $# > 0 )); do
+  case "$1" in
+    --database) database="${2:-}"; shift 2 ;;
+    --owner-role) owner_role="${2:-}"; shift 2 ;;
+    --ingest-role) ingest_role="${2:-}"; shift 2 ;;
+    --retrieval-role) retrieval_role="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) printf 'ishikawa_schema_install=blocked;reason=argument_invalid\n' >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+for required in psql sha256sum awk; do
+  command -v "$required" >/dev/null 2>&1 || {
+    printf 'ishikawa_schema_install=blocked;reason=command_missing\n' >&2
+    exit 2
+  }
+done
+for required_file in "$SCHEMA_PATH" "$CHECKSUM_PATH"; do
+  [[ -f "$required_file" && ! -L "$required_file" && -r "$required_file" ]] || {
+    printf 'ishikawa_schema_install=blocked;reason=package_file_unsafe\n' >&2
+    exit 2
+  }
+done
+
+valid_identifier() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_]{0,62}$ ]]
+}
+
+valid_identifier "$database" || { printf 'ishikawa_schema_install=blocked;reason=database_name_invalid\n' >&2; exit 2; }
+valid_identifier "$owner_role" || { printf 'ishikawa_schema_install=blocked;reason=owner_role_invalid\n' >&2; exit 2; }
+valid_identifier "$ingest_role" || { printf 'ishikawa_schema_install=blocked;reason=ingest_role_invalid\n' >&2; exit 2; }
+valid_identifier "$retrieval_role" || { printf 'ishikawa_schema_install=blocked;reason=retrieval_role_invalid\n' >&2; exit 2; }
+[[ "$owner_role" != "$ingest_role" && "$owner_role" != "$retrieval_role" && "$ingest_role" != "$retrieval_role" ]] || {
+  printf 'ishikawa_schema_install=blocked;reason=roles_not_distinct\n' >&2
+  exit 2
+}
+
+(
+  cd -- "$SCRIPT_DIR"
+  sha256sum --check --strict "$(basename -- "$CHECKSUM_PATH")" >/dev/null
+) || { printf 'ishikawa_schema_install=blocked;reason=package_checksum_failed\n' >&2; exit 1; }
+
+schema_sha256="$(sha256sum "$SCHEMA_PATH" | awk '{print $1}')"
+[[ "$schema_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  printf 'ishikawa_schema_install=blocked;reason=schema_identity_invalid\n' >&2
+  exit 1
+}
+
+psql \
+  --no-psqlrc \
+  --set=ON_ERROR_STOP=1 \
+  --set="owner_role=$owner_role" \
+  --set="ingest_role=$ingest_role" \
+  --set="retrieval_role=$retrieval_role" \
+  --set="schema_sha256=$schema_sha256" \
+  --dbname="$database" \
+  --file="$SCHEMA_PATH" >/dev/null || {
+  printf 'ishikawa_schema_install=blocked;reason=schema_application_failed\n' >&2
+  exit 1
+}
+
+printf 'ishikawa_schema_install=pass;schema_version=5;schema_sha256=%s\n' "$schema_sha256"

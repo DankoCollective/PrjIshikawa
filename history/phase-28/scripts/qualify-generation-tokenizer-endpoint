@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export PYTHONDONTWRITEBYTECODE=1
+
+# Qualify the configured generation tokenizer endpoint with one repeated,
+# synthetic probe while preserving the initial managed-service state.
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly QUALIFIER="$SCRIPT_DIR/qualify_generation_tokenizer_endpoint.py"
+readonly UNIT="vllm-gemma.service"
+readonly START_COMMAND="/usr/local/sbin/start-vllm"
+readonly STOP_COMMAND="/usr/local/sbin/stop-vllm"
+
+[[ "$EUID" -eq 0 ]] || {
+  printf '[generation-tokenizer-endpoint] result=BLOCKED reason=root_execution_required\n' >&2
+  exit 1
+}
+[[ -f "$QUALIFIER" && ! -L "$QUALIFIER" ]] || {
+  printf '[generation-tokenizer-endpoint] result=BLOCKED reason=qualifier_missing_or_unsafe\n' >&2
+  exit 1
+}
+
+started_by_qualifier=false
+gemma_api_key=""
+cleanup() {
+  local original_status="$?"
+  trap - EXIT INT TERM
+  unset gemma_api_key
+  if [[ "$started_by_qualifier" == true ]]; then
+    if "$STOP_COMMAND" gemma >/dev/null 2>&1; then
+      printf '[generation-tokenizer-endpoint] cleanup=pass service_state=restored_inactive\n'
+    else
+      printf '[generation-tokenizer-endpoint] cleanup=failed service_state=review_required\n' >&2
+      original_status=1
+    fi
+  else
+    printf '[generation-tokenizer-endpoint] cleanup=not_required service_state=left_active\n'
+  fi
+  exit "$original_status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if systemctl is-active --quiet "$UNIT"; then
+  printf '[generation-tokenizer-endpoint] initial_service_state=active action=preserve\n'
+else
+  [[ -x "$START_COMMAND" && -x "$STOP_COMMAND" ]] || {
+    printf '[generation-tokenizer-endpoint] result=BLOCKED reason=managed_service_commands_missing\n' >&2
+    exit 1
+  }
+  printf '[generation-tokenizer-endpoint] initial_service_state=inactive action=temporary_start\n'
+  if ! "$START_COMMAND" gemma >/dev/null 2>&1; then
+    printf '[generation-tokenizer-endpoint] result=BLOCKED reason=temporary_service_start_failed\n' >&2
+    exit 1
+  fi
+  started_by_qualifier=true
+fi
+
+[[ -r /dev/tty && -w /dev/tty ]] || {
+  printf '[generation-tokenizer-endpoint] result=BLOCKED reason=attended_tty_unavailable\n' >&2
+  exit 1
+}
+printf 'Enter the Gemma API key: ' >/dev/tty
+if ! IFS= read -r -s gemma_api_key </dev/tty; then
+  printf '\n' >/dev/tty
+  printf '[generation-tokenizer-endpoint] result=BLOCKED reason=credential_entry_failed\n' >&2
+  exit 1
+fi
+printf '\n' >/dev/tty
+if (( ${#gemma_api_key} < 32 || ${#gemma_api_key} > 1024 )); then
+  unset gemma_api_key
+  printf '[generation-tokenizer-endpoint] result=BLOCKED reason=operator_credential_format_invalid\n' >&2
+  exit 1
+fi
+
+printf '[generation-tokenizer-endpoint] credential_source=operator_attended_tty stored_credential_read=false\n'
+qualification_status=0
+printf '%s' "$gemma_api_key" \
+  | python3 "$QUALIFIER" --credential-stdin "$@" \
+  || qualification_status=$?
+unset gemma_api_key
+
+output_path=""
+expect_output=false
+for argument in "$@"; do
+  if [[ "$expect_output" == true ]]; then
+    output_path="$argument"
+    expect_output=false
+  elif [[ "$argument" == --output ]]; then
+    expect_output=true
+  elif [[ "$argument" == --output=* ]]; then
+    output_path="${argument#--output=}"
+  fi
+done
+if [[ -n "$output_path" && -f "$output_path" && "${SUDO_UID:-}" =~ ^[0-9]+$ && "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then
+  chown "$SUDO_UID:$SUDO_GID" -- "$output_path" || {
+    printf '[generation-tokenizer-endpoint] result=BLOCKED reason=artifact_ownership_return_failed\n' >&2
+    qualification_status=1
+  }
+fi
+exit "$qualification_status"

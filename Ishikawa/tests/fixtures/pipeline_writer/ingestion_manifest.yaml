@@ -1,0 +1,21 @@
+schema_version: 1
+documents:
+  - source_path: Form_TST9001.pdf
+    document_key: form.tst-9001
+    class_id: administrative_form
+  - source_path: Governance_Manual_2005_Revision_3.pdf
+    document_key: policy.governance-manual
+    class_id: policy_sop
+  - source_path: OPS_17_CTL_2001.pdf
+    document_key: policy.ops-17-control-2001
+    class_id: policy_sop
+  - source_path: OPS_17_CTL_2002_RevA.pdf
+    document_key: policy.ops-17-control-2002
+    class_id: policy_sop
+  - source_path: 31_SCH_2003.pdf
+    document_key: policy.schedule-2003
+    class_id: policy_sop
+  - source_path: SOP_42_IR_2006.pdf
+    document_key: procedure.incident-reporting
+    class_id: policy_sop
+retirements: []

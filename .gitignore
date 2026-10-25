@@ -1,0 +1,39 @@
+# Local reports, build products, credentials, and operator state.
+local/
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.truststore
+*.der
+*.csr
+*.crt
+
+# Generated Python and JavaScript state.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+node_modules/
+.next/
+dist/
+coverage/
+
+# Editor and operating-system state.
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+*~
+
+# Generated corpus and database state. Synthetic fixture sources and truth
+# under qualification/corpus-v3 are deliberately tracked.
+state/
+corpus/source/
+*.dump
+*.sql.gz

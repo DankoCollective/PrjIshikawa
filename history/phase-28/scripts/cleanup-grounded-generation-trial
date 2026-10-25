@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Remove only the checksum-bound temporary directory left by one prior trial.
+
+expected_started_utc=''
+expected_payload_sha256=''
+expected_response_sha256=''
+while (( $# > 0 )); do
+  case "$1" in
+    --started-utc) expected_started_utc="${2:-}"; shift 2 ;;
+    --expected-payload-sha256) expected_payload_sha256="${2:-}"; shift 2 ;;
+    --expected-response-sha256) expected_response_sha256="${2:-}"; shift 2 ;;
+    *) printf '[grounded-cleanup] result=BLOCKED reason=unsupported_argument\n' >&2; exit 2 ;;
+  esac
+done
+[[ "$EUID" -eq 0 ]] || { printf '[grounded-cleanup] result=BLOCKED reason=root_required\n' >&2; exit 1; }
+[[ "$expected_started_utc" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { printf '[grounded-cleanup] result=BLOCKED reason=timestamp_invalid\n' >&2; exit 1; }
+[[ "$expected_payload_sha256" =~ ^[0-9a-f]{64}$ && "$expected_response_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  printf '[grounded-cleanup] result=BLOCKED reason=identity_invalid\n' >&2
+  exit 1
+}
+
+shopt -s nullglob
+candidates=(/tmp/grounded-generation-"$expected_started_utc"-*)
+if (( ${#candidates[@]} == 0 )); then
+  printf '[grounded-cleanup] result=PASS removed=false already_absent=true\n'
+  exit 0
+fi
+(( ${#candidates[@]} == 1 )) || { printf '[grounded-cleanup] result=BLOCKED reason=ambiguous_target\n' >&2; exit 1; }
+candidate="${candidates[0]}"
+basename_value="$(basename -- "$candidate")"
+[[ "$basename_value" =~ ^grounded-generation-${expected_started_utc}-[0-9]+$ ]] || {
+  printf '[grounded-cleanup] result=BLOCKED reason=target_name_invalid\n' >&2
+  exit 1
+}
+[[ "$candidate" == "/tmp/$basename_value" && -d "$candidate" && ! -L "$candidate" ]] || {
+  printf '[grounded-cleanup] result=BLOCKED reason=target_path_unsafe\n' >&2
+  exit 1
+}
+complete_payload=true
+for required in payload.sha256 run-grounded-generation run_grounded_generation.py synthetic-request.json rejected-generation-response.bin; do
+  [[ -f "$candidate/$required" && ! -L "$candidate/$required" ]] || complete_payload=false
+done
+if [[ "$complete_payload" == true ]]; then
+  [[ "$(sha256sum "$candidate/payload.sha256" | awk '{print $1}')" == "$expected_payload_sha256" ]] || {
+    printf '[grounded-cleanup] result=BLOCKED reason=payload_manifest_identity_mismatch\n' >&2
+    exit 1
+  }
+  [[ "$(sha256sum "$candidate/rejected-generation-response.bin" | awk '{print $1}')" == "$expected_response_sha256" ]] || {
+    printf '[grounded-cleanup] result=BLOCKED reason=response_identity_mismatch\n' >&2
+    exit 1
+  }
+  (cd -- "$candidate" && sha256sum --check --strict payload.sha256 >/dev/null) || {
+    printf '[grounded-cleanup] result=BLOCKED reason=payload_verification_failed\n' >&2
+    exit 1
+  }
+  residue_state='complete_checksum_bound_payload'
+else
+  # The prior non-root cleanup may have removed every user-owned payload file
+  # before encountering root-owned bytecode. Accept only that narrow residue:
+  # the two expected directories and CPython cache files for staged modules.
+  [[ -z "$(find -P "$candidate" -mindepth 1 -type l -print -quit)" ]] || {
+    printf '[grounded-cleanup] result=BLOCKED reason=partial_residue_symlink\n' >&2
+    exit 1
+  }
+  [[ -z "$(find -P "$candidate" -mindepth 1 ! -type d ! -type f -print -quit)" ]] || {
+    printf '[grounded-cleanup] result=BLOCKED reason=partial_residue_special_file\n' >&2
+    exit 1
+  }
+  residue_entries=0
+  while IFS= read -r -d '' relative_path; do
+    ((residue_entries += 1))
+    if [[ -d "$candidate/$relative_path" ]]; then
+      case "$relative_path" in
+        runtime|runtime/__pycache__) ;;
+        *) printf '[grounded-cleanup] result=BLOCKED reason=partial_residue_directory_unrecognized\n' >&2; exit 1 ;;
+      esac
+    else
+      [[ "$relative_path" =~ ^runtime/__pycache__/(__init__|canonical|reconstruction|generation|generation_transport)\.cpython-[0-9]+\.pyc$ ]] || {
+        printf '[grounded-cleanup] result=BLOCKED reason=partial_residue_file_unrecognized\n' >&2
+        exit 1
+      }
+    fi
+  done < <(find -P "$candidate" -mindepth 1 -printf '%P\0')
+  residue_state="partial_bytecode_residue;entries=$residue_entries"
+fi
+rm -rf -- "$candidate"
+[[ ! -e "$candidate" && ! -L "$candidate" ]] || {
+  printf '[grounded-cleanup] result=BLOCKED reason=removal_failed\n' >&2
+  exit 1
+}
+printf '[grounded-cleanup] result=PASS removed=true already_absent=false residue=%s\n' "$residue_state"

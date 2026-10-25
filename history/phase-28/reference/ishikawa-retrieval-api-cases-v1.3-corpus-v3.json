@@ -1,0 +1,111 @@
+{
+  "artifact_kind": "ishikawa_retrieval_api_cases",
+  "cases": [
+    {
+      "case_id": "R-001",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to time-bounded access to controlled training materials?",
+      "required_evidence": [
+        {"display_name": "Controlled Materials Access Policy", "page": 1}
+      ]
+    },
+    {
+      "case_id": "R-002",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to readiness for scheduled controlled activity?",
+      "required_evidence": [
+        {"display_name": "Operational Readiness Checklist", "page": 1}
+      ]
+    },
+    {
+      "case_id": "R-003",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to classification of operational, security, access, and records incidents?",
+      "required_evidence": [
+        {"display_name": "Incident Classification Policy", "page": 1}
+      ]
+    },
+    {
+      "case_id": "R-004",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to remote connection to organizational systems?",
+      "required_evidence": [
+        {"display_name": "Remote Access Policy", "page": 1}
+      ]
+    },
+    {
+      "case_id": "R-005",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to onboarding, transfer, leave, and separation access changes?",
+      "required_evidence": [
+        {"display_name": "Personnel Access Lifecycle Procedure", "page": 1}
+      ]
+    },
+    {
+      "case_id": "R-006",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to internal and external sharing of classified information?",
+      "required_evidence": [
+        {"display_name": "Information Sharing Policy", "page": 1}
+      ]
+    },
+    {
+      "case_id": "N-001",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "What mileage reimbursement rate applies when an employee uses a personal vehicle for official travel?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-002",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "How many weeks of parental leave does the organization provide?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-003",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "What purchase amount requires competitive procurement?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-004",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "What are the cafeteria breakfast hours?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-005",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "How are employee parking spaces assigned?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-006",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "Which airline cabin class is reimbursable for international travel?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "B-001",
+      "class": "broad-navigation",
+      "expected_status": "clarification-required",
+      "question": "What policy governs this situation?",
+      "required_evidence": []
+    }
+  ],
+  "corpus_identity": "synthetic-corpus-v3",
+  "schema_version": 1,
+  "synthetic_content_only": true
+}

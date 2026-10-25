@@ -1,0 +1,20 @@
+schema_version: 1
+documents:
+  - document_key: form.tst-9001
+    display_name: Synthetic TST-9001 Form
+    status: active
+  - document_key: policy.governance-manual
+    display_name: Synthetic Governance Manual
+    status: active
+  - document_key: policy.ops-17-control-2001
+    display_name: Synthetic Operations Control 2001
+    status: active
+  - document_key: policy.ops-17-control-2002
+    display_name: Synthetic Operations Control 2002
+    status: active
+  - document_key: policy.schedule-2003
+    display_name: Synthetic Schedule 2003
+    status: active
+  - document_key: procedure.incident-reporting
+    display_name: Synthetic Incident Reporting Procedure
+    status: active

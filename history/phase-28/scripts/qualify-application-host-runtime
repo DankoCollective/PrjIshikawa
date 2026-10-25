@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Exercise configured runtime assembly and its loopback listener with one
+# synthetic request that must short-circuit before any external dependency.
+
+umask 077
+
+emit() { printf '%s\n' "$1"; }
+block() { emit "application_host_runtime=blocked;reason=$1"; exit 1; }
+
+(( $# == 5 )) || block invalid_argument_count
+expected_hostname="$1"
+expected_os_version="$2"
+transfer_root="$3"
+expected_manifest_sha256="$4"
+expected_manifest_entries="$5"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_manifest_sha256
+[[ "$expected_manifest_entries" =~ ^[1-9][0-9]{0,2}$ ]] || block invalid_manifest_entry_count
+[[ "$transfer_root" == /tmp/application-host-runtime-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || block invalid_transfer_root
+(( EUID != 0 )) || block nonroot_execution_required
+
+for required in awk dpkg grep hostname python3 sha256sum ss tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+manifest_path="$transfer_root/payload.sha256"
+[[ -f "$manifest_path" && ! -L "$manifest_path" && -r "$manifest_path" ]] || block payload_manifest_missing
+[[ "$(sha256sum "$manifest_path" | awk '{print $1}')" == "$expected_manifest_sha256" ]] || block payload_manifest_checksum_mismatch
+[[ "$(awk 'NF {count++} END {print count+0}' "$manifest_path")" == "$expected_manifest_entries" ]] || block payload_manifest_entry_count_invalid
+if ! awk '
+  !/^[0-9a-f]{64}  (payload\/ishikawa\/[A-Za-z0-9_]+\.py|payload\/config\/[A-Za-z0-9_]+\.yaml|qualify_application_host_runtime\.py)$/ {bad=1}
+  END {exit bad}
+' "$manifest_path"; then block payload_manifest_path_invalid; fi
+(cd "$transfer_root" && sha256sum --check --strict payload.sha256 >/dev/null) || block payload_checksum_verification_failed
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+python_version="$(python3 -c 'import sys; print(".".join(map(str,sys.version_info[:3])))')"
+[[ "$python_version" == 3.12.* ]] || block python_version_mismatch
+pyyaml_version="$(python3 -c 'import yaml; print(yaml.__version__)' 2>/dev/null || true)"
+[[ "$pyyaml_version" == 6.0.1 ]] || block pyyaml_version_mismatch
+if ss -H -ltn 'sport = :1384' 2>/dev/null | grep -q .; then block retrieval_port_in_use_before_test; fi
+
+output="$transfer_root/application-host-runtime.json"
+result="$transfer_root/application-host-runtime.txt"
+error="$transfer_root/application-host-runtime-error.txt"
+[[ ! -e "$output" && ! -L "$output" && ! -e "$result" && ! -L "$result" ]] || block output_path_exists
+
+emit 'purpose=qualify_configured_runtime_on_application_host'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit "python_version=$python_version;pyyaml_version=$pyyaml_version"
+emit 'authorized_actions=verify_checksum_bound_runtime_load_configuration_bind_temporary_loopback_listener_send_one_synthetic_security_test_request_retain_content_free_measurement'
+emit 'non_actions=no_sudo_no_package_or_service_change_no_database_contact_no_model_or_embedding_contact_no_credential_read_no_organizational_content'
+
+set +e
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$transfer_root/payload" python3 -B \
+  "$transfer_root/qualify_application_host_runtime.py" \
+  --config-root "$transfer_root/payload/config" \
+  --output "$output" >"$result" 2>"$error"
+runner_status=$?
+set -e
+if (( runner_status != 0 )); then
+  emit "runtime_runner_exit_code=$runner_status;error_sha256=$(sha256sum "$error" | awk '{print $1}');error_bytes=$(wc -c <"$error" | tr -d ' ');raw_error_retained=false"
+  block runtime_runner_failed
+fi
+while IFS= read -r line; do emit "$line"; done <"$result"
+if ss -H -ltn 'sport = :1384' 2>/dev/null | grep -q .; then block retrieval_port_remains_after_test; fi
+emit 'port_1384_after_test=free'
+emit 'application_host_runtime_qualification=pass'

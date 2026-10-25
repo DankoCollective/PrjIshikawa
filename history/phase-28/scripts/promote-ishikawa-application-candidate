@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Promote an exact Ishikawa application candidate into the canonical host
+#   path while preserving the prior exact installation for rollback.
+#
+# Mental model:
+#   Compare both installed trees to checksum-bound old and new payloads,
+#   require the whole stack stopped, atomically rename the directories,
+#   install exact boot-disabled user units, and roll back every changed object
+#   if any post-promotion check fails.
+#
+# Inputs or prerequisites:
+#   Expected host identity, exact old and new application archives and digests,
+#   and an unchanged old installation plus the exact candidate installation.
+#
+# Outputs:
+#   Canonical ~/Documents/Ishikawa, preserved ~/Documents/Ishikawa-pre-v1,
+#   final user units, and one content-free result. No service is started.
+#
+# Usage:
+#   promote-ishikawa-application-candidate HOST 24.04 OLD OLD_SHA NEW NEW_SHA RESULT
+
+usage() {
+  printf '%s\n' \
+    'Usage: promote-ishikawa-application-candidate EXPECTED-HOSTNAME EXPECTED-OS-VERSION OLD-ARCHIVE OLD-SHA256 NEW-ARCHIVE NEW-SHA256 RESULT'
+}
+
+fail() {
+  local reason="$1"
+  if [[ -n "${result_path:-}" && -n "${working_root:-}" && "$result_path" == "$working_root"/* ]]; then
+    printf 'ishikawa_candidate_promotion=blocked;reason=%s\n' "$reason" >>"$result_path" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+[[ "${1:-}" != '--help' && "${1:-}" != '-h' ]] || { usage; exit 0; }
+(( $# == 7 )) || { usage >&2; exit 2; }
+
+readonly expected_hostname="$1"
+readonly expected_os_version="$2"
+readonly old_archive="$3"
+readonly old_archive_sha256="$4"
+readonly new_archive="$5"
+readonly new_archive_sha256="$6"
+result_path="$7"
+readonly working_root="$(pwd -P)"
+readonly active_root="$HOME/Documents/Ishikawa"
+readonly candidate_root="$HOME/Documents/Ishikawa-v1-candidate"
+readonly backup_root="$HOME/Documents/Ishikawa-pre-v1"
+readonly user_unit_root="$HOME/.config/systemd/user"
+readonly -a unit_names=(
+  ishikawa-observability-retention.service
+  ishikawa-observability-retention.timer
+  ishikawa-retrieval-api.service
+)
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail 'expected_hostname_invalid'
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail 'expected_os_version_invalid'
+for archive_path in "$old_archive" "$new_archive"; do
+  [[ "$archive_path" == "$working_root"/* && -f "$archive_path" && ! -L "$archive_path" ]] || fail 'archive_path_invalid'
+done
+[[ "$old_archive_sha256" =~ ^[0-9a-f]{64}$ && "$new_archive_sha256" =~ ^[0-9a-f]{64}$ ]] || fail 'archive_digest_invalid'
+[[ "$result_path" == "$working_root"/* && ! -e "$result_path" && ! -L "$result_path" ]] || fail 'result_path_invalid'
+
+for required in awk bash cmp dpkg find grep hostname install mkdir mktemp mv python3 rm sha256sum sort systemctl tar uname; do
+  command -v "$required" >/dev/null 2>&1 || fail 'required_command_missing'
+done
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || fail 'operating_system_mismatch'
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || fail 'hostname_mismatch'
+[[ "$(dpkg --print-architecture)" == amd64 && "$(uname -m)" == x86_64 ]] || fail 'architecture_mismatch'
+[[ "$(sha256sum "$old_archive" | awk '{print $1}')" == "$old_archive_sha256" ]] || fail 'old_archive_checksum_mismatch'
+[[ "$(sha256sum "$new_archive" | awk '{print $1}')" == "$new_archive_sha256" ]] || fail 'new_archive_checksum_mismatch'
+
+extract_root="$(mktemp -d "$working_root/extracted.XXXXXX")"
+old_moved=false
+candidate_moved=false
+promotion_complete=false
+created_units=()
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$promotion_complete" != true ]]; then
+    for unit_path in "${created_units[@]}"; do
+      [[ "$unit_path" == "$user_unit_root"/ishikawa-* ]] && rm -f -- "$unit_path"
+    done
+    if [[ "$candidate_moved" == true && -d "$active_root" && ! -e "$candidate_root" ]]; then
+      mv -- "$active_root" "$candidate_root"
+    fi
+    if [[ "$old_moved" == true && -d "$backup_root" && ! -e "$active_root" ]]; then
+      mv -- "$backup_root" "$active_root"
+    fi
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
+  if [[ "$extract_root" == "$working_root"/extracted.* && -d "$extract_root" ]]; then
+    rm -rf -- "$extract_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+mkdir -p -- "$extract_root/old" "$extract_root/new"
+tar -xzf "$old_archive" -C "$extract_root/old" || fail 'old_archive_extraction_failed'
+tar -xzf "$new_archive" -C "$extract_root/new" || fail 'new_archive_extraction_failed'
+readonly old_bundle="$extract_root/old/ishikawa-application-package"
+readonly new_bundle="$extract_root/new/ishikawa-application-package"
+for bundle in "$old_bundle" "$new_bundle"; do
+  [[ -d "$bundle" && ! -L "$bundle" ]] || fail 'bundle_root_invalid'
+  (cd -- "$bundle" && sha256sum --check --strict SHA256SUMS >/dev/null) || fail 'package_checksum_failed'
+done
+readonly old_payload="$old_bundle/payload"
+readonly new_payload="$new_bundle/payload"
+
+tree_matches_payload() {
+  local payload="$1" installed="$2"
+  [[ -d "$installed" && ! -L "$installed" ]] || return 1
+  cmp -s \
+    <(cd "$payload" && find . -type f -print | sort | while IFS= read -r name; do sha256sum "$name"; done) \
+    <(cd "$installed" && find . -type f -print | sort | while IFS= read -r name; do sha256sum "$name"; done)
+}
+
+[[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] || fail 'postgresql_running'
+[[ "$(systemctl --user is-active ishikawa-retrieval-api.service 2>/dev/null || true)" != active ]] || fail 'retrieval_running'
+[[ ! -e "$active_root/state/run/stack.state" && ! -L "$active_root/state/run/stack.state" ]] || fail 'managed_stack_state_present'
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled ]] || fail 'postgresql_boot_enabled'
+[[ "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] || fail 'postgresql_cluster_boot_enabled'
+
+promotion_action='promoted_new'
+if tree_matches_payload "$old_payload" "$active_root" \
+  && tree_matches_payload "$new_payload" "$candidate_root" \
+  && [[ ! -e "$backup_root" && ! -L "$backup_root" ]]; then
+  promotion_action='promoted_new'
+elif tree_matches_payload "$new_payload" "$active_root" \
+  && tree_matches_payload "$old_payload" "$backup_root" \
+  && [[ ! -e "$candidate_root" && ! -L "$candidate_root" ]]; then
+  promotion_action='reused_exact'
+else
+  fail 'installed_tree_identity_conflict'
+fi
+
+for unit_name in "${unit_names[@]}"; do
+  source_unit="$new_payload/systemd/$unit_name"
+  target_unit="$user_unit_root/$unit_name"
+  [[ -f "$source_unit" && ! -L "$source_unit" ]] || fail 'candidate_unit_missing'
+  if [[ -e "$target_unit" || -L "$target_unit" ]]; then
+    [[ -f "$target_unit" && ! -L "$target_unit" ]] || fail 'existing_unit_unsafe'
+    cmp -s "$source_unit" "$target_unit" || fail 'existing_unit_identity_conflict'
+  fi
+done
+
+if [[ "$promotion_action" == promoted_new ]]; then
+  mv -- "$active_root" "$backup_root" || fail 'old_installation_backup_failed'
+  old_moved=true
+  mv -- "$candidate_root" "$active_root" || fail 'candidate_activation_failed'
+  candidate_moved=true
+  mkdir -p -- "$user_unit_root"
+  [[ -d "$user_unit_root" && ! -L "$user_unit_root" ]] || fail 'user_unit_directory_unsafe'
+  for unit_name in "${unit_names[@]}"; do
+    source_unit="$active_root/systemd/$unit_name"
+    target_unit="$user_unit_root/$unit_name"
+    if [[ ! -e "$target_unit" && ! -L "$target_unit" ]]; then
+      install -m 0644 -- "$source_unit" "$target_unit" || fail 'unit_installation_failed'
+      created_units+=("$target_unit")
+    fi
+  done
+  systemctl --user daemon-reload >/dev/null 2>&1 || fail 'user_unit_reload_failed'
+fi
+
+tree_matches_payload "$new_payload" "$active_root" || fail 'active_installation_verification_failed'
+tree_matches_payload "$old_payload" "$backup_root" || fail 'rollback_installation_verification_failed'
+[[ ! -e "$candidate_root" && ! -L "$candidate_root" ]] || fail 'candidate_path_not_consumed'
+for unit_name in "${unit_names[@]}"; do
+  cmp -s "$active_root/systemd/$unit_name" "$user_unit_root/$unit_name" || fail 'installed_unit_verification_failed'
+done
+[[ "$(systemctl --user is-active ishikawa-retrieval-api.service 2>/dev/null || true)" != active ]] || fail 'retrieval_started_unexpectedly'
+[[ "$(systemctl --user is-active ishikawa-observability-retention.timer 2>/dev/null || true)" != active ]] || fail 'retention_timer_started_unexpectedly'
+[[ "$(systemctl --user is-enabled ishikawa-retrieval-api.service 2>/dev/null || true)" != enabled ]] || fail 'retrieval_boot_enabled'
+[[ "$(systemctl --user is-enabled ishikawa-observability-retention.timer 2>/dev/null || true)" != enabled ]] || fail 'retention_timer_boot_enabled'
+
+promotion_complete=true
+{
+  printf 'target_hostname=%s;os_id=ubuntu;os_version=%s;architecture=amd64\n' "$actual_hostname" "$expected_os_version"
+  printf 'old_archive_sha256=%s;new_archive_sha256=%s;package_checksums=pass\n' "$old_archive_sha256" "$new_archive_sha256"
+  printf 'promotion_action=%s;active_root=HOME/Documents/Ishikawa;rollback_root=HOME/Documents/Ishikawa-pre-v1\n' "$promotion_action"
+  printf 'active_payload_files=94;rollback_preserved=true;candidate_consumed=true\n'
+  printf 'user_units=3;unit_identity=exact;services_started=false;boot_enabled=false\n'
+  printf 'database_changed=false;container_changed=false;model_contact=false;credential_read=false;source_documents_changed=false\n'
+  printf 'ishikawa_candidate_promotion=pass\n'
+} >"$result_path"

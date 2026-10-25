@@ -1,0 +1,421 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Publish the accepted synthetic corpus into the installed Ishikawa database
+#   when needed, prove the complete on-demand stack and chat path, then stop it.
+#
+# Mental model:
+#   Fail before persistent writes unless the host, stopped-state, ports,
+#   forwarded model endpoints, payload, and database baseline are accepted.
+#   Prompt the operator for runtime credentials without retaining them, stage
+#   exact synthetic inputs, publish atomically, start the managed stack, prove
+#   one cited answer through Next.js, and restore the stopped posture.
+#
+# Inputs or prerequisites:
+#   A promoted ~/Documents/Ishikawa installation, an empty or exact previously
+#   published synthetic corpus, pre-forwarded loopback model ports 8000/8001,
+#   attended sudo, and four protected runtime credentials.
+#
+# Outputs:
+#   A searchable six-document synthetic corpus, one content-free durable target
+#   receipt, and a stopped boot-disabled stack. No secret or raw chat content is
+#   written, printed, or passed as a command argument.
+#
+# Usage:
+#   run-first-ishikawa-proof HOST 24.04 TRANSFER-ROOT MANIFEST-SHA FILE-COUNT
+
+usage() {
+  printf '%s\n' \
+    'Usage: run-first-ishikawa-proof EXPECTED-HOSTNAME EXPECTED-OS-VERSION TRANSFER-ROOT MANIFEST-SHA256 FILE-COUNT'
+}
+
+emit() {
+  printf '%s\n' "$1"
+  if [[ ! -t 1 && -w /dev/tty ]]; then
+    printf '%s\n' "$1" >/dev/tty
+  fi
+}
+
+block() {
+  emit "ishikawa_first_runtime_proof=blocked;reason=$1"
+  exit 1
+}
+
+[[ "${1:-}" != '--help' && "${1:-}" != '-h' ]] || { usage; exit 0; }
+(( $# == 5 )) || { usage >&2; exit 2; }
+
+readonly expected_hostname="$1"
+readonly expected_os_version="$2"
+readonly transfer_root="$3"
+readonly expected_manifest_sha256="$4"
+readonly expected_manifest_entries="$5"
+readonly product_root="$HOME/Documents/Ishikawa"
+readonly class_registry="$product_root/config/document_classes.yaml"
+readonly document_catalog="$product_root/config/document_catalog.yaml"
+readonly pending_root="$product_root/config/ingestion/pending"
+readonly pending_manifest="$pending_root/synthetic-corpus-v1.yaml"
+readonly source_root="$product_root/corpus/source"
+readonly proof_runner="$transfer_root/prove-ishikawa-chat-path.py"
+readonly durable_report_root="$product_root/state/reports/qualification"
+readonly durable_report="$durable_report_root/first-runtime-proof.txt"
+readonly postgresql_unit='postgresql@16-main.service'
+readonly expected_active_documents='form.tst-9001|96a91dab4d748cb5d80ae211bdf4aa435a8d679b0fc7dd3668cfdde066909000;policy.governance-manual|4cef995f8ae67b2184b52ddf59635ea5adf05d8df6e40ac110eff0c04357dd47;policy.ops-17-control-2001|32d3cc0361e4b2a26ea552c1e8e6013c6a1635f036ad759b50d0e29b447b0e79;policy.ops-17-control-2002|1c44ff8c5f1b30046e265b619a08e76a9c1139e15e6eb85164ebcf3655b6b442;policy.schedule-2003|00f4489faa8f15ed50ed3095c476fcdc9dd05852d56daf08bec33f0faafbaa02;procedure.incident-reporting|962f8c6dd5835fc713cea6292ee1f30cb18d0abe6db38efe91f9a4ecea8d5175'
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block 'expected_hostname_invalid'
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block 'expected_os_version_invalid'
+[[ "$transfer_root" == /tmp/ishikawa-first-runtime-proof-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || block 'transfer_root_invalid'
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block 'payload_manifest_identity_invalid'
+[[ "$expected_manifest_entries" =~ ^[1-9][0-9]{0,2}$ ]] || block 'payload_manifest_count_invalid'
+(( EUID != 0 )) || block 'regular_operator_required'
+
+for required in awk bash chmod cmp cp curl date dpkg find grep hostname install mkdir mv pg_isready psql python3 rm sed sha256sum sleep ss stat sudo systemctl; do
+  command -v "$required" >/dev/null 2>&1 || block "required_command_missing_$required"
+done
+
+readonly payload_manifest="$transfer_root/payload.sha256"
+[[ -f "$payload_manifest" && ! -L "$payload_manifest" && -r "$payload_manifest" ]] || block 'payload_manifest_missing'
+[[ "$(sha256sum "$payload_manifest" | awk '{print $1}')" == "$expected_manifest_sha256" ]] || block 'payload_manifest_checksum_mismatch'
+[[ "$(awk 'NF {count++} END {print count+0}' "$payload_manifest")" == "$expected_manifest_entries" ]] || block 'payload_manifest_entry_count_mismatch'
+if ! awk '
+  !/^[0-9a-f]{64}  (operator\/(document_classes|document_catalog|ingestion_manifest)\.yaml|source\/[A-Za-z0-9_.-]+\.pdf|prove-ishikawa-chat-path\.py|run-first-ishikawa-proof)$/ {bad=1}
+  END {exit bad}
+' "$payload_manifest"; then
+  block 'payload_manifest_path_invalid'
+fi
+(cd -- "$transfer_root" && sha256sum --check --strict payload.sha256 >/dev/null) || block 'payload_checksum_failed'
+
+emit '[PREFLIGHT] state=start'
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block 'operating_system_mismatch'
+readonly actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block 'hostname_mismatch'
+[[ "$(dpkg --print-architecture)" == amd64 ]] || block 'architecture_mismatch'
+
+for required_directory in \
+  "$product_root" "$pending_root" "$source_root" \
+  "$product_root/state/reports" "$product_root/state/run"; do
+  [[ -d "$required_directory" && ! -L "$required_directory" ]] || block 'installed_directory_unsafe'
+done
+for required_file in \
+  "$class_registry" "$document_catalog" \
+  "$product_root/scripts/ishikawa-ingest" \
+  "$product_root/scripts/ishikawa-stack" \
+  "$proof_runner" \
+  "$transfer_root/operator/document_classes.yaml" \
+  "$transfer_root/operator/document_catalog.yaml" \
+  "$transfer_root/operator/ingestion_manifest.yaml"; do
+  [[ -f "$required_file" && ! -L "$required_file" && -r "$required_file" ]] || block 'required_file_unsafe'
+done
+[[ -x "$product_root/scripts/ishikawa-ingest" && -x "$product_root/scripts/ishikawa-stack" ]] || block 'installed_command_not_executable'
+if ! PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$product_root/application/python" \
+  python3 -B - "$class_registry" "$transfer_root/operator/document_classes.yaml" <<'PY'
+from __future__ import annotations
+
+import sys
+
+from ishikawa.validators import validate_class_registry
+from ishikawa.yaml_loader import load_restricted_yaml
+
+
+def registry_digest(path: str, label: str) -> str:
+    return validate_class_registry(load_restricted_yaml(path, label=label)).digest
+
+
+installed_digest = registry_digest(sys.argv[1], "installed document-class registry")
+transferred_digest = registry_digest(sys.argv[2], "transferred document-class registry")
+raise SystemExit(0 if installed_digest == transferred_digest else 1)
+PY
+then
+  block 'document_class_registry_identity_mismatch'
+fi
+
+mapfile -t transferred_pdfs < <(find "$transfer_root/source" -maxdepth 1 -type f -name '*.pdf' -print | sort)
+(( ${#transferred_pdfs[@]} == 6 )) || block 'synthetic_source_inventory_invalid'
+if find "$transfer_root/source" -type l -print -quit | grep -q .; then
+  block 'synthetic_source_symlink_found'
+fi
+
+emit '[PREFLIGHT] state=waiting_for_attended_sudo'
+sudo -v || block 'privilege_authorization_failed'
+
+stack_status="$($product_root/scripts/ishikawa-stack status 2>/dev/null || true)"
+[[ "$stack_status" == 'ishikawa_stack=status;state=stopped;boot_enabled=false' ]] || block 'stack_not_stopped'
+for required_free_port in 5432 1384 3000; do
+  if ss -H -ltn "( sport = :$required_free_port )" | grep -q .; then
+    block "configured_port_${required_free_port}_in_use"
+  fi
+done
+for forwarded_port in 8000 8001; do
+  ss -H -ltn4 "( sport = :$forwarded_port )" \
+    | awk -v expected="127.0.0.1:$forwarded_port" '$4 == expected {found=1} END {exit !found}' \
+    || block "model_forward_${forwarded_port}_missing"
+done
+emit '[PREFLIGHT] state=pass;stack=stopped;model_forwards=present'
+
+gemma_key=''
+nomic_key=''
+ingest_password=''
+retrieval_password=''
+postgresql_started=false
+stack_started=false
+
+clear_credentials() {
+  gemma_key=''
+  nomic_key=''
+  ingest_password=''
+  retrieval_password=''
+  unset gemma_key nomic_key ingest_password retrieval_password
+  unset ISHIKAWA_GEMMA_API_KEY ISHIKAWA_NOMIC_API_KEY
+  unset ISHIKAWA_POSTGRESQL_INGEST_PASSWORD ISHIKAWA_POSTGRESQL_PASSWORD
+}
+
+cleanup() {
+  local status="$?" stop_code=0 database_stop_code=0
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$stack_started" == true || -f "$product_root/state/run/stack.state" ]]; then
+    "$product_root/scripts/ishikawa-stack" stop >/dev/null 2>&1 || stop_code=$?
+    emit "cleanup_managed_stack_exit_code=$stop_code"
+    (( stop_code == 0 )) || status=1
+  elif [[ "$postgresql_started" == true ]] || systemctl --quiet is-active "$postgresql_unit" 2>/dev/null; then
+    sudo systemctl stop "$postgresql_unit" >/dev/null 2>&1 || database_stop_code=$?
+    emit "cleanup_postgresql_exit_code=$database_stop_code"
+    (( database_stop_code == 0 )) || status=1
+  fi
+  rm -f -- \
+    "$source_root/.synthetic-source.$$.tmp" \
+    "$pending_root/.synthetic-corpus-v1.$$.tmp" \
+    "$product_root/config/.document_catalog.$$.tmp"
+  clear_credentials
+  emit 'cleanup_runtime_credentials=cleared'
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+read_secret() {
+  local label="$1" variable_name="$2" value=''
+  printf '%s (input hidden): ' "$label" >/dev/tty
+  IFS= read -r -s value </dev/tty
+  printf '\n' >/dev/tty
+  (( ${#value} >= 1 && ${#value} <= 16384 )) || block 'credential_length_invalid'
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || block 'credential_character_invalid'
+  printf -v "$variable_name" '%s' "$value"
+  value=''
+  unset value
+}
+
+emit '[CREDENTIALS] state=waiting_for_operator;required=4'
+read_secret 'Nomic API key' nomic_key
+read_secret 'Gemma API key' gemma_key
+read_secret 'PostgreSQL rag_ingest password' ingest_password
+read_secret 'PostgreSQL rag_retrieval password' retrieval_password
+export ISHIKAWA_NOMIC_API_KEY="$nomic_key"
+export ISHIKAWA_GEMMA_API_KEY="$gemma_key"
+export ISHIKAWA_POSTGRESQL_INGEST_PASSWORD="$ingest_password"
+export ISHIKAWA_POSTGRESQL_PASSWORD="$retrieval_password"
+emit '[CREDENTIALS] state=accepted;retained=false'
+
+emit '[DATABASE] state=start'
+sudo systemctl start "$postgresql_unit" >/dev/null 2>&1 || block 'postgresql_start_failed'
+postgresql_started=true
+database_ready=false
+for _attempt in {1..40}; do
+  if pg_isready --quiet --host 127.0.0.1 --port 5432 --dbname rag_catalog; then
+    database_ready=true
+    break
+  fi
+  sleep 0.5
+done
+[[ "$database_ready" == true ]] || block 'postgresql_readiness_failed'
+
+postgres_scalar() {
+  sudo -u postgres psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align \
+    --dbname=rag_catalog --command="$1" 2>/dev/null | sed -n '1p'
+}
+
+readonly database_schema_contract="$(postgres_scalar "SELECT string_agg(schema_version::text, ',' ORDER BY schema_version) FROM rag.schema_migrations;")"
+[[ "$database_schema_contract" == '1,2,3,4' ]] || block 'database_schema_contract_mismatch'
+readonly application_row_count="$(postgres_scalar "SELECT
+  (SELECT count(*) FROM rag.document_classes) + (SELECT count(*) FROM rag.documents) +
+  (SELECT count(*) FROM rag.ingestion_runs) + (SELECT count(*) FROM rag.publication_batches) +
+  (SELECT count(*) FROM rag.document_versions) + (SELECT count(*) FROM rag.document_artifact_sets) +
+  (SELECT count(*) FROM rag.structural_units) + (SELECT count(*) FROM rag.chunks) +
+  (SELECT count(*) FROM rag.chunk_structural_units) + (SELECT count(*) FROM rag.citation_anchors) +
+  (SELECT count(*) FROM rag.embedding_spaces) + (SELECT count(*) FROM rag.chunk_embeddings) +
+  (SELECT count(*) FROM rag.relationship_types) + (SELECT count(*) FROM rag.relationships) +
+  (SELECT count(*) FROM rag.publication_batch_changes) + (SELECT count(*) FROM rag.active_document_versions) +
+  (SELECT count(*) FROM rag_private.artifact_manifests) + (SELECT count(*) FROM rag_private.ingestion_stages) +
+  (SELECT count(*) FROM rag_private.quarantine_records);")"
+readonly active_document_count_before="$(postgres_scalar 'SELECT count(*) FROM rag_search.active_documents;')"
+if [[ "$active_document_count_before" == 0 ]]; then
+  [[ "$application_row_count" == 0 ]] || block 'database_nonempty_without_active_corpus'
+  corpus_state='empty'
+elif [[ "$active_document_count_before" == 6 ]]; then
+  observed_active_documents="$(postgres_scalar "SELECT string_agg(document_key || '|' || source_digest, ';' ORDER BY document_key) FROM rag_search.active_documents;")"
+  [[ "$observed_active_documents" == "$expected_active_documents" ]] || block 'active_corpus_identity_mismatch'
+  corpus_state='synthetic_v1'
+else
+  block 'active_corpus_count_unexpected'
+fi
+emit "[DATABASE] state=pass;schema_version=4;corpus_state=$corpus_state"
+
+emit '[STAGE] state=start'
+for source_pdf in "${transferred_pdfs[@]}"; do
+  destination="$source_root/$(basename -- "$source_pdf")"
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    [[ -f "$destination" && ! -L "$destination" ]] || block 'existing_source_unsafe'
+    cmp -s "$source_pdf" "$destination" || block 'existing_source_identity_conflict'
+  else
+    temporary_source="$source_root/.synthetic-source.$$.tmp"
+    install -m 0600 -- "$source_pdf" "$temporary_source"
+    mv -- "$temporary_source" "$destination"
+  fi
+done
+
+if [[ -e "$pending_manifest" || -L "$pending_manifest" ]]; then
+  [[ -f "$pending_manifest" && ! -L "$pending_manifest" ]] || block 'existing_manifest_unsafe'
+  cmp -s "$transfer_root/operator/ingestion_manifest.yaml" "$pending_manifest" || block 'existing_manifest_identity_conflict'
+else
+  temporary_manifest="$pending_root/.synthetic-corpus-v1.$$.tmp"
+  install -m 0600 -- "$transfer_root/operator/ingestion_manifest.yaml" "$temporary_manifest"
+  mv -- "$temporary_manifest" "$pending_manifest"
+fi
+
+if ! cmp -s "$transfer_root/operator/document_catalog.yaml" "$document_catalog"; then
+  if [[ "$corpus_state" == synthetic_v1 ]]; then
+    block 'published_corpus_catalog_identity_mismatch'
+  fi
+  catalog_count="$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$product_root/application/python" python3 -B - "$document_catalog" <<'PY'
+from pathlib import Path
+import sys
+from ishikawa.validators import validate_document_catalog
+from ishikawa.yaml_loader import load_restricted_yaml
+
+catalog = validate_document_catalog(load_restricted_yaml(Path(sys.argv[1]), label="catalog"))
+print(len(catalog.documents))
+PY
+)" || block 'existing_catalog_validation_failed'
+  [[ "$catalog_count" == 0 ]] || block 'existing_catalog_not_empty'
+  temporary_catalog="$product_root/config/.document_catalog.$$.tmp"
+  install -m 0600 -- "$transfer_root/operator/document_catalog.yaml" "$temporary_catalog"
+  mv -- "$temporary_catalog" "$document_catalog"
+fi
+emit '[STAGE] state=pass;documents=6;manifest=synthetic-corpus-v1.yaml'
+
+run_with_heartbeat() {
+  local stage="$1" output_path="$2"
+  shift 2
+  local started_seconds="$SECONDS" process_id exit_code elapsed
+  "$@" >"$output_path" 2>&1 &
+  process_id=$!
+  while kill -0 "$process_id" 2>/dev/null; do
+    sleep 5
+    elapsed=$(( SECONDS - started_seconds ))
+    if (( elapsed > 0 && elapsed % 30 == 0 )); then
+      emit "[$stage] state=running;elapsed_seconds=$elapsed"
+    fi
+  done
+  set +e
+  wait "$process_id"
+  exit_code=$?
+  set -e
+  return "$exit_code"
+}
+
+if [[ "$corpus_state" == empty ]]; then
+  emit '[INGEST] state=validate'
+  validation_output="$transfer_root/ingestion-validation.txt"
+  run_with_heartbeat INGEST "$validation_output" \
+    "$product_root/scripts/ishikawa-ingest" --validate-only --manifest synthetic-corpus-v1.yaml \
+    || block 'ingestion_validation_failed'
+  grep -Fxq 'outcome=PASS' "$validation_output" || block 'ingestion_validation_outcome_invalid'
+  grep -Fxq 'actions=add:6,reprocess:0,retire:0,reuse:0,revise:0' "$validation_output" \
+    || block 'ingestion_validation_plan_invalid'
+  grep -Fxq 'ishikawa_ingestion=pass;exit_code=0' "$validation_output" || block 'ingestion_validation_marker_absent'
+
+  emit '[INGEST] state=publish'
+  publication_output="$transfer_root/ingestion-publication.txt"
+  run_with_heartbeat INGEST "$publication_output" \
+    "$product_root/scripts/ishikawa-ingest" --publish --manifest synthetic-corpus-v1.yaml \
+    || block 'ingestion_publication_failed'
+  grep -Fxq 'outcome=PASS' "$publication_output" || block 'ingestion_publication_outcome_invalid'
+  grep -Fxq 'actions=add:6,reprocess:0,retire:0,reuse:0,revise:0' "$publication_output" \
+    || block 'ingestion_publication_plan_invalid'
+  grep -Fxq 'mutation_performed=true' "$publication_output" || block 'ingestion_publication_not_committed'
+  grep -Fxq 'ishikawa_ingestion=pass;exit_code=0' "$publication_output" || block 'ingestion_publication_marker_absent'
+  ingestion_action='published_new'
+else
+  ingestion_action='reused_existing'
+fi
+
+active_inventory="$(postgres_scalar "SELECT
+  (SELECT count(*) FROM rag_search.active_documents)::text || '|' ||
+  (SELECT coalesce(sum(page_count),0) FROM rag_search.active_documents)::text || '|' ||
+  (SELECT count(*) FROM rag_search.active_chunks)::text || '|' ||
+  (SELECT count(*) FROM rag_search.active_citations)::text || '|' ||
+  (SELECT count(*) FROM rag_search.active_embeddings)::text;")"
+[[ "$active_inventory" == '6|27|126|126|126' ]] || block 'published_corpus_inventory_mismatch'
+observed_active_documents="$(postgres_scalar "SELECT string_agg(document_key || '|' || source_digest, ';' ORDER BY document_key) FROM rag_search.active_documents;")"
+[[ "$observed_active_documents" == "$expected_active_documents" ]] || block 'published_corpus_identity_mismatch'
+emit "[INGEST] state=pass;action=$ingestion_action;documents=6;pages=27;chunks=126;citations=126;embeddings=126"
+
+sudo systemctl stop "$postgresql_unit" >/dev/null 2>&1 || block 'postgresql_stop_before_stack_failed'
+postgresql_started=false
+[[ "$(systemctl is-active "$postgresql_unit" 2>/dev/null || true)" != active ]] || block 'postgresql_remained_active'
+
+emit '[STACK] state=start'
+stack_start_output="$transfer_root/stack-start.txt"
+run_with_heartbeat STACK "$stack_start_output" "$product_root/scripts/ishikawa-stack" start \
+  || block 'stack_start_failed'
+grep -Fxq 'ishikawa_stack=start;state=ready;boot_enabled=false' "$stack_start_output" || block 'stack_start_marker_absent'
+stack_started=true
+[[ "$($product_root/scripts/ishikawa-stack status 2>/dev/null)" == 'ishikawa_stack=status;state=ready;boot_enabled=false' ]] || block 'stack_ready_status_failed'
+emit '[STACK] state=ready;boot_enabled=false'
+
+emit '[CHAT] state=start'
+chat_output="$transfer_root/chat-proof-output.txt"
+chat_artifact="$transfer_root/chat-proof.json"
+run_with_heartbeat CHAT "$chat_output" \
+  python3 -B "$proof_runner" \
+    --endpoint http://127.0.0.1:3000/api/v1/chat \
+    --output "$chat_artifact" \
+  || block 'chat_path_proof_failed'
+chat_marker="$(sed -n '/^ishikawa_chat_path=pass;/p' "$chat_output")"
+[[ "$chat_marker" =~ ^ishikawa_chat_path=pass\;http_status=200\;status=answered\;sources=([1-9]|1[0-9]|20)\;excerpts=([1-9]|[1-9][0-9]|[1-3][0-9][0-9]|400)\;claims=([1-9]|[1-5][0-9]|6[0-4])\;citations=([1-9]|[1-9][0-9]|[1-3][0-9][0-9]|400)\;raw_content_retained=false$ ]] \
+  || block 'chat_path_marker_invalid'
+[[ -f "$chat_artifact" && ! -L "$chat_artifact" ]] || block 'chat_artifact_missing'
+emit "[CHAT] state=pass;${chat_marker#ishikawa_chat_path=pass;}"
+
+emit '[STACK] state=stop'
+stack_stop_output="$transfer_root/stack-stop.txt"
+run_with_heartbeat STACK "$stack_stop_output" "$product_root/scripts/ishikawa-stack" stop \
+  || block 'stack_stop_failed'
+grep -Fxq 'ishikawa_stack=stop;state=stopped;boot_enabled=false' "$stack_stop_output" || block 'stack_stop_marker_absent'
+stack_started=false
+[[ "$($product_root/scripts/ishikawa-stack status 2>/dev/null)" == 'ishikawa_stack=status;state=stopped;boot_enabled=false' ]] || block 'stack_stopped_status_failed'
+
+mkdir -m 0700 -p -- "$durable_report_root"
+[[ -d "$durable_report_root" && ! -L "$durable_report_root" ]] || block 'durable_report_directory_unsafe'
+chmod 0700 "$durable_report_root"
+durable_temporary="$durable_report_root/.first-runtime-proof.$$.tmp"
+{
+  printf 'schema=ishikawa.first-runtime-proof.v1\n'
+  printf 'completed_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'corpus=synthetic-v1;documents=6;pages=27;chunks=126;citations=126;embeddings=126\n'
+  printf 'ingestion_action=%s;chat_status=answered;stack_final_state=stopped\n' "$ingestion_action"
+  printf 'boot_enabled=false;raw_chat_content_retained=false;credential_values_retained=false\n'
+  printf 'ishikawa_first_runtime_proof=pass\n'
+} >"$durable_temporary"
+chmod 0600 "$durable_temporary"
+mv -- "$durable_temporary" "$durable_report"
+
+emit "target_hostname=$actual_hostname;os_id=ubuntu;os_version=$VERSION_ID;architecture=amd64"
+emit "synthetic_corpus=active;ingestion_action=$ingestion_action;documents=6;pages=27;chunks=126;citations=126;embeddings=126"
+emit 'runtime_path=nextjs_to_retrieval_to_postgresql_nomic_gemma;chat_status=answered;citation_closure=pass'
+emit 'stack_final_state=stopped;boot_enabled=false;forwarding_changed=false'
+emit 'source_documents=retained;database_publication=retained;raw_chat_content_retained=false;credential_values_retained=false'
+emit 'durable_target_receipt=HOME/Documents/Ishikawa/state/reports/qualification/first-runtime-proof.txt'
+emit 'ishikawa_first_runtime_proof=pass'

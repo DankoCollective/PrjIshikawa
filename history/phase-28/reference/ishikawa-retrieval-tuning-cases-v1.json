@@ -1,0 +1,117 @@
+{
+  "artifact_kind": "ishikawa_retrieval_tuning_cases",
+  "cases": [
+    {
+      "case_id": "R-001",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "How is a temporary controlled-access exception requested and decided?",
+      "required_evidence": [
+        {"display_name": "Synthetic Operations Control 2001", "page": 3},
+        {"display_name": "Synthetic TST-9001 Form", "page": 1},
+        {"display_name": "Synthetic Operations Control 2002", "page": 2}
+      ]
+    },
+    {
+      "case_id": "R-002",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What does Authorized Requester mean, and where is the term reused?",
+      "required_evidence": [
+        {"display_name": "Synthetic Operations Control 2001", "page": 2},
+        {"display_name": "Synthetic Schedule 2003", "page": 2},
+        {"display_name": "Synthetic Governance Manual", "page": 3}
+      ]
+    },
+    {
+      "case_id": "R-003",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "Which checked controls and decision appear on request REQ-0001?",
+      "required_evidence": [
+        {"display_name": "Synthetic TST-9001 Form", "page": 1},
+        {"display_name": "Synthetic TST-9001 Form", "page": 2}
+      ]
+    },
+    {
+      "case_id": "R-004",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What retention rule applies to a scheduling decision record?",
+      "required_evidence": [
+        {"display_name": "Synthetic Schedule 2003", "page": 5},
+        {"display_name": "Synthetic Governance Manual", "page": 8}
+      ]
+    },
+    {
+      "case_id": "R-005",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What happens when incident evidence is incomplete?",
+      "required_evidence": [
+        {"display_name": "Synthetic Incident Reporting Procedure", "page": 3},
+        {"display_name": "Synthetic Governance Manual", "page": 10}
+      ]
+    },
+    {
+      "case_id": "R-006",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What policy content appears on page 1 of 99 TST 2002?",
+      "required_evidence": [
+        {"display_name": "Synthetic Operations Control 2002", "page": 1}
+      ]
+    },
+    {
+      "case_id": "N-001",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "What mileage reimbursement rate applies when an employee uses a personal vehicle for official travel?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-002",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "How many weeks of parental leave does the organization provide?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-003",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "What purchase amount requires competitive procurement?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-004",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "How often must a permanent controlled-access exception be renewed?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-005",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "What monetary penalty applies when incident evidence is submitted late?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "N-006",
+      "class": "nonresponsive",
+      "expected_status": "insufficient-evidence",
+      "question": "Which annual cybersecurity training course must an Authorized Requester complete?",
+      "required_evidence": []
+    },
+    {
+      "case_id": "B-001",
+      "class": "broad-navigation",
+      "expected_status": "answered",
+      "question": "What about the Controlled Materials Access policy?",
+      "required_evidence": []
+    }
+  ],
+  "schema_version": 1,
+  "synthetic_content_only": true
+}

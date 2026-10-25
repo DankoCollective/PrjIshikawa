@@ -1,0 +1,90 @@
+{
+  "artifact_kind": "ishikawa_synthetic_corpus_v2_header_retrieval_cases",
+  "schema_version": 1,
+  "synthetic_content_only": true,
+  "cases": [
+    {
+      "case_id": "H-001",
+      "class": "department-metadata",
+      "question": "Which controlled-materials documents belong to the Information Technology department?",
+      "department": "Information Technology",
+      "clarification_reply": null,
+      "required_evidence": [
+        {"document_ref": "SYN-V2-001", "page": 1},
+        {"document_ref": "SYN-V2-004", "page": 1},
+        {"document_ref": "SYN-V2-006", "page": 1}
+      ]
+    },
+    {
+      "case_id": "H-002",
+      "class": "department-metadata",
+      "question": "Which policy belongs to the Scheduling Office department?",
+      "department": "Scheduling Office",
+      "clarification_reply": null,
+      "required_evidence": [
+        {"document_ref": "SYN-V2-003", "page": 1}
+      ]
+    },
+    {
+      "case_id": "H-003",
+      "class": "header-metadata",
+      "question": "Which document has Incident Response as its Applicability/Class?",
+      "department": null,
+      "clarification_reply": null,
+      "required_evidence": [
+        {"document_ref": "SYN-V2-006", "page": 1}
+      ]
+    },
+    {
+      "case_id": "H-004",
+      "class": "identifier-and-department",
+      "question": "For Information Technology, what is policy 99 TST 2001?",
+      "department": "Information Technology",
+      "clarification_reply": null,
+      "required_evidence": [
+        {"document_ref": "SYN-V2-001", "page": 1}
+      ]
+    },
+    {
+      "case_id": "H-005",
+      "class": "department-metadata",
+      "question": "Which Records Governance document has a review date of 2099-09-15?",
+      "department": "Records Governance",
+      "clarification_reply": null,
+      "required_evidence": [
+        {"document_ref": "SYN-V2-005", "page": 1}
+      ]
+    },
+    {
+      "case_id": "H-006",
+      "class": "department-followup",
+      "question": "There has been an incident concerning controlled materials. Department: Information Technology.",
+      "department": "Information Technology",
+      "clarification_reply": "IT",
+      "required_evidence": [
+        {"document_ref": "SYN-V2-001", "page": 1},
+        {"document_ref": "SYN-V2-006", "page": 1}
+      ]
+    },
+    {
+      "case_id": "H-007",
+      "class": "document-context",
+      "question": "What document has the context Controlled Materials Access?",
+      "department": null,
+      "clarification_reply": null,
+      "required_evidence": [
+        {"document_ref": "SYN-V2-001", "page": 1}
+      ]
+    },
+    {
+      "case_id": "H-008",
+      "class": "department-metadata",
+      "question": "Which Controlled Access Form belongs to Information Technology?",
+      "department": "Information Technology",
+      "clarification_reply": null,
+      "required_evidence": [
+        {"document_ref": "SYN-V2-004", "page": 1}
+      ]
+    }
+  ]
+}

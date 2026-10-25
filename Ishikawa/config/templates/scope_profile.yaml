@@ -1,0 +1,31 @@
+schema_version: 1
+
+generation:
+  served_model: google/gemma-4-26B-A4B-it
+  enable_thinking: false
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 64
+  max_output_tokens: 128
+
+limits:
+  maximum_question_characters: 16384
+  maximum_history_turns: 12
+  maximum_history_characters: 65536
+  maximum_source_references: 20
+
+reason_codes:
+  allow:
+    - organizational_policy
+    - applicable_regulation
+    - code_of_conduct
+    - operating_procedure
+    - professional_organizational_work
+    - prior_answer_or_source_followup
+  needs_clarification:
+    - professional_context_unclear
+    - source_reference_unclear
+  out_of_scope:
+    - personal_or_recreational
+    - unrelated_general_knowledge
+    - non_organizational_request

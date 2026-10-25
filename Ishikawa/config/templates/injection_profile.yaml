@@ -1,0 +1,20 @@
+schema_version: 1
+
+scanner:
+  ruleset: builtin_v1
+  unicode_normalization: NFKC
+  rejection_status: security_rejected
+
+limits:
+  maximum_fields: 64
+  maximum_field_characters: 65536
+  maximum_total_characters: 262144
+
+reason_codes:
+  - hidden_or_control_characters
+  - encoded_or_obfuscated_instruction
+  - instruction_override_attempt
+  - role_impersonation_attempt
+  - prompt_extraction_attempt
+  - data_exfiltration_attempt
+  - tool_or_system_access_attempt

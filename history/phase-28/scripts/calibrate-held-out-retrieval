@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Measure held-out retrieval in a disposable native PostgreSQL database. The
+# accepted database is never mutated, and held-out expected results stay local.
+
+umask 077
+export SYSTEMD_PAGER=cat SYSTEMD_LESS=FRX NO_COLOR=1
+
+emit() { printf '%s\n' "$1"; }
+block() { emit "held_out_retrieval_target_calibration=blocked;reason=$1"; exit 1; }
+
+(( $# == 8 )) || block invalid_argument_count
+expected_hostname="$1"
+expected_os_version="$2"
+production_database="$3"
+owner_role="$4"
+ingest_role="$5"
+retrieval_role="$6"
+transfer_root="$7"
+expected_manifest_sha256="$8"
+test_database=ishikawa_retrieval_calibration_test
+python_payloads=(
+  __init__.py artifact_adapter.py canonical.py errors.py models.py persistence.py
+  persistence_models.py planner.py reasons.py reporting.py retrieval.py validators.py yaml_loader.py
+  method_profile.py relationships.py
+)
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+for identifier in "$production_database" "$owner_role" "$ingest_role" "$retrieval_role"; do
+  [[ "$identifier" =~ ^[a-z][a-z0-9_]{0,62}$ ]] || block invalid_database_identifier
+done
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_manifest_sha256
+[[ "$transfer_root" == /tmp/held-out-retrieval-calibration-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || block invalid_transfer_root
+(( EUID == 0 )) || block root_authority_required
+
+for required in awk basename chmod chown dpkg grep hostname install mktemp pg_conftool pg_isready pg_lsclusters rm runuser sed sha256sum sleep ss systemctl timeout tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+for binary in pg_isready postgres psql; do
+  [[ -x "/usr/lib/postgresql/16/bin/$binary" ]] || block "missing_postgresql_binary_$binary"
+done
+[[ -x /usr/bin/python3 ]] || block missing_python3
+
+manifest_path="$transfer_root/payload.sha256"
+[[ -f "$manifest_path" && ! -L "$manifest_path" && -r "$manifest_path" ]] || block payload_manifest_missing
+[[ "$(sha256sum "$manifest_path" | awk '{print $1}')" == "$expected_manifest_sha256" ]] || block payload_manifest_checksum_mismatch
+[[ "$(awk 'NF {count++} END {print count+0}' "$manifest_path")" == 35 ]] || block payload_manifest_entry_count_invalid
+if ! awk '
+  !/^[0-9a-f]{64}  (payload\/ishikawa\/[A-Za-z0-9_]+\.py|payload\/config\/[A-Za-z0-9_]+\.yaml|payload\/source\/[A-Za-z0-9_.-]+\.pdf|normalized\.json|chunks\.json|embeddings\.json|queries\.json|query-embeddings\.json|artifact-identities\.sha256|0001_initial_rag_catalog\.sql|0002_align_ingestion_ownership\.sql|0003_separate_special_token_count\.sql|0004_preserve_relationship_override_audit\.sql|calibrate-held-out-retrieval\.py)$/ {bad=1}
+  END {exit bad}
+' "$manifest_path"; then block payload_manifest_path_invalid; fi
+(cd "$transfer_root" && sha256sum --check --strict payload.sha256 >/dev/null) || block payload_checksum_verification_failed
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+postgresql_version="$(/usr/lib/postgresql/16/bin/postgres --version | awk '{print $3}')"
+[[ "$postgresql_version" == 16.15 ]] || block postgresql_version_mismatch
+vector_default_version="$(sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/p" /usr/share/postgresql/16/extension/vector.control)"
+[[ "$vector_default_version" == 0.8.7 ]] || block vector_extension_version_mismatch
+python_version="$(/usr/bin/python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
+[[ "$python_version" == 3.12.* ]] || block python_version_mismatch
+psycopg_version="$(/usr/bin/python3 -c 'import psycopg; print(psycopg.__version__)' 2>/dev/null || true)"
+[[ "$psycopg_version" == 3.1.17 ]] || block psycopg_version_mismatch
+
+cluster_line="$(pg_lsclusters --no-header 2>/dev/null || true)"
+[[ "$(awk 'NF {count++} END {print count+0}' <<<"$cluster_line")" == 1 ]] || block database_cluster_count_mismatch
+read -r cluster_version cluster_name cluster_port cluster_status cluster_owner cluster_data_directory cluster_log_file <<<"$cluster_line"
+[[ "$cluster_version" == 16 && "$cluster_name" == main && "$cluster_port" == 5432 && "$cluster_status" == down && "$cluster_owner" == postgres && "$cluster_data_directory" == /var/lib/postgresql/16/main && "$cluster_log_file" == /var/log/postgresql/postgresql-16-main.log ]] || block database_cluster_contract_mismatch
+[[ "$(sed -n 's/^[[:space:]]*\([^#[:space:]][^#[:space:]]*\)[[:space:]]*$/\1/p' /etc/postgresql/16/main/start.conf)" == manual ]] || block database_cluster_start_policy_mismatch
+[[ "$(pg_conftool 16 main show -s listen_addresses 2>/dev/null || true)" == 127.0.0.1 ]] || block database_cluster_listen_address_mismatch
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" == disabled ]] || block postgresql_service_not_disabled
+[[ "$(systemctl is-active postgresql.service 2>/dev/null || true)" != active ]] || block postgresql_service_already_active
+[[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] || block postgresql_cluster_already_active
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_port_in_use_before_start; fi
+
+cluster_started=false
+test_database_created=false
+runtime_root=''
+runner_error=''
+
+postgres_scalar() {
+  runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align --dbname="$1" --command="$2" 2>/dev/null | sed -n '1p'
+}
+drop_test_database() {
+  runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres --command="DROP DATABASE IF EXISTS $test_database WITH (FORCE);" >/dev/null 2>&1
+}
+cleanup() {
+  local status="$?" drop_status=0 stop_status=0
+  trap - EXIT INT TERM ERR
+  set +e
+  if [[ "$cluster_started" == true && "$test_database_created" == true ]]; then
+    drop_test_database || drop_status=$?
+    emit "temporary_database_cleanup_exit_code=$drop_status"
+    (( drop_status == 0 )) || status=1
+  fi
+  if [[ "$cluster_started" == true ]] || systemctl --quiet is-active postgresql@16-main.service 2>/dev/null; then
+    systemctl stop postgresql@16-main.service >/dev/null 2>&1 || stop_status=$?
+    emit "cluster_stop_cleanup_exit_code=$stop_status"
+    (( stop_status == 0 )) || status=1
+  fi
+  if [[ "$runtime_root" == /tmp/ishikawa-calibration-runtime.* && -d "$runtime_root" ]]; then rm -rf -- "$runtime_root"; fi
+  if [[ "$runner_error" == /tmp/ishikawa-calibration-error.* && -f "$runner_error" ]]; then rm -f -- "$runner_error"; fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+emit 'purpose=measure_held_out_retrieval_with_disposable_native_postgresql'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit "postgresql_version=$postgresql_version;vector_default_version=$vector_default_version"
+emit "python_version=$python_version;psycopg_version=$psycopg_version"
+emit 'authorized_actions=start_existing_local_cluster_verify_accepted_database_create_test_database_apply_accepted_schema_write_synthetic_artifacts_measure_retrieval_export_content_free_observations_drop_test_database_verify_accepted_database_stop_cluster'
+emit 'non_actions=no_network_access_no_package_change_no_accepted_database_mutation_no_organizational_document_read_no_model_call_no_secret_processing_no_service_enablement_no_held_out_truth_transfer'
+
+systemctl start postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_start_failed
+cluster_started=true
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_isready --quiet --host=/var/run/postgresql --port=5432 --dbname="$production_database"; then ready=true; break; fi
+  sleep 1
+done
+[[ "$ready" == true ]] || block postgresql_cluster_not_ready
+listener_lines="$(ss -H -ltn 'sport = :5432' 2>/dev/null || true)"
+[[ "$(awk 'NF {count++} END {print count+0}' <<<"$listener_lines")" == 1 ]] || block postgresql_listener_count_mismatch
+grep -Eq '[[:space:]]127\.0\.0\.1:5432[[:space:]]' <<<"$listener_lines" || block postgresql_listener_not_loopback
+
+production_contract_query="SELECT
+  (SELECT string_agg(migration_id || '|' || migration_sha256 || '|' || schema_version, ';' ORDER BY schema_version) FROM rag.schema_migrations) || '#' ||
+  ((SELECT count(*) FROM rag.document_classes) + (SELECT count(*) FROM rag.documents) +
+   (SELECT count(*) FROM rag.ingestion_runs) + (SELECT count(*) FROM rag.publication_batches) +
+   (SELECT count(*) FROM rag.document_versions) + (SELECT count(*) FROM rag.document_artifact_sets) +
+   (SELECT count(*) FROM rag.structural_units) + (SELECT count(*) FROM rag.chunks) +
+   (SELECT count(*) FROM rag.chunk_structural_units) + (SELECT count(*) FROM rag.citation_anchors) +
+   (SELECT count(*) FROM rag.embedding_spaces) + (SELECT count(*) FROM rag.chunk_embeddings) +
+   (SELECT count(*) FROM rag.relationship_types) + (SELECT count(*) FROM rag.relationships) +
+   (SELECT count(*) FROM rag.publication_batch_changes) + (SELECT count(*) FROM rag.active_document_versions) +
+   (SELECT count(*) FROM rag_private.artifact_manifests) + (SELECT count(*) FROM rag_private.ingestion_stages) +
+   (SELECT count(*) FROM rag_private.quarantine_records));"
+production_contract_before="$(postgres_scalar "$production_database" "$production_contract_query")" || block production_database_contract_read_failed
+expected_production_contract="0001_initial_rag_catalog|3e2f5e61bd8038bc29764024e21b8bec754fad8a282f89abaf6130e345d6380a|1;0002_align_ingestion_ownership|74b08adb8aac9828ac076744fedfd22619751326c911bf17f1fa8690e01345e4|2;0003_separate_special_token_count|5e833d8ff556c0e6158daf0419b1013235a11e1a94f1f560206ba813e1fc3761|3;0004_preserve_relationship_override_audit|5764f6e12a74b18747163c61ef3f314e8dff140a3586b298c62be616a1dc185f|4#0"
+[[ "$production_contract_before" == "$expected_production_contract" ]] || block production_database_contract_mismatch
+[[ "$(postgres_scalar postgres "SELECT count(*) FROM pg_database WHERE datname='$test_database';")" == 0 ]] || block temporary_database_already_exists
+
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres --command="CREATE DATABASE $test_database WITH OWNER $owner_role ENCODING 'UTF8' TEMPLATE template0;" >/dev/null
+test_database_created=true
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres --command="REVOKE ALL ON DATABASE $test_database FROM PUBLIC; GRANT CONNECT ON DATABASE $test_database TO $ingest_role, $retrieval_role;" >/dev/null
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$test_database" --command='CREATE EXTENSION vector; REVOKE CREATE ON SCHEMA public FROM PUBLIC;' >/dev/null
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$test_database" --set=owner_role="$owner_role" --set=ingest_role="$ingest_role" --set=retrieval_role="$retrieval_role" --set=migration_sha256='3e2f5e61bd8038bc29764024e21b8bec754fad8a282f89abaf6130e345d6380a' <"$transfer_root/0001_initial_rag_catalog.sql" >/dev/null
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$test_database" --set=owner_role="$owner_role" --set=ingest_role="$ingest_role" --set=retrieval_role="$retrieval_role" --set=migration_sha256='74b08adb8aac9828ac076744fedfd22619751326c911bf17f1fa8690e01345e4' <"$transfer_root/0002_align_ingestion_ownership.sql" >/dev/null
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$test_database" --set=owner_role="$owner_role" --set=ingest_role="$ingest_role" --set=retrieval_role="$retrieval_role" --set=migration_sha256='5e833d8ff556c0e6158daf0419b1013235a11e1a94f1f560206ba813e1fc3761' <"$transfer_root/0003_separate_special_token_count.sql" >/dev/null
+runuser -u postgres -- /usr/lib/postgresql/16/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$test_database" --set=owner_role="$owner_role" --set=ingest_role="$ingest_role" --set=retrieval_role="$retrieval_role" --set=migration_sha256='5764f6e12a74b18747163c61ef3f314e8dff140a3586b298c62be616a1dc185f' <"$transfer_root/0004_preserve_relationship_override_audit.sql" >/dev/null
+emit 'temporary_database_created=true;accepted_schema_version=4'
+
+runtime_root="$(mktemp -d /tmp/ishikawa-calibration-runtime.XXXXXX)"
+chown postgres:postgres "$runtime_root"
+chmod 0700 "$runtime_root"
+install -d -o postgres -g postgres -m 0700 "$runtime_root/ishikawa" "$runtime_root/config" "$runtime_root/source"
+for payload in "${python_payloads[@]}"; do install -o postgres -g postgres -m 0600 "$transfer_root/payload/ishikawa/$payload" "$runtime_root/ishikawa/$payload"; done
+for payload in document_classes.yaml document_catalog.yaml ingestion_manifest.yaml; do install -o postgres -g postgres -m 0600 "$transfer_root/payload/config/$payload" "$runtime_root/config/$payload"; done
+for payload in "$transfer_root"/payload/source/*.pdf; do install -o postgres -g postgres -m 0600 "$payload" "$runtime_root/source/$(basename "$payload")"; done
+for payload in normalized.json chunks.json embeddings.json queries.json query-embeddings.json artifact-identities.sha256; do install -o postgres -g postgres -m 0600 "$transfer_root/$payload" "$runtime_root/$payload"; done
+install -o postgres -g postgres -m 0700 "$transfer_root/calibrate-held-out-retrieval.py" "$runtime_root/test.py"
+runner_output="$runtime_root/result.txt"
+runner_observations="$runtime_root/retrieval-observations.json"
+runner_error="$(mktemp /tmp/ishikawa-calibration-error.XXXXXX)"
+
+set +e
+timeout --foreground 600 runuser -u postgres -- env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$runtime_root" /usr/bin/python3 "$runtime_root/test.py" "$test_database" "$runtime_root/config" "$runtime_root/source" "$runtime_root/normalized.json" "$runtime_root/chunks.json" "$runtime_root/embeddings.json" "$runtime_root/artifact-identities.sha256" "$runtime_root/queries.json" "$runtime_root/query-embeddings.json" "$runner_observations" >"$runner_output" 2>"$runner_error"
+runner_status=$?
+set -e
+if (( runner_status != 0 )); then
+  emit "calibration_runner_exit_code=$runner_status;error_sha256=$(sha256sum "$runner_error" | awk '{print $1}');error_bytes=$(wc -c <"$runner_error" | tr -d ' ');raw_error_retained=false"
+  block calibration_runner_failed
+fi
+
+output_contract=pass
+while IFS= read -r line; do
+  if (( ${#line} > 1024 )) || [[ "$line" == *$'\t'* ]] || ! [[ "$line" =~ ^[A-Za-z0-9_.-]+=[A-Za-z0-9_.:+@/~,-]+(\;[A-Za-z0-9_.-]+=[A-Za-z0-9_.:+@/~,-]+)*$ ]]; then output_contract=blocked; continue; fi
+  emit "$line"
+done <"$runner_output"
+[[ "$output_contract" == pass ]] || block calibration_runner_output_contract_invalid
+[[ "$(grep -Fxc 'held_out_retrieval_measurement=pass' "$runner_output" || true)" == 1 ]] || block calibration_runner_pass_marker_invalid
+[[ -f "$runner_observations" && ! -L "$runner_observations" ]] || block observation_artifact_missing
+install -m 0600 "$runner_observations" "$transfer_root/retrieval-observations.json"
+if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ && "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then
+  chown "$SUDO_UID:$SUDO_GID" "$transfer_root/retrieval-observations.json" || block observation_ownership_return_failed
+fi
+
+drop_test_database || block temporary_database_drop_failed
+test_database_created=false
+[[ "$(postgres_scalar postgres "SELECT count(*) FROM pg_database WHERE datname='$test_database';")" == 0 ]] || block temporary_database_still_present
+production_contract_after="$(postgres_scalar "$production_database" "$production_contract_query")" || block production_database_post_test_read_failed
+[[ "$production_contract_after" == "$production_contract_before" ]] || block production_database_changed
+systemctl stop postgresql@16-main.service >/dev/null 2>&1 || block postgresql_cluster_stop_failed
+cluster_started=false
+cluster_status_after="$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {print $4}')"
+[[ "$cluster_status_after" == down ]] || block database_cluster_not_stopped
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then block postgresql_listener_remains_after_stop; fi
+service_active_after="$(systemctl is-active postgresql.service 2>/dev/null || true)"
+service_enabled_after="$(systemctl is-enabled postgresql.service 2>/dev/null || true)"
+[[ "$service_active_after" != active && "$service_enabled_after" == disabled ]] || block postgresql_service_final_state_mismatch
+
+emit 'temporary_database_dropped=true;accepted_database_unchanged=true'
+emit "cluster_status=$cluster_status_after;postgresql_port_5432=free;postgresql_service_active=$service_active_after;postgresql_service_enabled=$service_enabled_after"
+emit 'held_out_retrieval_target_calibration=pass'

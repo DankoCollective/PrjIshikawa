@@ -1,0 +1,731 @@
+{
+  "artifact_kind": "ishikawa_retrieval_api_cases",
+  "cases": [
+    {
+      "case_id": "R-001",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to time-bounded access to controlled training materials?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Materials Access Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-002",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to time-bounded access to controlled training materials, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Materials Access Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-003",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to review of controlled-access exceptions?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Access Exception Review",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-004",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to review of controlled-access exceptions, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Access Exception Review",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-005",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to scheduled controlled activity?",
+      "required_evidence": [
+        {
+          "display_name": "Scheduled Activity Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-006",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to scheduled controlled activity, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Scheduled Activity Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-007",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to a request for temporary controlled access?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Access Exception Request",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-008",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to a request for temporary controlled access, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Access Exception Request",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-009",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to governance of requests, decisions, evidence, and lifecycle events?",
+      "required_evidence": [
+        {
+          "display_name": "Operations Governance Manual",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-010",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to governance of requests, decisions, evidence, and lifecycle events, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Operations Governance Manual",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-011",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to controlled-materials incidents?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Reporting and Response Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-012",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to controlled-materials incidents, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Reporting and Response Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-013",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to receipt, use, transfer, and return of controlled materials?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Materials Handling Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-014",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to receipt, use, transfer, and return of controlled materials, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Materials Handling Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-015",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to creation and modification of controlled schedules?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Activity Scheduling Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-016",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to creation and modification of controlled schedules, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Controlled Activity Scheduling Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-017",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to a requested change to approved controlled activity?",
+      "required_evidence": [
+        {
+          "display_name": "Schedule Change Request",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-018",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to a requested change to approved controlled activity, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Schedule Change Request",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-019",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to controlled activity outside standard support hours?",
+      "required_evidence": [
+        {
+          "display_name": "After-Hours Operations Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-020",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to controlled activity outside standard support hours, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "After-Hours Operations Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-021",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to readiness for scheduled controlled activity?",
+      "required_evidence": [
+        {
+          "display_name": "Operational Readiness Checklist",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-022",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to readiness for scheduled controlled activity, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Operational Readiness Checklist",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-023",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to retention and disposition of operational records?",
+      "required_evidence": [
+        {
+          "display_name": "Records Retention Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-024",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to retention and disposition of operational records, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Records Retention Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-025",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to correction of an authoritative operational record?",
+      "required_evidence": [
+        {
+          "display_name": "Record Correction Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-026",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to correction of an authoritative operational record, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Record Correction Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-027",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to recording an operational or policy decision?",
+      "required_evidence": [
+        {
+          "display_name": "Decision Record Form",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-028",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to recording an operational or policy decision, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Decision Record Form",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-029",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to evidence used to prove policy and procedure execution?",
+      "required_evidence": [
+        {
+          "display_name": "Audit Evidence Guide",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-030",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to evidence used to prove policy and procedure execution, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Audit Evidence Guide",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-031",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to classification of operational, security, access, and records incidents?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Classification Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-032",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to classification of operational, security, access, and records incidents, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Classification Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-033",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to notification and escalation of active incidents?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Escalation Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-034",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to notification and escalation of active incidents, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Escalation Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-035",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to initial reporting of a suspected incident?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Intake Form",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-036",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to initial reporting of a suspected incident, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Incident Intake Form",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-037",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to review of incident causes, response, and corrective actions?",
+      "required_evidence": [
+        {
+          "display_name": "Post-Incident Review Guide",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-038",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to review of incident causes, response, and corrective actions, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Post-Incident Review Guide",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-039",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to acceptable use of organizational technology and information?",
+      "required_evidence": [
+        {
+          "display_name": "Acceptable Use Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-040",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to acceptable use of organizational technology and information, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Acceptable Use Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-041",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to remote connection to organizational systems?",
+      "required_evidence": [
+        {
+          "display_name": "Remote Access Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-042",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to remote connection to organizational systems, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Remote Access Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-043",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to mobile devices accessing organizational information?",
+      "required_evidence": [
+        {
+          "display_name": "Mobile Device Standard",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-044",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to mobile devices accessing organizational information, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Mobile Device Standard",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-045",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to a temporary exception to technology-use controls?",
+      "required_evidence": [
+        {
+          "display_name": "Technology Use Exception Request",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-046",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to a temporary exception to technology-use controls, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Technology Use Exception Request",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-047",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to suspected misuse, device loss, credential exposure, or unsafe access?",
+      "required_evidence": [
+        {
+          "display_name": "Security Event Reporting Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-048",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to suspected misuse, device loss, credential exposure, or unsafe access, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Security Event Reporting Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-049",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to access granted to vendors and external service personnel?",
+      "required_evidence": [
+        {
+          "display_name": "Third-Party Access Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-050",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to access granted to vendors and external service personnel, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Third-Party Access Policy",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-051",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to onboarding, transfer, leave, and separation access changes?",
+      "required_evidence": [
+        {
+          "display_name": "Personnel Access Lifecycle Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-052",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to onboarding, transfer, leave, and separation access changes, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Personnel Access Lifecycle Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-053",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to classification and handling of organizational information?",
+      "required_evidence": [
+        {
+          "display_name": "Data Classification Standard",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-054",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to classification and handling of organizational information, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Data Classification Standard",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-055",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to authorization of workforce or third-party system access?",
+      "required_evidence": [
+        {
+          "display_name": "Access Authorization Form",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-056",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to authorization of workforce or third-party system access, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Access Authorization Form",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-057",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to periodic review of elevated access?",
+      "required_evidence": [
+        {
+          "display_name": "Privileged Access Review Procedure",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-058",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to periodic review of elevated access, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Privileged Access Review Procedure",
+          "page": 3
+        }
+      ]
+    },
+    {
+      "case_id": "R-059",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required control applies to internal and external sharing of classified information?",
+      "required_evidence": [
+        {
+          "display_name": "Information Sharing Policy",
+          "page": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R-060",
+      "class": "responsive",
+      "expected_status": "answered",
+      "question": "What required-control steps apply to internal and external sharing of classified information, and when is the control incomplete?",
+      "required_evidence": [
+        {
+          "display_name": "Information Sharing Policy",
+          "page": 3
+        }
+      ]
+    }
+  ],
+  "corpus_identity": "synthetic-corpus-v3",
+  "gate_profile": "frontier_60",
+  "schema_version": 1,
+  "synthetic_content_only": true
+}
+
+

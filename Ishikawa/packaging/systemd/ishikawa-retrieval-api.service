@@ -1,0 +1,23 @@
+[Unit]
+Description=Ishikawa Retrieval API
+Documentation=file:%h/Documents/Ishikawa/docs/SERVICE_OPERATIONS.md
+After=postgresql.service
+ConditionFileIsExecutable=%h/Documents/Ishikawa/scripts/ishikawa-retrieval-api
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/Ishikawa
+ExecStart=%h/Documents/Ishikawa/scripts/ishikawa-retrieval-api --serve
+PassEnvironment=ISHIKAWA_GEMMA_API_KEY ISHIKAWA_NOMIC_API_KEY ISHIKAWA_POSTGRESQL_PASSWORD
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/Documents/Ishikawa/state/logs %h/Documents/Ishikawa/state/run

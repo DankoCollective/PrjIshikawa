@@ -1,0 +1,27 @@
+schema_version: 2
+
+display_name: Ishikawa
+tagline: Knowledge assistant
+
+ui:
+  quick_questions:
+    - What policy governs this situation?
+    - Summarize the applicable operating procedure.
+    - What reporting steps are required?
+
+  footer_notice: Verify provided information using official documents.
+
+  empty_chat:
+    blocks:
+      - type: heading
+        font: serif
+        size: display
+        markdown: |
+          **What would you like**
+          **to understand?**
+
+      - type: body
+        font: sans
+        size: medium
+        markdown: |
+          Ask questions across approved policy, regulation, conduct, and procedure sources.

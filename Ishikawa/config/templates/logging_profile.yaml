@@ -1,0 +1,13 @@
+schema_version: 1
+
+base_profile: default
+operational_filename: retrieval.jsonl
+metrics_filename: metrics.jsonl
+audit_filename: audit.jsonl
+maximum_event_bytes: 16384
+maximum_file_bytes: 10485760
+retained_file_count: 5
+maximum_verbose_seconds: 3600
+operational_retention_days: 30
+metrics_retention_days: 30
+audit_retention_days: 90

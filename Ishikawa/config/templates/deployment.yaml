@@ -1,0 +1,19 @@
+schema_version: 1
+
+runtime:
+  node_network_mode: host
+
+web:
+  bind_host: 127.0.0.1
+  port: 3000
+  retrieval_base_url: http://127.0.0.1:1384
+
+retrieval:
+  bind_host: 127.0.0.1
+  port: 1384
+  maximum_concurrent_requests: 8
+  request_read_timeout_seconds: 30
+
+postgresql:
+  bind_host: 127.0.0.1
+  port: 5432

@@ -1,0 +1,16 @@
+schema_version: 1
+
+nomic:
+  served_model: nomic-ai/nomic-embed-text-v1.5
+  embedding_endpoint_url: http://127.0.0.1:8001/v1/embeddings
+  tokenization_endpoint_url: http://127.0.0.1:8001/tokenize
+  credential_environment: ISHIKAWA_NOMIC_API_KEY
+  timeout_seconds: 120
+  maximum_response_bytes: 1048576
+  batch_size: 16
+
+postgresql:
+  database_name: rag_catalog
+  database_user: rag_ingest
+  credential_environment: ISHIKAWA_POSTGRESQL_INGEST_PASSWORD
+  connect_timeout_seconds: 10

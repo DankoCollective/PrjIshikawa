@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Verify one complete, extracted Ishikawa v1.3 deployment candidate.
+#
+# Mental model:
+#   Close the package inventory with checksums, bind the qualified critical
+#   runtime identities, and reject historical or generated implementation
+#   files before installation.
+#
+# Inputs or prerequisites:
+#   One extracted candidate containing application, database, and SHA256SUMS.
+#
+# Outputs:
+#   One content-free pass or blocked marker. Nothing is installed or changed.
+#
+# Usage:
+#   bash ./verify-ishikawa-v1.3
+
+fail() {
+  printf 'ishikawa_v1_3_verification=blocked;reason=%s\n' "$1" >&2
+  exit 1
+}
+
+if (( $# > 0 )); then
+  if [[ $# == 1 && ( "$1" == --help || "$1" == -h ) ]]; then
+    printf '%s\n' 'Usage: verify-ishikawa-v1.3'
+    exit 0
+  fi
+  fail argument_invalid
+fi
+
+readonly package_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly manifest="$package_root/SHA256SUMS"
+readonly application_root="$package_root/application"
+readonly database_root="$package_root/database"
+readonly python_root="$application_root/payload/application/python/ishikawa"
+readonly web_root="$application_root/payload/application/web"
+readonly config_root="$application_root/payload/config"
+readonly routing_module="$python_root/query_routing.py"
+readonly retrieval_module="$python_root/retrieval.py"
+readonly retrieval_service_module="$python_root/retrieval_service.py"
+readonly postgres_retrieval_module="$python_root/postgres_retrieval.py"
+readonly reconstruction_module="$python_root/reconstruction.py"
+readonly generation_module="$python_root/generation.py"
+readonly generation_transport_module="$python_root/generation_transport.py"
+readonly readiness_module="$python_root/readiness.py"
+readonly method_profile="$config_root/method_profile.yaml"
+readonly reconstruction_profile="$config_root/reconstruction_profile.yaml"
+readonly chat_workspace="$web_root/components/chat-workspace.js"
+readonly web_package="$web_root/package.json"
+readonly final_schema="$database_root/schema.sql"
+
+readonly routing_module_sha256='9130632cb7a7b9a007d85a416979da07f2180694a32a1da906a35bfcb9c92139'
+readonly retrieval_module_sha256='a1b7a83543bb1d2bc99282606af6b4270cd120c945b37f6df215cc9a687665eb'
+readonly retrieval_service_module_sha256='7cbbecc2f51f4fd424011923d451e175e0b89b9b5880542851ab253eddeb6c44'
+readonly postgres_retrieval_module_sha256='97cf9fe0b1a7ade47a091c14a56c4577bd919f021c7b9d6b5f8497941a0eaad9'
+readonly reconstruction_module_sha256='6d1dee8f5fd798da9142a73efe477b9f1b14fabd95e8676da9e6f7034de58683'
+readonly generation_module_sha256='8e525629f7fa0f2b4b5279c55e65c5e9892b944b0eacf2fef03e1f14d1469787'
+readonly generation_transport_module_sha256='535e195c89cb7849988a9a6e17dbf97bd9de67e12f09ee73b79fc7e65560f69c'
+readonly readiness_module_sha256='050566acb8bc868871513e0f2b273bf394042aba8fbe2b57af34caee6b1d7b62'
+readonly method_profile_sha256='6fd44f53b22a0a507d8c615a77c71ddc87f25e224dc51f2d3dcbeed1cabd61bf'
+readonly reconstruction_profile_sha256='718a959122647b3b9755053c9d4dcf070c9f600f40b20e9958e7bf36724fb849'
+readonly chat_workspace_sha256='e3e3e1eb1e3a6f65d1b0463cbb19e7316478d885f04bd390268384d173a02ecc'
+readonly web_package_sha256='cc53fbb830c2199923f68c98f31fae3659c10a6a64b55dfdf810b5c38a3bb505'
+readonly final_schema_sha256='1fdbed2439fb5bfecaef5dd857f380661c298f8459d6cc2319114b78e5a09c5d'
+
+for required in awk cmp find grep mktemp rm sha256sum sort; do
+  command -v "$required" >/dev/null 2>&1 || fail required_command_missing
+done
+for directory in "$package_root" "$application_root" "$database_root"; do
+  [[ -d "$directory" && ! -L "$directory" ]] || fail package_directory_unsafe
+done
+for file in \
+  "$manifest" "$application_root/SHA256SUMS" "$database_root/SHA256SUMS" \
+  "$routing_module" "$retrieval_module" "$retrieval_service_module" \
+  "$postgres_retrieval_module" "$reconstruction_module" "$generation_module" \
+  "$generation_transport_module" "$readiness_module" \
+  "$method_profile" "$reconstruction_profile" "$chat_workspace" \
+  "$web_package" "$final_schema"; do
+  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || fail package_file_unsafe
+done
+find "$package_root" -type l -print -quit | grep -q . && fail package_symlink_found
+
+temporary_root="$(mktemp -d /tmp/ishikawa-v1.3-verification.XXXXXX)"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  [[ "$temporary_root" == /tmp/ishikawa-v1.3-verification.* && -d "$temporary_root" ]] \
+    && rm -rf -- "$temporary_root"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+(cd -- "$package_root" && find . -type f ! -path './SHA256SUMS' -printf '%P\n' | sort) \
+  >"$temporary_root/actual-files.txt"
+awk '{print $2}' "$manifest" | sort >"$temporary_root/manifest-files.txt"
+cmp -s "$temporary_root/actual-files.txt" "$temporary_root/manifest-files.txt" \
+  || fail package_inventory_mismatch
+
+(cd -- "$package_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail package_checksum_failed
+(cd -- "$application_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail application_checksum_failed
+(cd -- "$database_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail database_checksum_failed
+
+check_identity() {
+  [[ "$(sha256sum -- "$1" | awk '{print $1}')" == "$2" ]] \
+    || fail "$3"
+}
+check_identity "$routing_module" "$routing_module_sha256" routing_module_identity_mismatch
+check_identity "$retrieval_module" "$retrieval_module_sha256" retrieval_module_identity_mismatch
+check_identity "$retrieval_service_module" "$retrieval_service_module_sha256" retrieval_service_module_identity_mismatch
+check_identity "$postgres_retrieval_module" "$postgres_retrieval_module_sha256" postgres_retrieval_module_identity_mismatch
+check_identity "$reconstruction_module" "$reconstruction_module_sha256" reconstruction_module_identity_mismatch
+check_identity "$generation_module" "$generation_module_sha256" generation_module_identity_mismatch
+check_identity "$generation_transport_module" "$generation_transport_module_sha256" generation_transport_module_identity_mismatch
+check_identity "$readiness_module" "$readiness_module_sha256" readiness_module_identity_mismatch
+check_identity "$method_profile" "$method_profile_sha256" method_profile_identity_mismatch
+check_identity "$reconstruction_profile" "$reconstruction_profile_sha256" reconstruction_profile_identity_mismatch
+check_identity "$chat_workspace" "$chat_workspace_sha256" chat_workspace_identity_mismatch
+check_identity "$web_package" "$web_package_sha256" web_package_identity_mismatch
+check_identity "$final_schema" "$final_schema_sha256" final_schema_identity_mismatch
+
+[[ "$(find "$python_root" -maxdepth 1 -type f -name '*.py' | awk 'END {print NR+0}')" == 52 ]] \
+  || fail python_module_count_mismatch
+[[ "$(find "$application_root/payload/docs" -maxdepth 1 -type f -name '*.md' | awk 'END {print NR+0}')" == 11 ]] \
+  || fail operator_document_count_mismatch
+[[ "$(find "$web_root" -type f | awk 'END {print NR+0}')" == 15 ]] \
+  || fail web_runtime_file_count_mismatch
+grep -Fq 'schema-version-5' "$final_schema" || fail schema_version_mismatch
+grep -Fq 'score_calibration:' "$method_profile" || fail retrieval_profile_incomplete
+grep -Fq 'answer_token_reserve: 2048' "$reconstruction_profile" \
+  || fail answer_reserve_mismatch
+grep -Fq 'generation_optional_group_limit: 6' "$reconstruction_profile" \
+  || fail generation_optional_group_limit_mismatch
+
+if find "$package_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q . \
+  || find "$package_root" -type d -name __pycache__ -print -quit | grep -q .; then
+  fail generated_python_file_found
+fi
+if find "$package_root" -type f \( -iname '*migration*' -o -iname '*mutation*' -o -iname '*patch*' -o -iname '*repair*' \) -print -quit | grep -q .; then
+  fail historical_mutation_file_found
+fi
+
+printf '%s\n' \
+  'ishikawa_v1_3_verification=pass;application=frontier_candidate;database_schema=version_5;python_modules=52;operator_documents=11;web_runtime_files=15;retrieval_mrr_at_20=0.895450;exact_generation_boundary=bound;bounded_generation=v13_50;historical_mutation_files=0'

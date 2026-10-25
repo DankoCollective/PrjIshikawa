@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Run the checksum-bound Ishikawa native-prerequisite inventory and package
+#   its content-free result for return.
+#
+# Mental model:
+#   Verify the carried inventory kit, extract it into one private temporary
+#   directory, run its read-only inspector, verify the result, atomically place
+#   one result archive and checksum in /tmp, and remove temporary plaintext.
+#
+# Inputs or prerequisites:
+#   Run as the intended non-root operator on Ubuntu 26.04 AMD64. The handoff
+#   directory must contain its unchanged archive, sidecar, and checksum file.
+#
+# Outputs or artifact lane:
+#   /tmp/ishikawa-native-prerequisite-inventory-<UTC>.tar.gz and its SHA-256
+#   sidecar. No package, service, database, credential, or application changes.
+#
+# Usage:
+#   bash ./run-native-prerequisite-inventory
+
+usage() {
+  sed -n '3,22p' "${BASH_SOURCE[0]}"
+  printf '%s\n' \
+    'Options:' \
+    '  --expected-hostname NAME  Optional exact short hostname.' \
+    '  --output-parent PATH      Absolute directory under /tmp; default /tmp.' \
+    '  --validate-only           Verify the carried handoff without host inventory.'
+}
+
+fail() {
+  printf 'ishikawa_native_prerequisite_handoff=blocked;reason=%s\n' "$1" >&2
+  exit 1
+}
+
+readonly COMMAND_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly KIT_ARCHIVE="$COMMAND_DIR/ishikawa-native-prerequisite-inventory.tar.gz"
+readonly KIT_CHECKSUM="$KIT_ARCHIVE.sha256"
+readonly KIT_ROOT_NAME='ishikawa-native-prerequisite-inventory'
+
+expected_hostname=''
+output_parent='/tmp'
+validate_only=false
+while (( $# > 0 )); do
+  case "$1" in
+    --expected-hostname) expected_hostname="${2:-}"; shift 2 ;;
+    --output-parent) output_parent="${2:-}"; shift 2 ;;
+    --validate-only) validate_only=true; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) fail argument_invalid ;;
+  esac
+done
+
+(( EUID != 0 )) || fail non_root_operator_required
+[[ -z "$expected_hostname" || "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail expected_hostname_invalid
+[[ "$output_parent" == /tmp || "$output_parent" == /tmp/* ]] || fail output_parent_invalid
+[[ -d "$output_parent" && ! -L "$output_parent" && -w "$output_parent" ]] || fail output_parent_unavailable
+for required in awk bash basename chmod date dirname find grep gzip mkdir mktemp mv rm sed sha256sum sort tar; do
+  command -v "$required" >/dev/null 2>&1 || fail "command_missing_$required"
+done
+for file in "$KIT_ARCHIVE" "$KIT_CHECKSUM"; do
+  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || fail handoff_input_missing
+done
+(
+  cd -- "$COMMAND_DIR"
+  sha256sum --check --strict "$(basename -- "$KIT_CHECKSUM")" >/dev/null
+) || fail handoff_archive_checksum_failed
+
+work_root="$(mktemp -d "$output_parent/ishikawa-native-prerequisite-run.XXXXXX")"
+chmod 0700 "$work_root"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  [[ "$work_root" == "$output_parent"/ishikawa-native-prerequisite-run.* && -d "$work_root" ]] && rm -rf -- "$work_root"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+mkdir -m 0700 -- "$work_root/extracted"
+tar -xzf "$KIT_ARCHIVE" -C "$work_root/extracted"
+kit_root="$work_root/extracted/$KIT_ROOT_NAME"
+[[ -d "$kit_root" && ! -L "$kit_root" ]] || fail inventory_kit_root_invalid
+[[ "$(find "$kit_root" -type f | awk 'END {print NR+0}')" == 3 ]] || fail inventory_kit_file_count_invalid
+find "$kit_root" -type l -print -quit | grep -q . && fail inventory_kit_symlink_found
+(
+  cd -- "$kit_root"
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) || fail inventory_kit_internal_checksum_failed
+inspector="$kit_root/inspect-native-prerequisites"
+[[ -x "$inspector" && ! -L "$inspector" ]] || fail inventory_inspector_invalid
+bash -n "$inspector"
+bash "$inspector" --help >/dev/null
+
+if [[ "$validate_only" == true ]]; then
+  printf '%s\n' \
+    'purpose=validate_ishikawa_native_prerequisite_handoff' \
+    'handoff_checksum=pass;inventory_internal_checksums=pass;inventory_files=3' \
+    'host_inventory_run=false;package_downloaded=false;package_installed=false;service_changed=false' \
+    'ishikawa_native_prerequisite_handoff_source=pass'
+  exit 0
+fi
+
+result_dir="$work_root/result"
+inspector_args=(
+  --expected-os-version 26.04
+  --expected-architecture amd64
+  --output-dir "$result_dir"
+)
+if [[ -n "$expected_hostname" ]]; then
+  inspector_args+=(--expected-hostname "$expected_hostname")
+fi
+bash "$inspector" "${inspector_args[@]}"
+[[ -d "$result_dir" && ! -L "$result_dir" ]] || fail inventory_result_missing
+[[ "$(find "$result_dir" -maxdepth 1 -type f | awk 'END {print NR+0}')" == 4 ]] || fail inventory_result_file_count_invalid
+find "$result_dir" -type l -print -quit | grep -q . && fail inventory_result_symlink_found
+(
+  cd -- "$result_dir"
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) || fail inventory_result_checksum_failed
+grep -Fq 'ishikawa_native_prerequisite_inventory=pass;qualification_status=not_run' "$result_dir/inventory-report.txt" || fail inventory_result_contract_failed
+
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+result_name="ishikawa-native-prerequisite-inventory-$timestamp"
+staged_archive="$work_root/$result_name.tar.gz"
+staged_checksum="$work_root/$result_name.tar.gz.sha256"
+final_archive="$output_parent/$result_name.tar.gz"
+final_checksum="$final_archive.sha256"
+[[ ! -e "$final_archive" && ! -L "$final_archive" && ! -e "$final_checksum" && ! -L "$final_checksum" ]] || fail result_path_exists
+
+tar --sort=name --format=posix --pax-option=delete=atime,delete=ctime \
+  --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+  --transform="s#^result#$result_name#" -C "$work_root" -cf - result | gzip -n >"$staged_archive"
+result_sha256="$(sha256sum "$staged_archive" | awk '{print $1}')"
+printf '%s  %s\n' "$result_sha256" "$(basename -- "$final_archive")" >"$staged_checksum"
+mkdir -m 0700 -- "$work_root/result-check"
+tar -xzf "$staged_archive" -C "$work_root/result-check"
+(
+  cd -- "$work_root/result-check/$result_name"
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) || fail packaged_result_checksum_failed
+
+mv -- "$staged_archive" "$final_archive"
+mv -- "$staged_checksum" "$final_checksum"
+chmod 0600 "$final_archive" "$final_checksum"
+(
+  cd -- "$output_parent"
+  sha256sum --check --strict "$(basename -- "$final_checksum")" >/dev/null
+) || fail final_result_checksum_failed
+
+printf 'ishikawa_native_prerequisite_handoff=pass;result_archive=%s;result_checksum=%s;result_sha256=%s\n' \
+  "$final_archive" "$final_checksum" "$result_sha256"
+

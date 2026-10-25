@@ -1,0 +1,37 @@
+schema_version: 1
+
+base_retrieval_profile_id: 7c8f8f37ccce47cde1bdbb6cb43b321be14e54a11c8435e845ab7508c3dc8edb
+
+traversal:
+  maximum_hops: 1
+  direction: outgoing
+  relationship_types:
+    - explicit_reference.document
+
+relationship_types:
+  - relationship_type: explicit_reference.document
+    display_name: Explicit document reference
+    inverse_display_name: Referenced by
+    source_kind: structural_unit
+    target_kind: document
+    target_version_behavior: resolve_active_version
+    influences_retrieval: true
+    status: active
+
+  - relationship_type: explicit_reference.external
+    display_name: Explicit external reference
+    inverse_display_name: Referenced by
+    source_kind: structural_unit
+    target_kind: external
+    target_version_behavior: fixed_external_identity
+    influences_retrieval: false
+    status: active
+
+  - relationship_type: supersedes
+    display_name: Supersedes document version
+    inverse_display_name: Superseded by
+    source_kind: document
+    target_kind: document_version
+    target_version_behavior: fixed_version
+    influences_retrieval: false
+    status: active

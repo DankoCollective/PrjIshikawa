@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Read-only inventory of the exact native compatibility package candidate.
+# The helper writes no target file and performs no metadata update, download,
+# installation, database action, service action, or configuration change.
+
+emit() {
+  printf '%s\n' "$1"
+}
+
+block() {
+  emit "native_database_compatibility_inventory=blocked;reason=$1"
+  exit 1
+}
+
+if (( $# != 2 )); then
+  block invalid_argument_count
+fi
+expected_hostname="$1"
+expected_os_version="$2"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+
+for required in apt-cache awk date df dpkg dpkg-query find hostname sed sha256sum stat tr; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+
+package=libllvm19
+candidate="$(apt-cache policy "$package" | awk '/^[[:space:]]*Candidate:/ {print $2; exit}')"
+[[ -n "$candidate" && "$candidate" != '(none)' ]] || block libllvm19_candidate_absent
+spec="$package=$candidate"
+
+field() {
+  local wanted="$1"
+  apt-cache show "$spec" 2>/dev/null \
+    | awk -v wanted="$wanted" '
+        BEGIN {found=0}
+        /^[[:space:]]*$/ {if (found) exit; next}
+        index($0, wanted ": ") == 1 {print substr($0, length(wanted) + 3); found=1}
+      ' \
+    | sed -n '1p'
+}
+
+record_package="$(field Package)"
+record_version="$(field Version)"
+record_architecture="$(field Architecture)"
+record_source="$(field Source)"
+record_filename="$(field Filename)"
+record_size="$(field Size)"
+record_sha256="$(field SHA256)"
+record_depends="$(field Depends)"
+record_breaks="$(field Breaks)"
+record_conflicts="$(field Conflicts)"
+record_replaces="$(field Replaces)"
+
+[[ "$record_package" == "$package" && "$record_version" == "$candidate" && "$record_architecture" == amd64 ]] \
+  || block libllvm19_candidate_record_mismatch
+[[ "$record_filename" =~ ^pool/.+\.deb$ && "$record_size" =~ ^[0-9]+$ && "$record_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || block libllvm19_candidate_record_incomplete
+[[ -n "$record_depends" ]] || block libllvm19_dependency_record_absent
+if [[ -z "$record_source" ]]; then
+  record_source=llvm-toolchain-19
+fi
+safe_source="$(printf '%s' "$record_source" | tr -c 'A-Za-z0-9_.:+~-' '_')"
+
+installed_version="$(dpkg-query -W -f='${Version}' "$package" 2>/dev/null || true)"
+[[ -n "$installed_version" ]] || installed_version=absent
+
+control_sha256="$(apt-cache show "$spec" 2>/dev/null \
+  | awk 'BEGIN {seen=0} /^[[:space:]]*$/ {if (seen) exit} {seen=1; print}' \
+  | sha256sum | awk '{print $1}')"
+relationship_sha256="$(printf '%s\n%s\n%s\n%s\n' "$record_depends" "$record_breaks" "$record_conflicts" "$record_replaces" \
+  | sha256sum | awk '{print $1}')"
+
+newest_list_epoch="$(find /var/lib/apt/lists -maxdepth 1 -type f -printf '%T@\n' 2>/dev/null \
+  | awk 'BEGIN {max=0} $1>max {max=$1} END {printf "%.0f", max}')"
+now_epoch="$(date -u +%s)"
+if [[ "$newest_list_epoch" =~ ^[0-9]+$ && "$newest_list_epoch" -gt 0 && "$now_epoch" -ge "$newest_list_epoch" ]]; then
+  apt_metadata_age_seconds=$((now_epoch - newest_list_epoch))
+else
+  apt_metadata_age_seconds=unknown
+fi
+available_var_kib="$(df -Pk /var | awk 'NR == 2 {print $4}')"
+
+emit 'purpose=inventory_native_database_compatibility_without_mutation'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit 'authorized_actions=read_host_os_apt_candidate_and_capacity_metadata'
+emit 'non_actions=no_apt_update_no_network_download_no_package_install_no_database_initialization_no_service_or_configuration_change_no_secret_or_content_read_no_target_file_write'
+emit "package_libllvm19=observed;name=$record_package;installed_version=$installed_version;candidate_version=$record_version;architecture=$record_architecture;source=$safe_source;filename=$record_filename;size=$record_size;sha256=$record_sha256"
+emit "libllvm19_control_sha256=$control_sha256;relationship_sha256=$relationship_sha256"
+emit "apt_metadata_age_seconds=$apt_metadata_age_seconds;available_var_kib=$available_var_kib"
+emit 'native_database_compatibility_inventory=pass'

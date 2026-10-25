@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Qualify one temporary SSH connection carrying two loopback-only model
+# forwards. No private key, API credential, prompt, or response is retained.
+
+umask 077
+emit() { printf '%s\n' "$1"; }
+block() { emit "model_transport=blocked;reason=$1"; exit 1; }
+
+(( $# == 7 )) || block invalid_argument_count
+expected_hostname="$1"
+expected_os_version="$2"
+transfer_root="$3"
+expected_manifest_sha256="$4"
+expected_manifest_entries="$5"
+model_target="$6"
+model_host="$7"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_manifest_sha256
+[[ "$expected_manifest_entries" =~ ^[1-9][0-9]{0,2}$ ]] || block invalid_manifest_entry_count
+[[ "$model_target" =~ ^[a-z_][a-z0-9_-]{0,31}@[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || block invalid_model_target
+[[ "$model_host" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || block invalid_model_host
+[[ "$transfer_root" == /tmp/application-model-transport-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || block invalid_transfer_root
+(( EUID != 0 )) || block nonroot_execution_required
+
+for required in awk dpkg grep hostname python3 sha256sum ssh ss tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+[[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK:-}" ]] || block forwarded_ssh_agent_unavailable
+manifest_path="$transfer_root/payload.sha256"
+[[ -f "$manifest_path" && ! -L "$manifest_path" && -r "$manifest_path" ]] || block payload_manifest_missing
+[[ "$(sha256sum "$manifest_path" | awk '{print $1}')" == "$expected_manifest_sha256" ]] || block payload_manifest_checksum_mismatch
+[[ "$(awk 'NF {count++} END {print count+0}' "$manifest_path")" == "$expected_manifest_entries" ]] || block payload_manifest_entry_count_invalid
+if ! awk '
+  !/^[0-9a-f]{64}  (qualify_model_transport\.py|known_hosts)$/ {bad=1}
+  END {exit bad}
+' "$manifest_path"; then block payload_manifest_path_invalid; fi
+(cd "$transfer_root" && sha256sum --check --strict payload.sha256 >/dev/null) || block payload_checksum_verification_failed
+
+[[ "$(hostname -s)" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+[[ "$(dpkg --print-architecture)" == amd64 ]] || block architecture_mismatch
+python_version="$(python3 -c 'import sys; print(".".join(map(str,sys.version_info[:3])))')"
+[[ "$python_version" == 3.12.* ]] || block python_version_mismatch
+if ss -H -ltn '( sport = :8000 or sport = :8001 )' 2>/dev/null | grep -q .; then block tunnel_port_in_use_before_test; fi
+
+output="$transfer_root/model-transport.json"
+result="$transfer_root/model-transport.txt"
+error="$transfer_root/model-transport-error.txt"
+[[ ! -e "$output" && ! -L "$output" && ! -e "$result" && ! -L "$result" ]] || block output_path_exists
+
+emit 'purpose=qualify_application_host_model_transport'
+emit "host=$expected_hostname;os_version=$VERSION_ID;architecture=amd64;python_version=$python_version"
+emit 'authorized_actions=verify_checksum_bound_payload_probe_direct_native_port_denial_start_one_temporary_two_port_ssh_tunnel_check_two_health_endpoints_stop_tunnel_retain_content_free_measurement'
+emit 'non_actions=no_sudo_no_package_service_firewall_or_configuration_change_no_private_key_transfer_no_api_credential_read_no_inference_embedding_or_tokenization_call_no_organizational_content'
+
+set +e
+PYTHONDONTWRITEBYTECODE=1 python3 -B "$transfer_root/qualify_model_transport.py" \
+  --model-target "$model_target" \
+  --model-host "$model_host" \
+  --known-hosts "$transfer_root/known_hosts" \
+  --output "$output" >"$result" 2>"$error"
+runner_status=$?
+set -e
+if (( runner_status != 0 )); then
+  while IFS= read -r line; do
+    [[ "$line" =~ ^application_host_model_transport=blocked\;reason=[a-z0-9_]+$ ]] && emit "$line"
+  done <"$result"
+  emit "transport_runner_exit_code=$runner_status;error_sha256=$(sha256sum "$error" | awk '{print $1}');error_bytes=$(wc -c <"$error" | tr -d ' ');raw_error_retained=false"
+  block transport_runner_failed
+fi
+while IFS= read -r line; do emit "$line"; done <"$result"
+if ss -H -ltn '( sport = :8000 or sport = :8001 )' 2>/dev/null | grep -q .; then block tunnel_port_remains_after_test; fi
+emit 'ports_8000_8001_after_test=free'
+emit 'model_transport_qualification=pass'

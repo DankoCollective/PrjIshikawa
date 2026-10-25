@@ -1,0 +1,1510 @@
+{
+  "accepted_v1_mutated": false,
+  "accepted_v2_mutated": false,
+  "corpus_identity": "synthetic-corpus-v3",
+  "document_count": 30,
+  "documents": [
+    {
+      "action": "authorize access only for an approved role and purpose",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 1",
+      "control_code": "CTL-001",
+      "department": "Information Technology",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-001",
+      "document_context": "Controlled Materials Access",
+      "document_type": "policy",
+      "effective_date": "2099-01-01",
+      "filename": "OPS_17_CTL_2001.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2001",
+      "record": "controlled access request",
+      "references": [
+        "99 TST 2002",
+        "TST-9001",
+        "99 TST 2006"
+      ],
+      "review_date": "2099-06-15",
+      "subject": "time-bounded access to controlled training materials",
+      "threshold": "complete evidence and a recorded expiration",
+      "title": "Controlled Materials Access Policy",
+      "v2_anchor": true
+    },
+    {
+      "action": "apply the exception decision matrix",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 2",
+      "control_code": "CTL-002",
+      "department": "Operations Control",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-002",
+      "document_context": "Controlled Access Exception Review",
+      "document_type": "policy",
+      "effective_date": "2099-02-01",
+      "filename": "OPS_17_CTL_2002_RevA.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2002",
+      "record": "exception decision record",
+      "references": [
+        "99 TST 2001",
+        "TST-9001",
+        "99 TST 2022"
+      ],
+      "review_date": "2099-07-15",
+      "subject": "review of controlled-access exceptions",
+      "threshold": "documented risk, evidence, and compensating controls",
+      "title": "Controlled Access Exception Review",
+      "v2_anchor": true
+    },
+    {
+      "action": "coordinate the approved window and operational owner",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 3",
+      "control_code": "CTL-003",
+      "department": "Scheduling Office",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-003",
+      "document_context": "Controlled Activity Scheduling",
+      "document_type": "policy",
+      "effective_date": "2099-03-01",
+      "filename": "31_SCH_2003.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2003",
+      "record": "activity schedule record",
+      "references": [
+        "99 TST 2001",
+        "99 TST 2011",
+        "TST-9011"
+      ],
+      "review_date": "2099-08-15",
+      "subject": "scheduled controlled activity",
+      "threshold": "approved start, end, owner, and readiness evidence",
+      "title": "Scheduled Activity Policy",
+      "v2_anchor": true
+    },
+    {
+      "action": "capture requester, scope, risk, dates, and controls",
+      "applicability_class": "Synthetic Form",
+      "approval": "Synthetic Approval Authority 4",
+      "control_code": "CTL-004",
+      "department": "Information Technology",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-004",
+      "document_context": "Controlled Access Exception Request",
+      "document_type": "form",
+      "effective_date": "2099-04-01",
+      "filename": "Form_TST9001.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "TST-9001",
+      "record": "TST-9001 request",
+      "references": [
+        "99 TST 2001",
+        "99 TST 2002",
+        "99 TST 2005"
+      ],
+      "review_date": "2099-09-15",
+      "subject": "a request for temporary controlled access",
+      "threshold": "all required fields and reviewer certification",
+      "title": "Controlled Access Exception Request",
+      "v2_anchor": true
+    },
+    {
+      "action": "preserve authoritative provenance and record history",
+      "applicability_class": "Synthetic Manual",
+      "approval": "Synthetic Approval Authority 5",
+      "control_code": "CTL-005",
+      "department": "Records Governance",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-005",
+      "document_context": "Governance Records",
+      "document_type": "manual",
+      "effective_date": "2099-05-01",
+      "filename": "Governance_Manual_2005_Revision_3.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2005",
+      "record": "governance record",
+      "references": [
+        "99 TST 2001",
+        "99 TST 2020",
+        "99 TST 2022"
+      ],
+      "review_date": "2099-10-15",
+      "subject": "governance of requests, decisions, evidence, and lifecycle events",
+      "threshold": "complete linkage, retention, correction, and audit data",
+      "title": "Operations Governance Manual",
+      "v2_anchor": true
+    },
+    {
+      "action": "intake, classify, contain, notify, and close the incident",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 6",
+      "control_code": "CTL-006",
+      "department": "Information Technology",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-006",
+      "document_context": "Incident Reporting and Response",
+      "document_type": "procedure",
+      "effective_date": "2099-06-01",
+      "filename": "SOP_42_IR_2006.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2006",
+      "record": "incident record",
+      "references": [
+        "99 TST 2030",
+        "99 TST 2031",
+        "TST-9030"
+      ],
+      "review_date": "2099-11-15",
+      "subject": "controlled-materials incidents",
+      "threshold": "containment plus complete owned closure actions",
+      "title": "Incident Reporting and Response Procedure",
+      "v2_anchor": true
+    },
+    {
+      "action": "maintain custody and reconcile every transfer",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 7",
+      "control_code": "CTL-007",
+      "department": "Operations Control",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-007",
+      "document_context": "Controlled Materials Handling",
+      "document_type": "procedure",
+      "effective_date": "2099-07-01",
+      "filename": "CM_Handling_2010.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2010",
+      "record": "custody log",
+      "references": [
+        "99 TST 2001",
+        "99 TST 2002",
+        "99 TST 2006"
+      ],
+      "review_date": "2099-12-15",
+      "subject": "receipt, use, transfer, and return of controlled materials",
+      "threshold": "matched sender, recipient, time, and disposition",
+      "title": "Controlled Materials Handling Procedure",
+      "v2_anchor": false
+    },
+    {
+      "action": "validate dependencies before publishing a schedule",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 8",
+      "control_code": "CTL-008",
+      "department": "Scheduling Office",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-008",
+      "document_context": "Activity Scheduling Procedure",
+      "document_type": "procedure",
+      "effective_date": "2099-08-01",
+      "filename": "Scheduling_Procedure_2011.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2011",
+      "record": "schedule work item",
+      "references": [
+        "99 TST 2003",
+        "TST-9011",
+        "99 TST 2013"
+      ],
+      "review_date": "2099-01-15",
+      "subject": "creation and modification of controlled schedules",
+      "threshold": "resource, owner, dependency, and approval readiness",
+      "title": "Controlled Activity Scheduling Procedure",
+      "v2_anchor": false
+    },
+    {
+      "action": "capture impact, reason, affected requests, and approval",
+      "applicability_class": "Synthetic Form",
+      "approval": "Synthetic Approval Authority 9",
+      "control_code": "CTL-009",
+      "department": "Scheduling Office",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-009",
+      "document_context": "Schedule Change Request",
+      "document_type": "form",
+      "effective_date": "2099-09-01",
+      "filename": "Form_Schedule_Change_9011.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "TST-9011",
+      "record": "schedule change request",
+      "references": [
+        "99 TST 2003",
+        "99 TST 2011",
+        "99 TST 2012"
+      ],
+      "review_date": "2099-02-15",
+      "subject": "a requested change to approved controlled activity",
+      "threshold": "complete impact and conflict review",
+      "title": "Schedule Change Request",
+      "v2_anchor": false
+    },
+    {
+      "action": "require an on-call owner and rollback path",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 10",
+      "control_code": "CTL-010",
+      "department": "Operations Control",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-010",
+      "document_context": "After-Hours Operations",
+      "document_type": "policy",
+      "effective_date": "2099-10-01",
+      "filename": "After_Hours_Operations_2012.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2012",
+      "record": "after-hours authorization",
+      "references": [
+        "99 TST 2003",
+        "99 TST 2011",
+        "99 TST 2031"
+      ],
+      "review_date": "2099-03-15",
+      "subject": "controlled activity outside standard support hours",
+      "threshold": "confirmed coverage, communications, and recovery",
+      "title": "After-Hours Operations Policy",
+      "v2_anchor": false
+    },
+    {
+      "action": "verify prerequisites immediately before execution",
+      "applicability_class": "Synthetic Checklist",
+      "approval": "Synthetic Approval Authority 1",
+      "control_code": "CTL-011",
+      "department": "Operations Control",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-011",
+      "document_context": "Operational Readiness",
+      "document_type": "checklist",
+      "effective_date": "2099-11-01",
+      "filename": "Operational_Readiness_2013.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2013",
+      "record": "readiness checklist",
+      "references": [
+        "99 TST 2003",
+        "99 TST 2011",
+        "99 TST 2022"
+      ],
+      "review_date": "2099-04-15",
+      "subject": "readiness for scheduled controlled activity",
+      "threshold": "every mandatory check marked ready or formally waived",
+      "title": "Operational Readiness Checklist",
+      "v2_anchor": false
+    },
+    {
+      "action": "assign retention by authoritative record class",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 2",
+      "control_code": "CTL-012",
+      "department": "Records Governance",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-012",
+      "document_context": "Records Retention",
+      "document_type": "policy",
+      "effective_date": "2099-12-01",
+      "filename": "Records_Retention_2020.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2020",
+      "record": "retention schedule entry",
+      "references": [
+        "99 TST 2005",
+        "99 TST 2021",
+        "TST-9020"
+      ],
+      "review_date": "2099-05-15",
+      "subject": "retention and disposition of operational records",
+      "threshold": "closed lifecycle plus satisfied hold requirements",
+      "title": "Records Retention Policy",
+      "v2_anchor": false
+    },
+    {
+      "action": "append a traceable correction without overwriting history",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 3",
+      "control_code": "CTL-013",
+      "department": "Records Governance",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-013",
+      "document_context": "Record Correction",
+      "document_type": "procedure",
+      "effective_date": "2099-01-01",
+      "filename": "Record_Correction_2021.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2021",
+      "record": "correction event",
+      "references": [
+        "99 TST 2005",
+        "99 TST 2020",
+        "TST-9020"
+      ],
+      "review_date": "2099-06-15",
+      "subject": "correction of an authoritative operational record",
+      "threshold": "identified source, reason, approver, and superseded value",
+      "title": "Record Correction Procedure",
+      "v2_anchor": false
+    },
+    {
+      "action": "capture authority, rationale, evidence, controls, and review date",
+      "applicability_class": "Synthetic Form",
+      "approval": "Synthetic Approval Authority 4",
+      "control_code": "CTL-014",
+      "department": "Records Governance",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-014",
+      "document_context": "Decision Record",
+      "document_type": "form",
+      "effective_date": "2099-02-01",
+      "filename": "Form_Decision_Record_9020.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "TST-9020",
+      "record": "decision record",
+      "references": [
+        "99 TST 2005",
+        "99 TST 2020",
+        "99 TST 2022"
+      ],
+      "review_date": "2099-07-15",
+      "subject": "recording an operational or policy decision",
+      "threshold": "complete evidence links and accountable approval",
+      "title": "Decision Record Form",
+      "v2_anchor": false
+    },
+    {
+      "action": "preserve attributable, complete, and reproducible evidence",
+      "applicability_class": "Synthetic Guide",
+      "approval": "Synthetic Approval Authority 5",
+      "control_code": "CTL-015",
+      "department": "Legal and Compliance",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-015",
+      "document_context": "Audit Evidence",
+      "document_type": "guide",
+      "effective_date": "2099-03-01",
+      "filename": "Audit_Evidence_Guide_2022.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2022",
+      "record": "audit evidence package",
+      "references": [
+        "99 TST 2005",
+        "99 TST 2020",
+        "TST-9020"
+      ],
+      "review_date": "2099-08-15",
+      "subject": "evidence used to prove policy and procedure execution",
+      "threshold": "source identity, custody, time, and governing requirement",
+      "title": "Audit Evidence Guide",
+      "v2_anchor": false
+    },
+    {
+      "action": "assign type and provisional severity from observed impact",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 6",
+      "control_code": "CTL-016",
+      "department": "Incident Response",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-016",
+      "document_context": "Incident Classification",
+      "document_type": "policy",
+      "effective_date": "2099-04-01",
+      "filename": "Incident_Classification_2030.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2030",
+      "record": "incident classification",
+      "references": [
+        "99 TST 2006",
+        "99 TST 2031",
+        "TST-9030"
+      ],
+      "review_date": "2099-09-15",
+      "subject": "classification of operational, security, access, and records incidents",
+      "threshold": "known impact, affected assets, duration, and control status",
+      "title": "Incident Classification Policy",
+      "v2_anchor": false
+    },
+    {
+      "action": "notify the correct owner within the severity window",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 7",
+      "control_code": "CTL-017",
+      "department": "Incident Response",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-017",
+      "document_context": "Incident Escalation",
+      "document_type": "procedure",
+      "effective_date": "2099-05-01",
+      "filename": "Incident_Escalation_2031.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2031",
+      "record": "escalation log",
+      "references": [
+        "99 TST 2006",
+        "99 TST 2030",
+        "99 TST 2043"
+      ],
+      "review_date": "2099-10-15",
+      "subject": "notification and escalation of active incidents",
+      "threshold": "severity, ongoing status, affected records, and missed controls",
+      "title": "Incident Escalation Procedure",
+      "v2_anchor": false
+    },
+    {
+      "action": "capture reporter, location, department, time, symptoms, and affected records",
+      "applicability_class": "Synthetic Form",
+      "approval": "Synthetic Approval Authority 8",
+      "control_code": "CTL-018",
+      "department": "Incident Response",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-018",
+      "document_context": "Incident Intake",
+      "document_type": "form",
+      "effective_date": "2099-06-01",
+      "filename": "Form_Incident_Intake_9030.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "TST-9030",
+      "record": "incident intake record",
+      "references": [
+        "99 TST 2006",
+        "99 TST 2030",
+        "99 TST 2031"
+      ],
+      "review_date": "2099-11-15",
+      "subject": "initial reporting of a suspected incident",
+      "threshold": "enough facts to assign a provisional type and owner",
+      "title": "Incident Intake Form",
+      "v2_anchor": false
+    },
+    {
+      "action": "separate observed facts from conclusions and lessons",
+      "applicability_class": "Synthetic Guide",
+      "approval": "Synthetic Approval Authority 9",
+      "control_code": "CTL-019",
+      "department": "Legal and Compliance",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-019",
+      "document_context": "Post-Incident Review",
+      "document_type": "guide",
+      "effective_date": "2099-07-01",
+      "filename": "Post_Incident_Review_2032.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2032",
+      "record": "post-incident review",
+      "references": [
+        "99 TST 2006",
+        "99 TST 2022",
+        "99 TST 2031"
+      ],
+      "review_date": "2099-12-15",
+      "subject": "review of incident causes, response, and corrective actions",
+      "threshold": "closed actions with owners, evidence, and due dates",
+      "title": "Post-Incident Review Guide",
+      "v2_anchor": false
+    },
+    {
+      "action": "permit authorized business use and prohibit unsafe or unapproved activity",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 10",
+      "control_code": "CTL-020",
+      "department": "Executive Office",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-020",
+      "document_context": "Acceptable Use",
+      "document_type": "policy",
+      "effective_date": "2099-08-01",
+      "filename": "Acceptable_Use_2040.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2040",
+      "record": "acceptable-use acknowledgment",
+      "references": [
+        "99 TST 2041",
+        "99 TST 2042",
+        "99 TST 2043"
+      ],
+      "review_date": "2099-01-15",
+      "subject": "acceptable use of organizational technology and information",
+      "threshold": "authorized purpose, approved technology, and protected information",
+      "title": "Acceptable Use Policy",
+      "v2_anchor": false
+    },
+    {
+      "action": "require approved identity, managed endpoints, and monitored sessions",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 1",
+      "control_code": "CTL-021",
+      "department": "Cybersecurity",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-021",
+      "document_context": "Remote Access",
+      "document_type": "policy",
+      "effective_date": "2099-09-01",
+      "filename": "Remote_Access_2041.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2041",
+      "record": "remote access authorization",
+      "references": [
+        "99 TST 2040",
+        "TST-9040",
+        "99 TST 2053"
+      ],
+      "review_date": "2099-02-15",
+      "subject": "remote connection to organizational systems",
+      "threshold": "current need, device compliance, and strong authentication",
+      "title": "Remote Access Policy",
+      "v2_anchor": false
+    },
+    {
+      "action": "enforce enrollment, encryption, locking, and reporting controls",
+      "applicability_class": "Synthetic Standard",
+      "approval": "Synthetic Approval Authority 2",
+      "control_code": "CTL-022",
+      "department": "Information Technology",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-022",
+      "document_context": "Mobile Device Use",
+      "document_type": "standard",
+      "effective_date": "2099-10-01",
+      "filename": "Mobile_Device_2042.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2042",
+      "record": "device compliance record",
+      "references": [
+        "99 TST 2040",
+        "99 TST 2041",
+        "99 TST 2043"
+      ],
+      "review_date": "2099-03-15",
+      "subject": "mobile devices accessing organizational information",
+      "threshold": "managed state and supported security configuration",
+      "title": "Mobile Device Standard",
+      "v2_anchor": false
+    },
+    {
+      "action": "capture business need, affected control, duration, risk, and compensating safeguards",
+      "applicability_class": "Synthetic Form",
+      "approval": "Synthetic Approval Authority 3",
+      "control_code": "CTL-023",
+      "department": "Cybersecurity",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-023",
+      "document_context": "Technology Use Exception",
+      "document_type": "form",
+      "effective_date": "2099-11-01",
+      "filename": "Form_Use_Exception_9040.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "TST-9040",
+      "record": "use exception request",
+      "references": [
+        "99 TST 2040",
+        "99 TST 2041",
+        "99 TST 2042"
+      ],
+      "review_date": "2099-04-15",
+      "subject": "a temporary exception to technology-use controls",
+      "threshold": "time limit, accountable owner, and approved safeguards",
+      "title": "Technology Use Exception Request",
+      "v2_anchor": false
+    },
+    {
+      "action": "preserve evidence and route the event for classification",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 4",
+      "control_code": "CTL-024",
+      "department": "Cybersecurity",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-024",
+      "document_context": "Security Event Reporting",
+      "document_type": "procedure",
+      "effective_date": "2099-12-01",
+      "filename": "Security_Event_Reporting_2043.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2043",
+      "record": "security event report",
+      "references": [
+        "99 TST 2030",
+        "99 TST 2031",
+        "TST-9030"
+      ],
+      "review_date": "2099-05-15",
+      "subject": "suspected misuse, device loss, credential exposure, or unsafe access",
+      "threshold": "timely notice with affected identity, device, data, and activity",
+      "title": "Security Event Reporting Procedure",
+      "v2_anchor": false
+    },
+    {
+      "action": "bind access to a sponsor, contract purpose, system scope, and end date",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 5",
+      "control_code": "CTL-025",
+      "department": "Vendor Management",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-025",
+      "document_context": "Third-Party Access",
+      "document_type": "policy",
+      "effective_date": "2099-01-01",
+      "filename": "Third_Party_Access_2050.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2050",
+      "record": "third-party access record",
+      "references": [
+        "99 TST 2051",
+        "TST-9050",
+        "99 TST 2053"
+      ],
+      "review_date": "2099-06-15",
+      "subject": "access granted to vendors and external service personnel",
+      "threshold": "approved sponsor, due diligence, controls, and expiration",
+      "title": "Third-Party Access Policy",
+      "v2_anchor": false
+    },
+    {
+      "action": "coordinate identity changes with effective personnel events",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 6",
+      "control_code": "CTL-026",
+      "department": "Human Resources",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-026",
+      "document_context": "Personnel Access Lifecycle",
+      "document_type": "procedure",
+      "effective_date": "2099-02-01",
+      "filename": "Personnel_Access_Lifecycle_2051.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2051",
+      "record": "access lifecycle event",
+      "references": [
+        "99 TST 2050",
+        "TST-9050",
+        "99 TST 2053"
+      ],
+      "review_date": "2099-07-15",
+      "subject": "onboarding, transfer, leave, and separation access changes",
+      "threshold": "verified person, role, manager, systems, and effective time",
+      "title": "Personnel Access Lifecycle Procedure",
+      "v2_anchor": false
+    },
+    {
+      "action": "label information and apply controls proportional to sensitivity",
+      "applicability_class": "Synthetic Standard",
+      "approval": "Synthetic Approval Authority 7",
+      "control_code": "CTL-027",
+      "department": "Data Stewardship",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-027",
+      "document_context": "Data Classification",
+      "document_type": "standard",
+      "effective_date": "2099-03-01",
+      "filename": "Data_Classification_2052.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2052",
+      "record": "classification decision",
+      "references": [
+        "99 TST 2005",
+        "99 TST 2040",
+        "99 TST 2050"
+      ],
+      "review_date": "2099-08-15",
+      "subject": "classification and handling of organizational information",
+      "threshold": "identified owner, business impact, sharing boundary, and retention need",
+      "title": "Data Classification Standard",
+      "v2_anchor": false
+    },
+    {
+      "action": "capture identity, sponsor, role, systems, dates, and approvals",
+      "applicability_class": "Synthetic Form",
+      "approval": "Synthetic Approval Authority 8",
+      "control_code": "CTL-028",
+      "department": "Human Resources",
+      "department_label": "Department:",
+      "doc_id": "SYN-V3-028",
+      "document_context": "Access Authorization",
+      "document_type": "form",
+      "effective_date": "2099-04-01",
+      "filename": "Form_Access_Authorization_9050.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "TST-9050",
+      "record": "access authorization",
+      "references": [
+        "99 TST 2050",
+        "99 TST 2051",
+        "99 TST 2053"
+      ],
+      "review_date": "2099-09-15",
+      "subject": "authorization of workforce or third-party system access",
+      "threshold": "least privilege plus complete owner and expiration data",
+      "title": "Access Authorization Form",
+      "v2_anchor": false
+    },
+    {
+      "action": "reconcile approved need against observed privileged accounts",
+      "applicability_class": "Synthetic Procedure",
+      "approval": "Synthetic Approval Authority 9",
+      "control_code": "CTL-029",
+      "department": "Cybersecurity",
+      "department_label": "Dept:",
+      "doc_id": "SYN-V3-029",
+      "document_context": "Privileged Access Review",
+      "document_type": "procedure",
+      "effective_date": "2099-05-01",
+      "filename": "Privileged_Access_Review_2053.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2053",
+      "record": "privileged access review",
+      "references": [
+        "99 TST 2041",
+        "99 TST 2050",
+        "TST-9050"
+      ],
+      "review_date": "2099-10-15",
+      "subject": "periodic review of elevated access",
+      "threshold": "current owner, justified role, recent use, and remediation status",
+      "title": "Privileged Access Review Procedure",
+      "v2_anchor": false
+    },
+    {
+      "action": "confirm recipient, purpose, authority, and transfer protection",
+      "applicability_class": "Synthetic Policy",
+      "approval": "Synthetic Approval Authority 10",
+      "control_code": "CTL-030",
+      "department": "Data Stewardship",
+      "department_label": "Dept.:",
+      "doc_id": "SYN-V3-030",
+      "document_context": "Information Sharing",
+      "document_type": "policy",
+      "effective_date": "2099-06-01",
+      "filename": "Information_Sharing_2054.pdf",
+      "organization_abbreviation": "SEO",
+      "organization_name": "Synthetic Example Organization",
+      "pages": 5,
+      "policy_number": "99 TST 2054",
+      "record": "information sharing decision",
+      "references": [
+        "99 TST 2052",
+        "99 TST 2050",
+        "99 TST 2022"
+      ],
+      "review_date": "2099-11-15",
+      "subject": "internal and external sharing of classified information",
+      "threshold": "classification-compatible recipient and transmission control",
+      "title": "Information Sharing Policy",
+      "v2_anchor": false
+    }
+  ],
+  "fixture_status": "fully_synthetic_no_source_text",
+  "footer_contract": {
+    "center_page_pattern": "Page N of M",
+    "left_organization_abbreviation": "SEO",
+    "policy_number_from_document": true,
+    "right_organization_abbreviation": "SEO",
+    "scope": "every_page",
+    "semantic_retrieval": false
+  },
+  "header_contract": {
+    "department_label_variants": [
+      "Department:",
+      "Dept:",
+      "Dept.:"
+    ],
+    "fields": [
+      "Effective Date",
+      "Policy Number",
+      "Applicability/Class",
+      "Department",
+      "Date of Review",
+      "Approval"
+    ],
+    "non_text_logo": true,
+    "scope": "first_page_only"
+  },
+  "organization_abbreviation": "SEO",
+  "organization_name": "Synthetic Example Organization",
+  "page_count": 150,
+  "relationships": [
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-001",
+      "source_policy_number": "99 TST 2001",
+      "target_doc_id": "SYN-V3-002",
+      "target_policy_number": "99 TST 2002"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-001",
+      "source_policy_number": "99 TST 2001",
+      "target_doc_id": "SYN-V3-004",
+      "target_policy_number": "TST-9001"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-001",
+      "source_policy_number": "99 TST 2001",
+      "target_doc_id": "SYN-V3-006",
+      "target_policy_number": "99 TST 2006"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-002",
+      "source_policy_number": "99 TST 2002",
+      "target_doc_id": "SYN-V3-001",
+      "target_policy_number": "99 TST 2001"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-002",
+      "source_policy_number": "99 TST 2002",
+      "target_doc_id": "SYN-V3-004",
+      "target_policy_number": "TST-9001"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-002",
+      "source_policy_number": "99 TST 2002",
+      "target_doc_id": "SYN-V3-015",
+      "target_policy_number": "99 TST 2022"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-003",
+      "source_policy_number": "99 TST 2003",
+      "target_doc_id": "SYN-V3-001",
+      "target_policy_number": "99 TST 2001"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-003",
+      "source_policy_number": "99 TST 2003",
+      "target_doc_id": "SYN-V3-008",
+      "target_policy_number": "99 TST 2011"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-003",
+      "source_policy_number": "99 TST 2003",
+      "target_doc_id": "SYN-V3-009",
+      "target_policy_number": "TST-9011"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-004",
+      "source_policy_number": "TST-9001",
+      "target_doc_id": "SYN-V3-001",
+      "target_policy_number": "99 TST 2001"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-004",
+      "source_policy_number": "TST-9001",
+      "target_doc_id": "SYN-V3-002",
+      "target_policy_number": "99 TST 2002"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-004",
+      "source_policy_number": "TST-9001",
+      "target_doc_id": "SYN-V3-005",
+      "target_policy_number": "99 TST 2005"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-005",
+      "source_policy_number": "99 TST 2005",
+      "target_doc_id": "SYN-V3-001",
+      "target_policy_number": "99 TST 2001"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-005",
+      "source_policy_number": "99 TST 2005",
+      "target_doc_id": "SYN-V3-012",
+      "target_policy_number": "99 TST 2020"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-005",
+      "source_policy_number": "99 TST 2005",
+      "target_doc_id": "SYN-V3-015",
+      "target_policy_number": "99 TST 2022"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-006",
+      "source_policy_number": "99 TST 2006",
+      "target_doc_id": "SYN-V3-016",
+      "target_policy_number": "99 TST 2030"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-006",
+      "source_policy_number": "99 TST 2006",
+      "target_doc_id": "SYN-V3-017",
+      "target_policy_number": "99 TST 2031"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-006",
+      "source_policy_number": "99 TST 2006",
+      "target_doc_id": "SYN-V3-018",
+      "target_policy_number": "TST-9030"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-007",
+      "source_policy_number": "99 TST 2010",
+      "target_doc_id": "SYN-V3-001",
+      "target_policy_number": "99 TST 2001"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-007",
+      "source_policy_number": "99 TST 2010",
+      "target_doc_id": "SYN-V3-002",
+      "target_policy_number": "99 TST 2002"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-007",
+      "source_policy_number": "99 TST 2010",
+      "target_doc_id": "SYN-V3-006",
+      "target_policy_number": "99 TST 2006"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-008",
+      "source_policy_number": "99 TST 2011",
+      "target_doc_id": "SYN-V3-003",
+      "target_policy_number": "99 TST 2003"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-008",
+      "source_policy_number": "99 TST 2011",
+      "target_doc_id": "SYN-V3-009",
+      "target_policy_number": "TST-9011"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-008",
+      "source_policy_number": "99 TST 2011",
+      "target_doc_id": "SYN-V3-011",
+      "target_policy_number": "99 TST 2013"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-009",
+      "source_policy_number": "TST-9011",
+      "target_doc_id": "SYN-V3-003",
+      "target_policy_number": "99 TST 2003"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-009",
+      "source_policy_number": "TST-9011",
+      "target_doc_id": "SYN-V3-008",
+      "target_policy_number": "99 TST 2011"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-009",
+      "source_policy_number": "TST-9011",
+      "target_doc_id": "SYN-V3-010",
+      "target_policy_number": "99 TST 2012"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-010",
+      "source_policy_number": "99 TST 2012",
+      "target_doc_id": "SYN-V3-003",
+      "target_policy_number": "99 TST 2003"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-010",
+      "source_policy_number": "99 TST 2012",
+      "target_doc_id": "SYN-V3-008",
+      "target_policy_number": "99 TST 2011"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-010",
+      "source_policy_number": "99 TST 2012",
+      "target_doc_id": "SYN-V3-017",
+      "target_policy_number": "99 TST 2031"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-011",
+      "source_policy_number": "99 TST 2013",
+      "target_doc_id": "SYN-V3-003",
+      "target_policy_number": "99 TST 2003"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-011",
+      "source_policy_number": "99 TST 2013",
+      "target_doc_id": "SYN-V3-008",
+      "target_policy_number": "99 TST 2011"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-011",
+      "source_policy_number": "99 TST 2013",
+      "target_doc_id": "SYN-V3-015",
+      "target_policy_number": "99 TST 2022"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-012",
+      "source_policy_number": "99 TST 2020",
+      "target_doc_id": "SYN-V3-005",
+      "target_policy_number": "99 TST 2005"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-012",
+      "source_policy_number": "99 TST 2020",
+      "target_doc_id": "SYN-V3-013",
+      "target_policy_number": "99 TST 2021"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-012",
+      "source_policy_number": "99 TST 2020",
+      "target_doc_id": "SYN-V3-014",
+      "target_policy_number": "TST-9020"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-013",
+      "source_policy_number": "99 TST 2021",
+      "target_doc_id": "SYN-V3-005",
+      "target_policy_number": "99 TST 2005"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-013",
+      "source_policy_number": "99 TST 2021",
+      "target_doc_id": "SYN-V3-012",
+      "target_policy_number": "99 TST 2020"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-013",
+      "source_policy_number": "99 TST 2021",
+      "target_doc_id": "SYN-V3-014",
+      "target_policy_number": "TST-9020"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-014",
+      "source_policy_number": "TST-9020",
+      "target_doc_id": "SYN-V3-005",
+      "target_policy_number": "99 TST 2005"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-014",
+      "source_policy_number": "TST-9020",
+      "target_doc_id": "SYN-V3-012",
+      "target_policy_number": "99 TST 2020"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-014",
+      "source_policy_number": "TST-9020",
+      "target_doc_id": "SYN-V3-015",
+      "target_policy_number": "99 TST 2022"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-015",
+      "source_policy_number": "99 TST 2022",
+      "target_doc_id": "SYN-V3-005",
+      "target_policy_number": "99 TST 2005"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-015",
+      "source_policy_number": "99 TST 2022",
+      "target_doc_id": "SYN-V3-012",
+      "target_policy_number": "99 TST 2020"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-015",
+      "source_policy_number": "99 TST 2022",
+      "target_doc_id": "SYN-V3-014",
+      "target_policy_number": "TST-9020"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-016",
+      "source_policy_number": "99 TST 2030",
+      "target_doc_id": "SYN-V3-006",
+      "target_policy_number": "99 TST 2006"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-016",
+      "source_policy_number": "99 TST 2030",
+      "target_doc_id": "SYN-V3-017",
+      "target_policy_number": "99 TST 2031"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-016",
+      "source_policy_number": "99 TST 2030",
+      "target_doc_id": "SYN-V3-018",
+      "target_policy_number": "TST-9030"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-017",
+      "source_policy_number": "99 TST 2031",
+      "target_doc_id": "SYN-V3-006",
+      "target_policy_number": "99 TST 2006"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-017",
+      "source_policy_number": "99 TST 2031",
+      "target_doc_id": "SYN-V3-016",
+      "target_policy_number": "99 TST 2030"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-017",
+      "source_policy_number": "99 TST 2031",
+      "target_doc_id": "SYN-V3-024",
+      "target_policy_number": "99 TST 2043"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-018",
+      "source_policy_number": "TST-9030",
+      "target_doc_id": "SYN-V3-006",
+      "target_policy_number": "99 TST 2006"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-018",
+      "source_policy_number": "TST-9030",
+      "target_doc_id": "SYN-V3-016",
+      "target_policy_number": "99 TST 2030"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-018",
+      "source_policy_number": "TST-9030",
+      "target_doc_id": "SYN-V3-017",
+      "target_policy_number": "99 TST 2031"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-019",
+      "source_policy_number": "99 TST 2032",
+      "target_doc_id": "SYN-V3-006",
+      "target_policy_number": "99 TST 2006"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-019",
+      "source_policy_number": "99 TST 2032",
+      "target_doc_id": "SYN-V3-015",
+      "target_policy_number": "99 TST 2022"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-019",
+      "source_policy_number": "99 TST 2032",
+      "target_doc_id": "SYN-V3-017",
+      "target_policy_number": "99 TST 2031"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-020",
+      "source_policy_number": "99 TST 2040",
+      "target_doc_id": "SYN-V3-021",
+      "target_policy_number": "99 TST 2041"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-020",
+      "source_policy_number": "99 TST 2040",
+      "target_doc_id": "SYN-V3-022",
+      "target_policy_number": "99 TST 2042"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-020",
+      "source_policy_number": "99 TST 2040",
+      "target_doc_id": "SYN-V3-024",
+      "target_policy_number": "99 TST 2043"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-021",
+      "source_policy_number": "99 TST 2041",
+      "target_doc_id": "SYN-V3-020",
+      "target_policy_number": "99 TST 2040"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-021",
+      "source_policy_number": "99 TST 2041",
+      "target_doc_id": "SYN-V3-023",
+      "target_policy_number": "TST-9040"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-021",
+      "source_policy_number": "99 TST 2041",
+      "target_doc_id": "SYN-V3-029",
+      "target_policy_number": "99 TST 2053"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-022",
+      "source_policy_number": "99 TST 2042",
+      "target_doc_id": "SYN-V3-020",
+      "target_policy_number": "99 TST 2040"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-022",
+      "source_policy_number": "99 TST 2042",
+      "target_doc_id": "SYN-V3-021",
+      "target_policy_number": "99 TST 2041"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-022",
+      "source_policy_number": "99 TST 2042",
+      "target_doc_id": "SYN-V3-024",
+      "target_policy_number": "99 TST 2043"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-023",
+      "source_policy_number": "TST-9040",
+      "target_doc_id": "SYN-V3-020",
+      "target_policy_number": "99 TST 2040"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-023",
+      "source_policy_number": "TST-9040",
+      "target_doc_id": "SYN-V3-021",
+      "target_policy_number": "99 TST 2041"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-023",
+      "source_policy_number": "TST-9040",
+      "target_doc_id": "SYN-V3-022",
+      "target_policy_number": "99 TST 2042"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-024",
+      "source_policy_number": "99 TST 2043",
+      "target_doc_id": "SYN-V3-016",
+      "target_policy_number": "99 TST 2030"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-024",
+      "source_policy_number": "99 TST 2043",
+      "target_doc_id": "SYN-V3-017",
+      "target_policy_number": "99 TST 2031"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-024",
+      "source_policy_number": "99 TST 2043",
+      "target_doc_id": "SYN-V3-018",
+      "target_policy_number": "TST-9030"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-025",
+      "source_policy_number": "99 TST 2050",
+      "target_doc_id": "SYN-V3-026",
+      "target_policy_number": "99 TST 2051"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-025",
+      "source_policy_number": "99 TST 2050",
+      "target_doc_id": "SYN-V3-028",
+      "target_policy_number": "TST-9050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-025",
+      "source_policy_number": "99 TST 2050",
+      "target_doc_id": "SYN-V3-029",
+      "target_policy_number": "99 TST 2053"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-026",
+      "source_policy_number": "99 TST 2051",
+      "target_doc_id": "SYN-V3-025",
+      "target_policy_number": "99 TST 2050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-026",
+      "source_policy_number": "99 TST 2051",
+      "target_doc_id": "SYN-V3-028",
+      "target_policy_number": "TST-9050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-026",
+      "source_policy_number": "99 TST 2051",
+      "target_doc_id": "SYN-V3-029",
+      "target_policy_number": "99 TST 2053"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-027",
+      "source_policy_number": "99 TST 2052",
+      "target_doc_id": "SYN-V3-005",
+      "target_policy_number": "99 TST 2005"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-027",
+      "source_policy_number": "99 TST 2052",
+      "target_doc_id": "SYN-V3-020",
+      "target_policy_number": "99 TST 2040"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-027",
+      "source_policy_number": "99 TST 2052",
+      "target_doc_id": "SYN-V3-025",
+      "target_policy_number": "99 TST 2050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-028",
+      "source_policy_number": "TST-9050",
+      "target_doc_id": "SYN-V3-025",
+      "target_policy_number": "99 TST 2050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-028",
+      "source_policy_number": "TST-9050",
+      "target_doc_id": "SYN-V3-026",
+      "target_policy_number": "99 TST 2051"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-028",
+      "source_policy_number": "TST-9050",
+      "target_doc_id": "SYN-V3-029",
+      "target_policy_number": "99 TST 2053"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-029",
+      "source_policy_number": "99 TST 2053",
+      "target_doc_id": "SYN-V3-021",
+      "target_policy_number": "99 TST 2041"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-029",
+      "source_policy_number": "99 TST 2053",
+      "target_doc_id": "SYN-V3-025",
+      "target_policy_number": "99 TST 2050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-029",
+      "source_policy_number": "99 TST 2053",
+      "target_doc_id": "SYN-V3-028",
+      "target_policy_number": "TST-9050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-030",
+      "source_policy_number": "99 TST 2054",
+      "target_doc_id": "SYN-V3-027",
+      "target_policy_number": "99 TST 2052"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-030",
+      "source_policy_number": "99 TST 2054",
+      "target_doc_id": "SYN-V3-025",
+      "target_policy_number": "99 TST 2050"
+    },
+    {
+      "relation": "explicit_reference",
+      "source_doc_id": "SYN-V3-030",
+      "source_policy_number": "99 TST 2054",
+      "target_doc_id": "SYN-V3-015",
+      "target_policy_number": "99 TST 2022"
+    }
+  ],
+  "schema_version": 3
+}

@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply Ishikawa local observability retention
+Documentation=file:%h/Documents/Ishikawa/docs/SERVICE_OPERATIONS.md
+ConditionFileIsExecutable=%h/Documents/Ishikawa/scripts/ishikawa-observability-retention
+
+[Service]
+Type=oneshot
+ExecStart=%h/Documents/Ishikawa/scripts/ishikawa-observability-retention --apply
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/Documents/Ishikawa/state/logs

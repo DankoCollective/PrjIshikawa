@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Verify the local embedding service while preserving its initial state.
+# Run as root through attended sudo on the AI workstation.
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly VERIFIER="$SCRIPT_DIR/verify_embedding_service.py"
+readonly UNIT="vllm-nomic.service"
+readonly START_COMMAND="/usr/local/sbin/start-vllm"
+readonly STOP_COMMAND="/usr/local/sbin/stop-vllm"
+
+[[ "$EUID" -eq 0 ]] || {
+  printf '[embedding-verification] result=BLOCKED reason=run_as_root_through_attended_sudo\n' >&2
+  exit 1
+}
+[[ -f "$VERIFIER" && ! -L "$VERIFIER" ]] || {
+  printf '[embedding-verification] result=BLOCKED reason=verifier_missing_or_unsafe\n' >&2
+  exit 1
+}
+
+started_by_verifier=false
+nomic_api_key=""
+cleanup() {
+  local original_status="$?"
+  trap - EXIT INT TERM
+  unset nomic_api_key
+  if [[ "$started_by_verifier" == true ]]; then
+    if "$STOP_COMMAND" nomic >/dev/null 2>&1; then
+      printf '[embedding-verification] cleanup=pass service_state=restored_inactive\n'
+    else
+      printf '[embedding-verification] cleanup=failed service_state=review_required\n' >&2
+      original_status=1
+    fi
+  else
+    printf '[embedding-verification] cleanup=not_required service_state=left_active\n'
+  fi
+  exit "$original_status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if systemctl is-active --quiet "$UNIT"; then
+  printf '[embedding-verification] initial_service_state=active action=preserve\n'
+else
+  [[ -x "$START_COMMAND" && -x "$STOP_COMMAND" ]] || {
+    printf '[embedding-verification] result=BLOCKED reason=managed_service_commands_missing\n' >&2
+    exit 1
+  }
+  printf '[embedding-verification] initial_service_state=inactive action=temporary_start\n'
+  if ! "$START_COMMAND" nomic >/dev/null 2>&1; then
+    printf '[embedding-verification] result=BLOCKED reason=temporary_service_start_failed\n' >&2
+    exit 1
+  fi
+  started_by_verifier=true
+fi
+
+[[ -r /dev/tty && -w /dev/tty ]] || {
+  printf '[embedding-verification] result=BLOCKED reason=attended_tty_unavailable\n' >&2
+  exit 1
+}
+printf 'Enter the Nomic API key: ' >/dev/tty
+if ! IFS= read -r -s nomic_api_key </dev/tty; then
+  printf '\n' >/dev/tty
+  printf '[embedding-verification] result=BLOCKED reason=credential_entry_failed\n' >&2
+  exit 1
+fi
+printf '\n' >/dev/tty
+if (( ${#nomic_api_key} < 32 || ${#nomic_api_key} > 1024 )); then
+  unset nomic_api_key
+  printf '[embedding-verification] result=BLOCKED reason=operator_credential_format_invalid\n' >&2
+  exit 1
+fi
+
+printf '[embedding-verification] credential_source=operator_attended_tty stored_credential_read=false\n'
+verification_status=0
+printf '%s' "$nomic_api_key" \
+  | python3 "$VERIFIER" --credential-stdin "$@" \
+  || verification_status=$?
+unset nomic_api_key
+exit "$verification_status"

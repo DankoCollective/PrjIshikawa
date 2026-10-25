@@ -1,0 +1,17 @@
+schema_version: 1
+
+identity:
+  display_name: Ishikawa Retrieval API
+  component_id: ishikawa-retrieval-api
+  package_owner: Ishikawa
+
+runtime:
+  implementation: native_python
+  process_model: separate_process
+  lifecycle: start_on_demand
+
+network:
+  default_bind_address: 127.0.0.1
+  default_port: 1384
+  allowed_client: ishikawa_nextjs_server
+

@@ -1,0 +1,186 @@
+{
+  "files": [
+    {
+      "bytes": 9372,
+      "doc_id": "SYN-V3-001",
+      "filename": "OPS_17_CTL_2001.pdf",
+      "sha256": "b4411bf5fb656e95934689b8c7c9cb1942b4f3f34d8a16368f15cb4c11bdf9c9"
+    },
+    {
+      "bytes": 9346,
+      "doc_id": "SYN-V3-002",
+      "filename": "OPS_17_CTL_2002_RevA.pdf",
+      "sha256": "2cbaf821a4b4528becbc5ace7686c0617625e32b4ba7ed41191442277036ff84"
+    },
+    {
+      "bytes": 9290,
+      "doc_id": "SYN-V3-003",
+      "filename": "31_SCH_2003.pdf",
+      "sha256": "2e2207d44f924bee66743544620a70f41b5f21dc72df8f940006e814e6916476"
+    },
+    {
+      "bytes": 10533,
+      "doc_id": "SYN-V3-004",
+      "filename": "Form_TST9001.pdf",
+      "sha256": "a82db54d6bc705976a01c31049b9f407416e8d76b6fda2f296ca26af46694848"
+    },
+    {
+      "bytes": 9329,
+      "doc_id": "SYN-V3-005",
+      "filename": "Governance_Manual_2005_Revision_3.pdf",
+      "sha256": "86068606cceee1294fd18fc84679b908a4a20e5d817956abec89560822f5cf18"
+    },
+    {
+      "bytes": 9378,
+      "doc_id": "SYN-V3-006",
+      "filename": "SOP_42_IR_2006.pdf",
+      "sha256": "7ed55b1700370502d06f79dec9fe670840c7e3a29687993ae387ad6d89be1908"
+    },
+    {
+      "bytes": 9369,
+      "doc_id": "SYN-V3-007",
+      "filename": "CM_Handling_2010.pdf",
+      "sha256": "45cdee2f9cb83bb27610e8ea127f4deff1d0c57f79c31a6580c3e83f5262af81"
+    },
+    {
+      "bytes": 9380,
+      "doc_id": "SYN-V3-008",
+      "filename": "Scheduling_Procedure_2011.pdf",
+      "sha256": "3a8d23457abbee8fe0a4033d3729d9e1a95dbb36e0d17d68a65296e3812bf12f"
+    },
+    {
+      "bytes": 10442,
+      "doc_id": "SYN-V3-009",
+      "filename": "Form_Schedule_Change_9011.pdf",
+      "sha256": "672b94e2d93226faa44518bb3ac5bbaf215b3c8949db197ef9129eb5d4c56b3e"
+    },
+    {
+      "bytes": 9334,
+      "doc_id": "SYN-V3-010",
+      "filename": "After_Hours_Operations_2012.pdf",
+      "sha256": "817075e3e6e20aced0a754fbbffa5af9d147ed76674efc28be331c4f84dd0706"
+    },
+    {
+      "bytes": 10536,
+      "doc_id": "SYN-V3-011",
+      "filename": "Operational_Readiness_2013.pdf",
+      "sha256": "d58ea99a877251a68c74de81f7d9ac780478ed779b2cb8cb1455a4bd1bff05a9"
+    },
+    {
+      "bytes": 9285,
+      "doc_id": "SYN-V3-012",
+      "filename": "Records_Retention_2020.pdf",
+      "sha256": "e1a5de812421b6ee8c1a9e8ff6ab54a16955ae8e570303f38efd0b6bb595b566"
+    },
+    {
+      "bytes": 9315,
+      "doc_id": "SYN-V3-013",
+      "filename": "Record_Correction_2021.pdf",
+      "sha256": "41cea1eb18220a7d4fa2c5441bd542b2fd5e1acdf10f7fce129bd18d9c5c2450"
+    },
+    {
+      "bytes": 10419,
+      "doc_id": "SYN-V3-014",
+      "filename": "Form_Decision_Record_9020.pdf",
+      "sha256": "d033d5112ace6a06d7ead663a8ab65f9b23194dc5062a6c01a3dab39d40254d0"
+    },
+    {
+      "bytes": 9290,
+      "doc_id": "SYN-V3-015",
+      "filename": "Audit_Evidence_Guide_2022.pdf",
+      "sha256": "c3a18b1dd299e1da8a29f25e5712fbbce66e95846e4470d9cc6dbe6689500098"
+    },
+    {
+      "bytes": 9421,
+      "doc_id": "SYN-V3-016",
+      "filename": "Incident_Classification_2030.pdf",
+      "sha256": "d90bd41462c0c97232b55139cdb497968f3df0160b0e37ffdce92665b5cb46b2"
+    },
+    {
+      "bytes": 9324,
+      "doc_id": "SYN-V3-017",
+      "filename": "Incident_Escalation_2031.pdf",
+      "sha256": "af6968d22a9704a8833d20351285847c3a3330f070182bba02799be8974873e6"
+    },
+    {
+      "bytes": 10499,
+      "doc_id": "SYN-V3-018",
+      "filename": "Form_Incident_Intake_9030.pdf",
+      "sha256": "12e800f548b3bc22f3d23bf9f5d8fbec9eabc7c12a3c67d93ab10b3272b34ac1"
+    },
+    {
+      "bytes": 9328,
+      "doc_id": "SYN-V3-019",
+      "filename": "Post_Incident_Review_2032.pdf",
+      "sha256": "be9ee76e568f6a7d50e626a459cfc4d35cf6902dd376a143dfb4264e33ce6d55"
+    },
+    {
+      "bytes": 9393,
+      "doc_id": "SYN-V3-020",
+      "filename": "Acceptable_Use_2040.pdf",
+      "sha256": "495163158060e3c72b489e7ad518cf88ca9b61633eb4a9235bdab1f776843c9c"
+    },
+    {
+      "bytes": 9325,
+      "doc_id": "SYN-V3-021",
+      "filename": "Remote_Access_2041.pdf",
+      "sha256": "03e876c92ff4c8c8cd406bbacdbd3fe7980cc9cb9dc1a67787385072a7cccde9"
+    },
+    {
+      "bytes": 9320,
+      "doc_id": "SYN-V3-022",
+      "filename": "Mobile_Device_2042.pdf",
+      "sha256": "6f99ed4135cb89ab7bb3fc23312e52968b0d5ad7cce84486cb2e0c6267eb61cc"
+    },
+    {
+      "bytes": 10581,
+      "doc_id": "SYN-V3-023",
+      "filename": "Form_Use_Exception_9040.pdf",
+      "sha256": "67acaaa55280da3dd5cb3583203e13d732d2b963fc529f8b2b7ec2c3417b4002"
+    },
+    {
+      "bytes": 9475,
+      "doc_id": "SYN-V3-024",
+      "filename": "Security_Event_Reporting_2043.pdf",
+      "sha256": "c0ddceeae88c65aa239ff40c50a86e921f9a9de377707725eef247a577a4b08f"
+    },
+    {
+      "bytes": 9387,
+      "doc_id": "SYN-V3-025",
+      "filename": "Third_Party_Access_2050.pdf",
+      "sha256": "22a27574ced69df8aff5d4b7a0289d4ce3c4f44f4deacd447c55eef223fbf00d"
+    },
+    {
+      "bytes": 9393,
+      "doc_id": "SYN-V3-026",
+      "filename": "Personnel_Access_Lifecycle_2051.pdf",
+      "sha256": "7ecfce91400fadadc23098f99925e00b10f710bfd023c71f12e415c9ce765f98"
+    },
+    {
+      "bytes": 9381,
+      "doc_id": "SYN-V3-027",
+      "filename": "Data_Classification_2052.pdf",
+      "sha256": "67590b9cdb4fe43e2ad8374836fd152b016687fd345d298f58b76b98b52ec12e"
+    },
+    {
+      "bytes": 10491,
+      "doc_id": "SYN-V3-028",
+      "filename": "Form_Access_Authorization_9050.pdf",
+      "sha256": "ffeb9113995bf34fc355cc67d1f07be136d989862a36aaf14a50e01a5db09a06"
+    },
+    {
+      "bytes": 9371,
+      "doc_id": "SYN-V3-029",
+      "filename": "Privileged_Access_Review_2053.pdf",
+      "sha256": "70200ec8ac3f37a32a21e0355190812b0e0310c63ea80357cd780d0bbfdc0399"
+    },
+    {
+      "bytes": 9358,
+      "doc_id": "SYN-V3-030",
+      "filename": "Information_Sharing_2054.pdf",
+      "sha256": "ae44ca03bcce4a4efa0a5804a7391c5aa05ff9c850b75728944015bfe5ca7799"
+    }
+  ],
+  "fixture_status": "fully_synthetic_no_source_text",
+  "schema_version": 1
+}

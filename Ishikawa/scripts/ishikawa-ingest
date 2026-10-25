@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Installed entrypoint for one operator-requested Ishikawa ingestion run."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    os.umask(0o077)
+    product_root = Path(__file__).resolve(strict=True).parent.parent
+    python_root = (product_root / "application" / "python").resolve(strict=True)
+    sys.path.insert(0, str(python_root))
+    from ishikawa.installed_ingestion import execute_installed_ingestion
+
+    return execute_installed_ingestion(
+        sys.argv[1:],
+        product_root=product_root,
+        output=sys.stdout,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

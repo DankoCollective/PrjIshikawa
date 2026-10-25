@@ -1,0 +1,14 @@
+schema_version: 1
+
+documents:
+  - document_key: policy.social-media
+    display_name: Social Media Policy
+    status: active
+
+  - document_key: regulation.federal-records
+    display_name: Federal Records Regulation
+    status: active
+
+  - document_key: procedure.incident-reporting
+    display_name: Incident Reporting Procedure
+    status: active

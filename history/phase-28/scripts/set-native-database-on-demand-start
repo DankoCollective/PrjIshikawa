@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Put one existing PostgreSQL 16/main cluster into the approved on-demand,
+#   boot-disabled startup posture without starting it or changing database data.
+#
+# Mental model:
+#   Require the exact stopped cluster and known startup-policy file, preserve a
+#   rollback copy, change only auto to manual when needed, disable the generic
+#   and cluster systemd boot links, reload systemd, and prove the cluster stayed
+#   stopped. Any incomplete change restores the prior policy and enablement.
+#
+# Inputs or prerequisites:
+#   Run as root with expected hostname, Ubuntu version, and dpkg architecture.
+#   PostgreSQL 16/main must be stopped and port 5432 must be unused.
+#
+# Outputs:
+#   Content-free key/value markers only. No database connection, database read,
+#   credential access, package operation, network request, or service start.
+#
+# Usage:
+#   sudo bash ./set-native-database-on-demand-start HOST 24.04 arm64
+
+block() {
+  printf 'native_database_on_demand_start=blocked;reason=%s\n' "$1"
+  exit 1
+}
+
+[[ "$EUID" == 0 ]] || block root_required
+[[ $# == 3 ]] || block argument_count_invalid
+readonly EXPECTED_HOSTNAME="$1"
+readonly EXPECTED_OS_VERSION="$2"
+readonly EXPECTED_ARCHITECTURE="$3"
+[[ "$EXPECTED_HOSTNAME" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block expected_hostname_invalid
+[[ "$EXPECTED_OS_VERSION" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block expected_os_version_invalid
+[[ "$EXPECTED_ARCHITECTURE" == arm64 || "$EXPECTED_ARCHITECTURE" == amd64 ]] \
+  || block expected_architecture_invalid
+
+for required_command in \
+  awk bash chmod chown cp date dirname dpkg grep head hostname mktemp mv \
+  pg_isready pg_lsclusters rm sed sha256sum stat systemctl tr; do
+  command -v "$required_command" >/dev/null 2>&1 || block required_command_missing
+done
+
+actual_hostname="$(hostname -s)"
+actual_os_id="$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"' | head -n 1)"
+actual_os_version="$(sed -n 's/^VERSION_ID=//p' /etc/os-release | tr -d '"' | head -n 1)"
+actual_architecture="$(dpkg --print-architecture)"
+[[ "$actual_hostname" == "$EXPECTED_HOSTNAME" \
+    && "$actual_os_id" == ubuntu \
+    && "$actual_os_version" == "$EXPECTED_OS_VERSION" \
+    && "$actual_architecture" == "$EXPECTED_ARCHITECTURE" ]] \
+  || block host_identity_mismatch
+
+readonly POSTGRESQL_META_UNIT='postgresql.service'
+readonly POSTGRESQL_CLUSTER_UNIT='postgresql@16-main.service'
+readonly START_POLICY_PATH='/etc/postgresql/16/main/start.conf'
+readonly AUTO_POLICY_SHA256='e83be42666e695b4e43c65fee5967e8f30e814ca49e473fad9ccf86a42b4f30a'
+readonly MANUAL_POLICY_SHA256='f0f5f2f0a2df8a53a51e2ecdac3f6ad271d30f1ca3f852f9da84cab7887b6d03'
+
+[[ -f "$START_POLICY_PATH" && ! -L "$START_POLICY_PATH" ]] || block start_policy_unsafe
+cluster_line="$(pg_lsclusters --no-header | awk '$1 == 16 && $2 == "main" {print; found=1} END {if (!found) exit 1}')" \
+  || block cluster_missing
+read -r cluster_version cluster_name cluster_port cluster_status cluster_owner cluster_data_directory _ \
+  <<<"$cluster_line"
+[[ "$cluster_version|$cluster_name|$cluster_port|$cluster_status|$cluster_owner|$cluster_data_directory" \
+    == '16|main|5432|down|postgres|/var/lib/postgresql/16/main' ]] \
+  || block cluster_identity_or_state_mismatch
+pg_isready --quiet --host 127.0.0.1 --port 5432 --timeout 2 && block postgresql_listener_unexpected
+
+policy_before="$(awk '!/^[[:space:]]*(#|$)/ {print $1; count++} END {if (count != 1) exit 1}' "$START_POLICY_PATH")" \
+  || block start_policy_shape_invalid
+[[ "$policy_before" == auto || "$policy_before" == manual ]] || block start_policy_value_invalid
+policy_sha256_before="$(sha256sum "$START_POLICY_PATH" | awk '{print $1}')"
+case "$policy_before|$policy_sha256_before" in
+  "auto|$AUTO_POLICY_SHA256"|"manual|$MANUAL_POLICY_SHA256") ;;
+  *) block start_policy_identity_unrecognized ;;
+esac
+meta_enablement_before="$(systemctl is-enabled "$POSTGRESQL_META_UNIT" 2>/dev/null || true)"
+cluster_enablement_before="$(systemctl is-enabled "$POSTGRESQL_CLUSTER_UNIT" 2>/dev/null || true)"
+
+backup_path="$(mktemp /tmp/native-database-start-policy.XXXXXX)"
+candidate_path=''
+policy_changed=false
+meta_enablement_changed=false
+cluster_enablement_changed=false
+completed=false
+
+restore_initial_posture() {
+  local status="$?"
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$completed" != true ]]; then
+    if [[ "$policy_changed" == true && -f "$backup_path" ]]; then
+      cp --preserve=all -- "$backup_path" "$START_POLICY_PATH"
+    fi
+    case "$meta_enablement_before" in
+      enabled) systemctl enable "$POSTGRESQL_META_UNIT" >/dev/null 2>&1 ;;
+      disabled) systemctl disable "$POSTGRESQL_META_UNIT" >/dev/null 2>&1 ;;
+    esac
+    case "$cluster_enablement_before" in
+      enabled) systemctl enable "$POSTGRESQL_CLUSTER_UNIT" >/dev/null 2>&1 ;;
+      disabled) systemctl disable "$POSTGRESQL_CLUSTER_UNIT" >/dev/null 2>&1 ;;
+    esac
+    systemctl daemon-reload >/dev/null 2>&1
+  fi
+  [[ -z "$candidate_path" || ! -e "$candidate_path" ]] || rm -f -- "$candidate_path"
+  [[ ! -e "$backup_path" ]] || rm -f -- "$backup_path"
+  exit "$status"
+}
+trap restore_initial_posture EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+cp --preserve=all -- "$START_POLICY_PATH" "$backup_path"
+
+printf '%s\n' \
+  'purpose=set_native_database_on_demand_start' \
+  "host=$actual_hostname;os_version=$actual_os_version;architecture=$actual_architecture" \
+  "cluster=16/main;port=5432;state_before=$cluster_status;policy_before=$policy_before" \
+  "meta_unit_enablement_before=${meta_enablement_before:-unknown};cluster_unit_enablement_before=${cluster_enablement_before:-unknown}" \
+  'authorized_actions=change_existing_cluster_start_policy_from_auto_to_manual_disable_database_boot_units_reload_systemd_validate_stopped_state' \
+  'non_actions=no_database_start_no_database_connection_no_database_read_or_write_no_package_change_no_network_access_no_credential_access'
+
+if [[ "$policy_before" == auto ]]; then
+  candidate_path="$(mktemp "$(dirname -- "$START_POLICY_PATH")/.start.conf.XXXXXX")"
+  awk '{if ($0 ~ /^[[:space:]]*auto[[:space:]]*$/) print "manual"; else print}' \
+    "$START_POLICY_PATH" >"$candidate_path"
+  chown --reference="$START_POLICY_PATH" "$candidate_path"
+  chmod --reference="$START_POLICY_PATH" "$candidate_path"
+  [[ "$(sha256sum "$candidate_path" | awk '{print $1}')" == "$MANUAL_POLICY_SHA256" ]] \
+    || block rendered_manual_policy_identity_mismatch
+  mv -- "$candidate_path" "$START_POLICY_PATH"
+  candidate_path=''
+  policy_changed=true
+fi
+
+case "$meta_enablement_before" in
+  enabled|enabled-runtime)
+    systemctl disable "$POSTGRESQL_META_UNIT" >/dev/null || block meta_unit_disable_failed
+    meta_enablement_changed=true
+    ;;
+esac
+case "$cluster_enablement_before" in
+  enabled)
+    systemctl disable "$POSTGRESQL_CLUSTER_UNIT" >/dev/null || block cluster_unit_disable_failed
+    cluster_enablement_changed=true
+    ;;
+  enabled-runtime)
+    # The postgresql-common generator owns this runtime link. The manual policy
+    # plus daemon-reload removes it; no persistent unit mutation is necessary.
+    cluster_enablement_changed=true
+    ;;
+esac
+systemctl daemon-reload >/dev/null || block systemd_reload_failed
+
+policy_after="$(awk '!/^[[:space:]]*(#|$)/ {print $1; count++} END {if (count != 1) exit 1}' "$START_POLICY_PATH")" \
+  || block final_start_policy_shape_invalid
+policy_sha256_after="$(sha256sum "$START_POLICY_PATH" | awk '{print $1}')"
+meta_enablement_after="$(systemctl is-enabled "$POSTGRESQL_META_UNIT" 2>/dev/null || true)"
+cluster_enablement_after="$(systemctl is-enabled "$POSTGRESQL_CLUSTER_UNIT" 2>/dev/null || true)"
+cluster_line_after="$(pg_lsclusters --no-header | awk '$1 == 16 && $2 == "main" {print; found=1} END {if (!found) exit 1}')" \
+  || block final_cluster_missing
+read -r _ _ _ cluster_status_after _ _ _ <<<"$cluster_line_after"
+
+[[ "$policy_after" == manual && "$policy_sha256_after" == "$MANUAL_POLICY_SHA256" ]] \
+  || block final_start_policy_mismatch
+[[ "$meta_enablement_after" != enabled && "$meta_enablement_after" != enabled-runtime ]] \
+  || block final_meta_unit_enablement_mismatch
+[[ "$cluster_enablement_after" != enabled && "$cluster_enablement_after" != enabled-runtime ]] \
+  || block final_cluster_unit_enablement_mismatch
+[[ "$cluster_status_after" == down ]] || block cluster_started_unexpectedly
+pg_isready --quiet --host 127.0.0.1 --port 5432 --timeout 2 && block listener_started_unexpectedly
+
+completed=true
+printf '%s\n' \
+  "policy_after=manual;policy_sha256=$policy_sha256_after;policy_changed=$policy_changed" \
+  "meta_unit_enablement_after=${meta_enablement_after:-unknown};meta_unit_changed=$meta_enablement_changed" \
+  "cluster_unit_enablement_after=${cluster_enablement_after:-unknown};cluster_unit_changed=$cluster_enablement_changed" \
+  'cluster_state_after=down;port_5432_after=free;database_changed=false;service_started=false' \
+  'native_database_on_demand_start=pass'
+

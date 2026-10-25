@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# Read-only, bounded application-host inventory. It performs no package,
+# service, database, configuration, or filesystem mutation.
+
+expected_hostname="${1:-}"
+expected_os_version="${2:-24.04}"
+failures=0
+issues=0
+
+emit() { printf '%s\n' "$1"; }
+sanitize() {
+  local value="${1:-unknown}"
+  value="${value//$'\n'/_}"
+  value="${value//$'\r'/_}"
+  value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9._:+@/~,-' '_')"
+  [[ -n "$value" ]] || value=unknown
+  printf '%s' "$value"
+}
+fail() { failures=$((failures + 1)); emit "inventory_failure=$(sanitize "$1")"; }
+issue() { issues=$((issues + 1)); emit "readiness_issue=$(sanitize "$1")"; }
+present() { if command -v "$1" >/dev/null 2>&1; then emit "tool_$1=present"; else emit "tool_$1=missing"; issue "tool_$1"; fi; }
+path_state() { if [[ -e "$1" || -L "$1" ]]; then emit "$2=present"; else emit "$2=absent"; fi; }
+port_state() {
+  local port="$1" state=false
+  if command -v ss >/dev/null 2>&1 \
+      && ss -H -ltn 2>/dev/null | awk -v suffix=":$port" '$4 ~ suffix "$" {seen=1} END {exit !seen}'; then
+    state=true
+  fi
+  emit "tcp_port_${port}_listening=$state"
+}
+unit_state() {
+  local unit="$1" label="$2" load=unavailable active=unavailable enabled=unavailable
+  if command -v systemctl >/dev/null 2>&1; then
+    load="$(systemctl --user show "$unit" -p LoadState --value 2>/dev/null || true)"
+    active="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
+    enabled="$(systemctl --user is-enabled "$unit" 2>/dev/null || true)"
+  fi
+  emit "unit_${label}_load=$(sanitize "${load:-unavailable}");unit_${label}_active=$(sanitize "${active:-unavailable}");unit_${label}_enabled=$(sanitize "${enabled:-unavailable}")"
+}
+
+emit 'schema=ishikawa-application-host-inventory/v1'
+emit 'persistent_mutation=false'
+emit 'secret_or_document_content_read=false'
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail invalid_expected_os_version
+
+observed_hostname="$(hostname -s 2>/dev/null || true)"
+[[ "$observed_hostname" == "$expected_hostname" ]] && emit 'hostname_match=true' \
+  || { emit 'hostname_match=false'; fail hostname_mismatch; }
+
+os_id=unknown
+os_version=unknown
+if [[ -r /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  os_id="${ID:-unknown}"
+  os_version="${VERSION_ID:-unknown}"
+fi
+machine="$(uname -m 2>/dev/null || true)"
+architecture="$(dpkg --print-architecture 2>/dev/null || true)"
+emit "os_id=$(sanitize "$os_id");os_version=$(sanitize "$os_version");expected_os_version=$(sanitize "$expected_os_version")"
+emit "machine=$(sanitize "$machine");dpkg_architecture=$(sanitize "$architecture")"
+[[ "$os_id" == ubuntu && "$os_version" == "$expected_os_version" ]] || issue unsupported_os
+[[ "$machine" == x86_64 && "$architecture" == amd64 ]] || issue unsupported_architecture
+
+for tool in bash docker hostname node npm pdfinfo pdftotext psql python3 sha256sum ss systemctl tar; do present "$tool"; done
+emit "cpu_count=$(sanitize "$(nproc 2>/dev/null || true)")"
+emit "mem_total_kib=$(sanitize "$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)")"
+emit "home_available_kib=$(sanitize "$(df -Pk "$HOME" 2>/dev/null | awk 'NR == 2 {print $4}' || true)")"
+emit "python_version=$(sanitize "$(python3 -V 2>&1 || true)")"
+emit "node_version=$(sanitize "$(node --version 2>/dev/null || true)")"
+emit "npm_version=$(sanitize "$(npm --version 2>/dev/null || true)")"
+emit "psql_version=$(sanitize "$(psql --version 2>/dev/null || true)")"
+
+path_state "$HOME/Documents/Ishikawa" active_application_root
+path_state "$HOME/Documents/Ishikawa-before-v1.2" prior_rollback_root
+path_state "$HOME/Documents/Ishikawa-v1.3" v1_3_candidate_root
+unit_state ishikawa-retrieval-api.service retrieval_api
+unit_state ishikawa-observability-retention.timer observability_retention
+for port in 3000 1384 5432 65438; do port_state "$port"; done
+
+docker_access=unavailable
+docker_command=(docker)
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  docker_access=user
+elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+  docker_access=sudo_noninteractive
+  docker_command=(sudo -n docker)
+fi
+emit "docker_access=$docker_access"
+if [[ "$docker_access" != unavailable ]]; then
+  emit "docker_server_version=$(sanitize "$("${docker_command[@]}" version --format '{{.Server.Version}}' 2>/dev/null || true)")"
+  if "${docker_command[@]}" image inspect node-24-slim-nextjs-16-4-1:amd64 >/dev/null 2>&1; then
+    emit 'image_node_24_next_16_4_1_amd64=present'
+  else
+    emit 'image_node_24_next_16_4_1_amd64=absent'
+    issue accepted_node_image_missing
+  fi
+else
+  issue docker_access_unavailable
+fi
+
+postgres_inventory=unavailable
+if command -v sudo >/dev/null 2>&1 && sudo -n -u postgres psql -Atqc 'SELECT 1' postgres >/dev/null 2>&1; then
+  postgres_inventory=available
+  database_present="$(sudo -n -u postgres psql -Atqc "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname='rag_catalog')" postgres 2>/dev/null || true)"
+  role_set="$(sudo -n -u postgres psql -Atqc "SELECT count(*) FROM pg_roles WHERE rolname IN ('rag_owner','rag_ingest','rag_retrieval')" postgres 2>/dev/null || true)"
+  emit "postgres_rag_catalog_present=$(sanitize "$database_present");postgres_required_role_count=$(sanitize "$role_set")"
+  if [[ "$database_present" == t ]]; then
+    schema_version="$(sudo -n -u postgres psql -Atqc 'SELECT COALESCE(max(schema_version),0) FROM rag.schema_migrations' rag_catalog 2>/dev/null || true)"
+    active_documents="$(sudo -n -u postgres psql -Atqc 'SELECT count(*) FROM rag_search.active_documents' rag_catalog 2>/dev/null || true)"
+    active_chunks="$(sudo -n -u postgres psql -Atqc 'SELECT count(*) FROM rag_search.active_chunks' rag_catalog 2>/dev/null || true)"
+    emit "postgres_schema_version=$(sanitize "$schema_version");postgres_active_documents=$(sanitize "$active_documents");postgres_active_chunks=$(sanitize "$active_chunks")"
+  fi
+else
+  issue postgres_inventory_requires_attended_sudo
+fi
+emit "postgres_inventory=$postgres_inventory"
+
+emit "failure_count=$failures;readiness_issue_count=$issues"
+if (( failures == 0 )); then
+  emit 'ishikawa_application_host_inventory=pass'
+  exit 0
+fi
+emit 'ishikawa_application_host_inventory=blocked'
+exit 1

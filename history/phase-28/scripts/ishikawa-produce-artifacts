@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Installed entrypoint for the Ishikawa changed-document artifact pipeline."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    os.umask(0o077)
+    script_root = Path(__file__).resolve(strict=True).parent
+    python_root = (script_root.parent / "Ishikawa" / "application" / "python").resolve(strict=True)
+    sys.path.insert(0, str(python_root))
+    from ishikawa.artifact_pipeline import PipelineLayout, main as pipeline_main
+
+    return pipeline_main(
+        PipelineLayout(
+            python_root=python_root,
+            capture=(script_root / "capture-pdf-extraction-observations.py").resolve(strict=True),
+            normalize=(script_root / "normalize-pdf-extraction.py").resolve(strict=True),
+            chunk=(script_root / "create-structural-chunk-candidates.py").resolve(strict=True),
+            embed=(script_root / "embed_document_candidates_via_endpoint.py").resolve(strict=True),
+        )
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

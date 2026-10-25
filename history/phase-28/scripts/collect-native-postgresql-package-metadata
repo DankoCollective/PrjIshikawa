@@ -1,0 +1,403 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Neutral target-side metadata collector for a native package closure. It
+# writes only to a unique temporary directory, streams one tar archive to
+# standard output, and removes its temporary state. It performs no network
+# access, apt update, package download, install, database initialization,
+# service mutation, configuration mutation, content read, or secret read.
+
+expected_hostname="${1:?expected hostname required}"
+expected_os_version="${2:?expected OS version required}"
+expected_architecture="${3:?expected dpkg architecture required}"
+shift 3
+(( $# > 0 )) || { printf 'metadata_error=no_package_roots\n' >&2; exit 2; }
+root_specs=("$@")
+
+case "$expected_architecture" in
+  amd64) expected_machine=x86_64 ;;
+  arm64) expected_machine=aarch64 ;;
+  *) printf 'metadata_error=unsupported_expected_architecture\n' >&2; exit 2 ;;
+esac
+
+work_root="$(mktemp -d /tmp/native-postgresql-package-metadata.XXXXXX)"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if [[ "$work_root" == /tmp/native-postgresql-package-metadata.* && -d "$work_root" ]]; then
+    rm -rf -- "$work_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+for required in apt-cache apt-get awk bash date dpkg find hostname mkdir python3 rm sed sha256sum sort stat tar tr uname wc xargs; do
+  command -v "$required" >/dev/null 2>&1 \
+    || { printf 'metadata_error=missing_tool_%s\n' "$required" >&2; exit 2; }
+done
+
+observed_hostname="$(hostname -s 2>/dev/null || true)"
+[[ "$observed_hostname" == "$expected_hostname" ]] \
+  || { printf 'metadata_error=hostname_mismatch\n' >&2; exit 2; }
+
+os_id=unknown
+os_version=unknown
+os_pretty=unknown
+if [[ -r /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  os_id="${ID:-unknown}"
+  os_version="${VERSION_ID:-unknown}"
+  os_pretty="${PRETTY_NAME:-unknown}"
+fi
+[[ "$os_id" == ubuntu ]] \
+  || { printf 'metadata_error=unsupported_os\n' >&2; exit 2; }
+[[ "$os_version" == "$expected_os_version" || "$os_version" == "$expected_os_version".* ]] \
+  || { printf 'metadata_error=os_version_mismatch\n' >&2; exit 2; }
+
+dpkg_arch="$(dpkg --print-architecture 2>/dev/null || true)"
+machine="$(uname -m 2>/dev/null || true)"
+[[ "$dpkg_arch" == "$expected_architecture" && "$machine" == "$expected_machine" ]] \
+  || { printf 'metadata_error=architecture_mismatch\n' >&2; exit 2; }
+
+printf 'schema=native-postgresql-package-metadata/v1\n' >"$work_root/host_summary.env"
+printf 'hostname_match=true\n' >>"$work_root/host_summary.env"
+printf 'os_id=%s\n' "$os_id" >>"$work_root/host_summary.env"
+printf 'os_version=%s\n' "$os_version" >>"$work_root/host_summary.env"
+printf 'os_pretty=%s\n' "${os_pretty// /_}" >>"$work_root/host_summary.env"
+printf 'machine=%s\n' "$machine" >>"$work_root/host_summary.env"
+printf 'dpkg_architecture=%s\n' "$dpkg_arch" >>"$work_root/host_summary.env"
+printf 'persistent_mutation=false\n' >>"$work_root/host_summary.env"
+printf 'network_access=false\n' >>"$work_root/host_summary.env"
+printf 'apt_metadata_update=false\n' >>"$work_root/host_summary.env"
+printf 'package_download=false\n' >>"$work_root/host_summary.env"
+printf 'package_install=false\n' >>"$work_root/host_summary.env"
+printf 'database_initialization=false\n' >>"$work_root/host_summary.env"
+printf 'service_mutation=false\n' >>"$work_root/host_summary.env"
+printf 'configuration_mutation=false\n' >>"$work_root/host_summary.env"
+printf 'content_or_secret_capture=false\n' >>"$work_root/host_summary.env"
+
+printf 'package\texpected_version\tcandidate_version\tarchitecture\tfilename\tsize\tsha256\tsource\n' \
+  >"$work_root/root_package_records.tsv"
+root_packages=()
+for spec in "${root_specs[@]}"; do
+  [[ "$spec" == *=* ]] \
+    || { printf 'metadata_error=invalid_package_spec\n' >&2; exit 2; }
+  package="${spec%%=*}"
+  expected_version="${spec#*=}"
+  [[ "$package" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] \
+    || { printf 'metadata_error=invalid_package_name\n' >&2; exit 2; }
+  [[ "$expected_version" =~ ^[A-Za-z0-9.+:~_-]+$ ]] \
+    || { printf 'metadata_error=invalid_package_version\n' >&2; exit 2; }
+  candidate="$(apt-cache policy "$package" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+  [[ -n "$candidate" && "$candidate" != '(none)' ]] \
+    || { printf 'metadata_error=package_candidate_absent_%s\n' "$package" >&2; exit 2; }
+  [[ "$candidate" == "$expected_version" ]] \
+    || { printf 'metadata_error=package_candidate_changed_%s\n' "$package" >&2; exit 2; }
+  show="$(apt-cache show "${package}=${candidate}" 2>/dev/null)"
+  architecture="$(awk -F': ' '$1 == "Architecture" {print $2; exit}' <<<"$show")"
+  filename="$(awk -F': ' '$1 == "Filename" {print $2; exit}' <<<"$show")"
+  size="$(awk -F': ' '$1 == "Size" {print $2; exit}' <<<"$show")"
+  sha256="$(awk -F': ' '$1 == "SHA256" {print $2; exit}' <<<"$show")"
+  source="$(awk -F': ' '$1 == "Source" {print $2; exit}' <<<"$show")"
+  [[ -n "$architecture" && -n "$filename" && -n "$size" && "$sha256" =~ ^[0-9a-f]{64}$ ]] \
+    || { printf 'metadata_error=incomplete_package_metadata_%s\n' "$package" >&2; exit 2; }
+  [[ -n "$source" ]] || source="$package"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$package" "$expected_version" "$candidate" "$architecture" "$filename" "$size" "$sha256" "$source" \
+    >>"$work_root/root_package_records.tsv"
+  root_packages+=("$package")
+done
+
+python3 - "$work_root" "${root_packages[@]}" <<'PY'
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from collections import deque
+from pathlib import Path
+
+work_root = Path(sys.argv[1])
+roots = sys.argv[2:]
+root_set = set(roots)
+constraint_re = re.compile(r"\s*\([^)]*\)")
+
+
+def run_text(command: list[str]) -> str:
+    try:
+        return subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def parse_fields(raw: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    current = ""
+    for line in raw.splitlines():
+        if not line:
+            if fields:
+                break
+            continue
+        if line.startswith((" ", "\t")) and current:
+            fields[current] += " " + line.strip()
+            continue
+        if ":" in line:
+            current, value = line.split(":", 1)
+            fields[current] = value.strip()
+    return fields
+
+
+def package_fields(package: str) -> dict[str, str]:
+    # apt-cache show --no-all-versions can prefer the dpkg status stanza for an
+    # already-installed package. That stanza has no archive Filename, Size, or
+    # SHA256, so it cannot describe an offline package closure. Resolve the apt
+    # candidate first and then request that exact archive version.
+    policy = run_text(["apt-cache", "policy", package])
+    candidate = ""
+    for line in policy.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Candidate:"):
+            candidate = stripped.split(":", 1)[1].strip()
+            break
+    if not candidate or candidate == "(none)":
+        return {}
+    return parse_fields(run_text(["apt-cache", "show", f"{package}={candidate}"]))
+
+
+def clean_name(raw: str) -> str:
+    candidate = constraint_re.sub("", raw).strip()
+    if ":" in candidate:
+        candidate = candidate.split(":", 1)[0]
+    return candidate.strip()
+
+
+def reverse_providers(virtual_package: str) -> list[str]:
+    providers: list[str] = []
+    in_reverse_provides = False
+    for line in run_text(["apt-cache", "showpkg", virtual_package]).splitlines():
+        if line.strip() == "Reverse Provides:":
+            in_reverse_provides = True
+            continue
+        if not in_reverse_provides:
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        provider = stripped.split()[0]
+        if provider and provider not in providers:
+            providers.append(provider)
+    return providers
+
+
+def choose_dependency(raw: str) -> str:
+    alternatives = [clean_name(part) for part in raw.split("|")]
+    for alternative in alternatives:
+        if not alternative:
+            continue
+        fields = package_fields(alternative)
+        if fields.get("Filename") and fields.get("SHA256"):
+            return alternative
+    # Some dependencies name a virtual package. Prefer a provider that is
+    # already one of the approved roots, then any concrete archive provider.
+    providers: list[str] = []
+    for alternative in alternatives:
+        if alternative:
+            providers.extend(reverse_providers(alternative))
+    providers = sorted(set(providers), key=lambda item: (item not in root_set, item))
+    for provider in providers:
+        fields = package_fields(provider)
+        if fields.get("Filename") and fields.get("SHA256"):
+            return provider
+    return ""
+
+
+queue: deque[str] = deque(roots)
+seen: set[str] = set()
+records: list[dict[str, str]] = []
+edges: list[tuple[str, str, str, str]] = []
+unresolved: list[tuple[str, str, str]] = []
+
+while queue:
+    package = queue.popleft()
+    if package in seen:
+        continue
+    fields = package_fields(package)
+    required = ("Package", "Version", "Architecture", "Filename", "Size", "SHA256")
+    missing = [field for field in required if not fields.get(field)]
+    if missing:
+        unresolved.append((package, "missing_metadata", ",".join(missing)))
+        continue
+    seen.add(package)
+    records.append(
+        {
+            "package": fields["Package"],
+            "version": fields["Version"],
+            "architecture": fields["Architecture"],
+            "filename": fields["Filename"],
+            "size": fields["Size"],
+            "sha256": fields["SHA256"],
+            "source": fields.get("Source", fields["Package"]),
+            "pre_depends": fields.get("Pre-Depends", ""),
+            "depends": fields.get("Depends", ""),
+            "root_or_dependency": "root" if package in root_set else "dependency",
+        }
+    )
+    for field_name in ("Pre-Depends", "Depends"):
+        value = fields.get(field_name, "")
+        if not value:
+            continue
+        for raw_dependency in value.split(","):
+            raw_dependency = raw_dependency.strip()
+            selected = choose_dependency(raw_dependency)
+            if not selected:
+                unresolved.append((package, field_name, raw_dependency))
+                continue
+            edges.append((package, field_name, raw_dependency, selected))
+            if selected not in seen:
+                queue.append(selected)
+
+with (work_root / "resolved_packages.tsv").open("w", encoding="utf-8") as handle:
+    columns = [
+        "package", "version", "architecture", "filename", "size", "sha256",
+        "source", "root_or_dependency", "pre_depends", "depends",
+    ]
+    handle.write("\t".join(columns) + "\n")
+    for record in records:
+        handle.write(
+            "\t".join(record[column].replace("\t", " ").replace("\n", " ") for column in columns)
+            + "\n"
+        )
+
+with (work_root / "package_resolution_edges.tsv").open("w", encoding="utf-8") as handle:
+    handle.write("parent\tfield\traw_dependency\tselected_package\n")
+    for edge in edges:
+        handle.write("\t".join(edge) + "\n")
+
+with (work_root / "unresolved_dependencies.tsv").open("w", encoding="utf-8") as handle:
+    handle.write("parent\tfield\tdependency_or_detail\n")
+    for item in unresolved:
+        handle.write("\t".join(item) + "\n")
+
+if unresolved:
+    for parent, field, detail in unresolved:
+        print(
+            f"metadata_error=unresolved_dependency;parent={parent};field={field};detail={detail}",
+            file=sys.stderr,
+        )
+    raise SystemExit("unresolved dependency metadata")
+
+(work_root / "resolved_package_specs.txt").write_text(
+    "\n".join(f"{record['package']}={record['version']}" for record in records) + "\n",
+    encoding="utf-8",
+)
+PY
+
+mapfile -t resolved_specs <"$work_root/resolved_package_specs.txt"
+apt-get -s --no-install-recommends install "${resolved_specs[@]}" \
+  >"$work_root/apt_simulated_install.txt" 2>"$work_root/apt_simulated_install.stderr"
+mkdir -p -- "$work_root/empty-apt-cache/partial"
+apt-get --print-uris --reinstall --yes --download-only --no-install-recommends \
+  -o "Dir::Cache::archives=$work_root/empty-apt-cache" \
+  install "${resolved_specs[@]}" \
+  >"$work_root/apt_print_uris.txt" 2>"$work_root/apt_print_uris.stderr"
+rm -rf -- "$work_root/empty-apt-cache"
+
+python3 - "$work_root" <<'PY'
+from __future__ import annotations
+
+import csv
+import re
+import sys
+from pathlib import Path
+
+work_root = Path(sys.argv[1])
+with (work_root / "resolved_packages.tsv").open(encoding="utf-8") as handle:
+    resolved = list(csv.DictReader(handle, delimiter="\t"))
+by_package = {row["package"]: row for row in resolved}
+
+pattern = re.compile(r"^'([^']+)'\s+(\S+)\s+(\d+)(?:\s+(SHA256:[0-9a-f]{64}))?")
+entries: list[dict[str, str]] = []
+for raw_line in (work_root / "apt_print_uris.txt").read_text(encoding="utf-8", errors="replace").splitlines():
+    match = pattern.match(raw_line.strip())
+    if not match:
+        continue
+    uri, local_filename, output_size, digest = match.groups()
+    package_guess = local_filename.split("_", 1)[0]
+    record = by_package.get(package_guess)
+    if not record:
+        continue
+    output_sha = digest.split(":", 1)[1] if digest else ""
+    if output_sha and output_sha != record["sha256"]:
+        raise SystemExit(f"URI digest differs from apt metadata for {package_guess}")
+    if output_size != record["size"]:
+        raise SystemExit(f"URI size differs from apt metadata for {package_guess}")
+    entry = dict(record)
+    entry["uri"] = uri
+    entry["local_filename"] = local_filename
+    entries.append(entry)
+
+entry_packages = {row["package"] for row in entries}
+missing = sorted(set(by_package) - entry_packages)
+if missing:
+    raise SystemExit("apt URI output missing resolved packages: " + ", ".join(missing))
+
+columns = [
+    "package", "version", "architecture", "uri", "local_filename", "size",
+    "sha256", "filename", "source", "root_or_dependency", "pre_depends", "depends",
+]
+with (work_root / "package_uris.tsv").open("w", encoding="utf-8") as handle:
+    handle.write("\t".join(columns) + "\n")
+    for entry in entries:
+        handle.write(
+            "\t".join(entry[column].replace("\t", " ").replace("\n", " ") for column in columns)
+            + "\n"
+        )
+PY
+
+{
+  for path in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources /etc/apt/preferences /etc/apt/preferences.d/*; do
+    if [[ -r "$path" && -f "$path" ]]; then
+      stat -c '%U:%G %a %s %n' "$path"
+      sha256sum "$path"
+    fi
+  done
+} >"$work_root/apt_source_checksums.txt"
+
+{
+  for directory in /etc/apt/keyrings /etc/apt/trusted.gpg.d /usr/share/keyrings; do
+    if [[ -d "$directory" ]]; then
+      find "$directory" -maxdepth 1 -type f -print0 \
+        | sort -z \
+        | while IFS= read -r -d '' path; do
+            stat -c '%U:%G %a %s %n' "$path"
+            sha256sum "$path"
+          done
+    fi
+  done
+} >"$work_root/apt_keyring_checksums.txt"
+
+resolved_count="$(( $(wc -l <"$work_root/resolved_packages.tsv") - 1 ))"
+uri_count="$(( $(wc -l <"$work_root/package_uris.tsv") - 1 ))"
+{
+  printf 'schema=native-postgresql-package-capture/v1\n'
+  printf 'generated_utc=%s\n' "$(date -u +%Y%m%dT%H%M%SZ)"
+  printf 'root_package_count=%s\n' "${#root_specs[@]}"
+  printf 'resolved_package_count=%s\n' "$resolved_count"
+  printf 'package_uri_count=%s\n' "$uri_count"
+  printf 'complete_closure=true\n'
+  printf 'remote_package_download=false\n'
+  printf 'remote_package_install=false\n'
+  printf 'database_initialization=false\n'
+  printf 'service_mutation=false\n'
+} >"$work_root/capture_summary.env"
+
+(
+  cd "$work_root"
+  find . -maxdepth 1 -type f -printf '%P\t%s\n' | sort >manifest.tsv
+  find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+    | sort -z | xargs -0 sha256sum >SHA256SUMS
+  tar -czf - .
+)

@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Produce extraction, normalization, chunk, and embedding artifacts from a
+# checksum-bound synthetic batch. Endpoint transport must already exist.
+
+umask 077
+emit() { printf '%s\n' "$1"; }
+block() { emit "live_document_stage=blocked;reason=$1"; exit 1; }
+clear_secret() { nomic_key=''; unset nomic_key; }
+trap clear_secret EXIT
+trap 'clear_secret; exit 130' INT
+trap 'clear_secret; exit 143' TERM
+
+(( $# == 6 )) || block invalid_argument_count
+expected_hostname="$1"
+expected_os_version="$2"
+transfer_root="$3"
+expected_manifest_sha256="$4"
+expected_manifest_entries="$5"
+expected_source_manifest_sha256="$6"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || block invalid_expected_os_version
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_manifest_sha256
+[[ "$expected_manifest_entries" =~ ^[1-9][0-9]{0,3}$ ]] || block invalid_manifest_entry_count
+[[ "$expected_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || block invalid_source_manifest_sha256
+[[ "$transfer_root" == /tmp/live-document-stage-* && -d "$transfer_root" && ! -L "$transfer_root" ]] || block invalid_transfer_root
+(( EUID != 0 )) || block nonroot_execution_required
+
+for required in awk dpkg grep hostname mkdir python3 sha256sum ss stat tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+manifest="$transfer_root/payload.sha256"
+source_manifest="$transfer_root/synthetic_pdf_sources.json"
+[[ -f "$manifest" && ! -L "$manifest" && -r "$manifest" ]] || block payload_manifest_missing
+[[ -f "$source_manifest" && ! -L "$source_manifest" && -r "$source_manifest" ]] || block source_manifest_missing
+[[ "$(sha256sum "$manifest" | awk '{print $1}')" == "$expected_manifest_sha256" ]] || block payload_manifest_checksum_mismatch
+[[ "$(awk 'NF {count++} END {print count+0}' "$manifest")" == "$expected_manifest_entries" ]] || block payload_manifest_entry_count_invalid
+[[ "$(sha256sum "$source_manifest" | awk '{print $1}')" == "$expected_source_manifest_sha256" ]] || block source_manifest_checksum_mismatch
+(cd "$transfer_root" && sha256sum --check --strict payload.sha256 >/dev/null) || block payload_checksum_verification_failed
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+python_version="$(python3 -c 'import sys; print(".".join(map(str,sys.version_info[:3])))')"
+[[ "$python_version" == 3.12.* ]] || block python_version_mismatch
+
+ss -H -ltn4 'sport = :8001' 2>/dev/null | awk '$4 == "127.0.0.1:8001" {found=1} END {exit !found}' \
+  || block operator_forward_port_8001_not_listening
+listener_before="$(ss -H -ltn4 'sport = :8001' 2>/dev/null | sha256sum | awk '{print $1}')"
+
+output_root="$transfer_root/output"
+[[ ! -e "$output_root" && ! -L "$output_root" ]] || block output_root_exists
+mkdir -m 0700 -- "$output_root"
+
+capture_log="$transfer_root/capture.txt"
+normalize_log="$transfer_root/normalize.txt"
+chunk_log="$transfer_root/chunk.txt"
+embed_log="$transfer_root/embed.txt"
+capture_archive="$output_root/extraction.tar"
+normalized="$output_root/normalized.json"
+chunks="$output_root/chunks.json"
+embeddings="$output_root/embeddings.json"
+
+set +e
+PYTHONDONTWRITEBYTECODE=1 python3 -B "$transfer_root/capture-pdf-extraction-observations.py" \
+  --expected-hostname "$expected_hostname" \
+  --expected-os-version "$expected_os_version" \
+  --input-dir "$transfer_root/payload/source" \
+  --source-manifest "$source_manifest" \
+  --output-dir "$output_root/extraction" \
+  --archive "$capture_archive" >"$capture_log" 2>&1
+capture_status=$?
+set -e
+if (( capture_status != 0 )) || ! grep -Fxq 'pdf_extraction_capture=pass' "$capture_log"; then
+  emit "capture_exit_code=$capture_status;diagnostic_sha256=$(sha256sum "$capture_log" | awk '{print $1}');diagnostic_bytes=$(stat -c '%s' "$capture_log");raw_diagnostic_retained=false"
+  block extraction_failed
+fi
+archive_sha256="$(sha256sum "$capture_archive" | awk '{print $1}')"
+
+set +e
+PYTHONDONTWRITEBYTECODE=1 python3 -B "$transfer_root/normalize-pdf-extraction.py" \
+  --archive "$capture_archive" \
+  --expected-archive-sha256 "$archive_sha256" \
+  --output "$normalized" \
+  --python-root "$transfer_root/payload" \
+  --source-manifest "$source_manifest" >"$normalize_log" 2>&1
+normalize_status=$?
+set -e
+if (( normalize_status != 0 )) || ! grep -Fxq 'normalization=pass' "$normalize_log"; then
+  emit "normalization_exit_code=$normalize_status;diagnostic_sha256=$(sha256sum "$normalize_log" | awk '{print $1}');diagnostic_bytes=$(stat -c '%s' "$normalize_log");raw_diagnostic_retained=false"
+  block normalization_failed
+fi
+normalized_sha256="$(sha256sum "$normalized" | awk '{print $1}')"
+
+set +e
+PYTHONDONTWRITEBYTECODE=1 python3 -B "$transfer_root/create-structural-chunk-candidates.py" \
+  --input "$normalized" \
+  --expected-input-sha256 "$normalized_sha256" \
+  --output "$chunks" \
+  --python-root "$transfer_root/payload" >"$chunk_log" 2>&1
+chunk_status=$?
+set -e
+if (( chunk_status != 0 )) || ! grep -Fxq 'chunk_candidates=pass' "$chunk_log"; then
+  emit "chunk_exit_code=$chunk_status;diagnostic_sha256=$(sha256sum "$chunk_log" | awk '{print $1}');diagnostic_bytes=$(stat -c '%s' "$chunk_log");raw_diagnostic_retained=false"
+  block chunking_failed
+fi
+chunks_sha256="$(sha256sum "$chunks" | awk '{print $1}')"
+
+printf 'Nomic API key (input hidden): ' >/dev/tty
+IFS= read -r -s nomic_key </dev/tty || block nomic_credential_read_failed
+printf '\n' >/dev/tty
+[[ ${#nomic_key} -ge 32 && ${#nomic_key} -le 1024 && "$nomic_key" != *$'\r'* ]] || block nomic_credential_format_invalid
+set +e
+printf '%s' "$nomic_key" | PYTHONDONTWRITEBYTECODE=1 python3 -B \
+  "$transfer_root/embed_document_candidates_via_endpoint.py" \
+  --credential-stdin \
+  --input "$chunks" \
+  --expected-input-sha256 "$chunks_sha256" \
+  --batch-size 16 \
+  --output "$embeddings" >"$embed_log" 2>&1
+embed_status=$?
+set -e
+clear_secret
+if (( embed_status != 0 )) || ! grep -Fxq 'document_embedding_stage=pass' "$embed_log"; then
+  while IFS= read -r line; do
+    [[ "$line" =~ ^document_embedding_stage=blocked\;reason=[a-z0-9_]+$ ]] && emit "$line"
+  done <"$embed_log"
+  emit "embedding_exit_code=$embed_status;diagnostic_sha256=$(sha256sum "$embed_log" | awk '{print $1}');diagnostic_bytes=$(stat -c '%s' "$embed_log");raw_diagnostic_retained=false"
+  block embedding_failed
+fi
+repeat_measurement="$(grep -E '^tokenization_calls=[0-9]+;embedding_calls=[0-9]+;repeat_request_cardinality=16;repeat_max_abs_delta=[0-9.e+-]+;repeat_min_cosine_similarity=[0-9.e+-]+;repeat_max_cosine_distance=[0-9.e+-]+;repeat_within_tolerance=(true|false)$' "$embed_log" || true)"
+[[ "$(printf '%s\n' "$repeat_measurement" | grep -c .)" == 1 ]] || block embedding_repeat_measurement_missing
+
+ss -H -ltn4 'sport = :8001' 2>/dev/null | awk '$4 == "127.0.0.1:8001" {found=1} END {exit !found}' \
+  || block operator_forward_port_8001_not_listening_after_stage
+listener_after="$(ss -H -ltn4 'sport = :8001' 2>/dev/null | sha256sum | awk '{print $1}')"
+[[ "$listener_before" == "$listener_after" ]] || block operator_forward_listener_identity_changed
+
+embeddings_sha256="$(sha256sum "$embeddings" | awk '{print $1}')"
+printf '%s  %s\n' \
+  "$archive_sha256" extraction.tar \
+  "$normalized_sha256" normalized.json \
+  "$chunks_sha256" chunks.json \
+  "$embeddings_sha256" embeddings.json >"$output_root/artifacts.sha256"
+
+emit 'purpose=produce_live_document_artifacts_from_checksum_bound_synthetic_batch'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture;python_version=$python_version"
+emit 'source_documents=6;source_pages=27;expected_chunk_candidates=126'
+emit "extraction_sha256=$archive_sha256;extraction_bytes=$(stat -c '%s' "$capture_archive")"
+emit "normalized_sha256=$normalized_sha256;normalized_bytes=$(stat -c '%s' "$normalized")"
+emit "chunks_sha256=$chunks_sha256;chunks_bytes=$(stat -c '%s' "$chunks")"
+emit "embeddings_sha256=$embeddings_sha256;embeddings_bytes=$(stat -c '%s' "$embeddings")"
+emit "$repeat_measurement"
+emit 'operator_forward_port_8001_after_stage=listening;forwarding_changed=false'
+emit 'credential_retained=false;raw_text_logged=false;vectors_logged=false'
+emit 'database_contact=false;generation_model_contact=false'
+emit 'live_document_stage=pass'

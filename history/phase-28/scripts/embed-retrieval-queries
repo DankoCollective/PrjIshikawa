@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Measure and embed one accepted synthetic retrieval-query set while
+# preserving the initial managed Nomic service state. Run through attended
+# sudo; credentials are read from the terminal and are never stored.
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly QUALIFIER="$SCRIPT_DIR/embed_retrieval_queries.py"
+readonly UNIT="vllm-nomic.service"
+readonly START_COMMAND="/usr/local/sbin/start-vllm"
+readonly STOP_COMMAND="/usr/local/sbin/stop-vllm"
+
+[[ "$EUID" -eq 0 ]] || {
+  printf '[query-embedding] result=BLOCKED reason=root_execution_required\n' >&2
+  exit 1
+}
+[[ -f "$QUALIFIER" && ! -L "$QUALIFIER" ]] || {
+  printf '[query-embedding] result=BLOCKED reason=qualifier_missing_or_unsafe\n' >&2
+  exit 1
+}
+
+started_by_qualifier=false
+nomic_api_key=""
+cleanup() {
+  local original_status="$?"
+  trap - EXIT INT TERM
+  unset nomic_api_key
+  if [[ "$started_by_qualifier" == true ]]; then
+    if "$STOP_COMMAND" nomic >/dev/null 2>&1; then
+      printf '[query-embedding] cleanup=pass service_state=restored_inactive\n'
+    else
+      printf '[query-embedding] cleanup=failed service_state=review_required\n' >&2
+      original_status=1
+    fi
+  else
+    printf '[query-embedding] cleanup=not_required service_state=left_active\n'
+  fi
+  exit "$original_status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if systemctl is-active --quiet "$UNIT"; then
+  printf '[query-embedding] initial_service_state=active action=preserve\n'
+else
+  [[ -x "$START_COMMAND" && -x "$STOP_COMMAND" ]] || {
+    printf '[query-embedding] result=BLOCKED reason=managed_service_commands_missing\n' >&2
+    exit 1
+  }
+  printf '[query-embedding] initial_service_state=inactive action=temporary_start\n'
+  if ! "$START_COMMAND" nomic >/dev/null 2>&1; then
+    printf '[query-embedding] result=BLOCKED reason=temporary_service_start_failed\n' >&2
+    exit 1
+  fi
+  started_by_qualifier=true
+fi
+
+[[ -r /dev/tty && -w /dev/tty ]] || {
+  printf '[query-embedding] result=BLOCKED reason=attended_tty_unavailable\n' >&2
+  exit 1
+}
+printf 'Enter the Nomic API key: ' >/dev/tty
+if ! IFS= read -r -s nomic_api_key </dev/tty; then
+  printf '\n' >/dev/tty
+  printf '[query-embedding] result=BLOCKED reason=credential_entry_failed\n' >&2
+  exit 1
+fi
+printf '\n' >/dev/tty
+if (( ${#nomic_api_key} < 32 || ${#nomic_api_key} > 1024 )); then
+  unset nomic_api_key
+  printf '[query-embedding] result=BLOCKED reason=operator_credential_format_invalid\n' >&2
+  exit 1
+fi
+
+printf '[query-embedding] credential_source=operator_attended_tty stored_credential_read=false\n'
+qualification_status=0
+printf '%s' "$nomic_api_key" \
+  | PYTHONDONTWRITEBYTECODE=1 python3 "$QUALIFIER" --credential-stdin "$@" \
+  || qualification_status=$?
+unset nomic_api_key
+
+output_path=""
+expect_output=false
+for argument in "$@"; do
+  if [[ "$expect_output" == true ]]; then
+    output_path="$argument"
+    expect_output=false
+  elif [[ "$argument" == --output ]]; then
+    expect_output=true
+  elif [[ "$argument" == --output=* ]]; then
+    output_path="${argument#--output=}"
+  fi
+done
+if (( qualification_status == 0 )) && [[ -n "$output_path" && -f "$output_path" ]]; then
+  if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ && "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then
+    chown "$SUDO_UID:$SUDO_GID" -- "$output_path" || {
+      printf '[query-embedding] result=BLOCKED reason=artifact_ownership_return_failed\n' >&2
+      qualification_status=1
+    }
+  fi
+fi
+exit "$qualification_status"

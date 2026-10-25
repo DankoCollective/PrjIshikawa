@@ -1,0 +1,27 @@
+schema_version: 2
+
+generation:
+  served_model: google/gemma-4-26B-A4B-it
+  tokenizer_identity: 6d918c92544be0f241bf1a076634aaf84add4a38e8f82efb54e75d128ff92815
+  chat_template_sha256: 36e3a42e5cf14cd0020e72d92e1fdd9970f59b82170e421f0cbe1bb42bead3f0
+  enable_thinking: false
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 64
+  qualified_service_maximum_tokens: 204800
+
+budget:
+  total_context_tokens: 32768
+  instruction_token_limit: 2048
+  conversation_token_limit: 12288
+  evidence_token_limit: 16384
+  answer_token_reserve: 2048
+  generation_prompt_targets:
+    - 8192
+    - 12288
+    - 16384
+
+diversity:
+  generation_optional_group_limit: 6
+  normal_per_document_limit: 3
+  explicit_document_limit: 20

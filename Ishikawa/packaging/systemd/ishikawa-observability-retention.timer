@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Ishikawa local observability retention daily
+
+[Timer]
+OnCalendar=daily
+Persistent=yes
+AccuracySec=5m
+RandomizedDelaySec=5m
+Unit=ishikawa-observability-retention.service
+
+[Install]
+WantedBy=timers.target

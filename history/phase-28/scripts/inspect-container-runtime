@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# Read-only Docker runtime and allowlisted image inventory. Run through sudo.
+# The script performs no pull, build, load, run, stop, removal, or configuration
+# change and emits bounded key/value records only.
+
+expected_hostname="${1:-}"
+failure_count=0
+readiness_issue_count=0
+node_image_count=0
+python_image_count=0
+pgvector_image_count=0
+
+emit() {
+  printf '%s\n' "$1"
+}
+
+sanitize() {
+  local value="${1:-unknown}"
+  value="${value//$'\n'/_}"
+  value="${value//$'\r'/_}"
+  value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9._:+@/~,-' '_')"
+  [[ -n "$value" ]] || value=unknown
+  printf '%s' "$value"
+}
+
+fail_inventory() {
+  failure_count=$((failure_count + 1))
+  emit "inventory_failure=$(sanitize "$1")"
+}
+
+flag_readiness() {
+  readiness_issue_count=$((readiness_issue_count + 1))
+  emit "readiness_issue=$(sanitize "$1")"
+}
+
+image_state() {
+  local family="$1" label="$2" reference="$3" details
+  if details="$(docker image inspect --format '{{.Architecture}}|{{.Os}}|{{.Id}}|{{.Size}}' "$reference" 2>/dev/null)"; then
+    local architecture os image_id size
+    IFS='|' read -r architecture os image_id size <<<"$details"
+    emit "image_${label}=present;reference=$(sanitize "$reference");architecture=$(sanitize "$architecture");os=$(sanitize "$os");image_id=$(sanitize "$image_id");size_bytes=$(sanitize "$size")"
+    case "$family" in
+      node) node_image_count=$((node_image_count + 1)) ;;
+      python) python_image_count=$((python_image_count + 1)) ;;
+      pgvector) pgvector_image_count=$((pgvector_image_count + 1)) ;;
+    esac
+  else
+    emit "image_${label}=absent;reference=$(sanitize "$reference")"
+  fi
+}
+
+emit 'schema=container-runtime-inventory/v1'
+emit 'persistent_mutation=false'
+emit 'network_access=false'
+emit 'container_execution=false'
+emit 'content_or_secret_capture=false'
+
+if (( EUID != 0 )); then
+  fail_inventory root_execution_required
+fi
+if [[ ! "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+  fail_inventory invalid_expected_hostname
+fi
+
+observed_hostname="$(hostname -s 2>/dev/null || true)"
+if [[ "$observed_hostname" == "$expected_hostname" ]]; then
+  emit 'hostname_match=true'
+else
+  emit 'hostname_match=false'
+  fail_inventory hostname_mismatch
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  fail_inventory docker_command_missing
+elif ! docker version >/dev/null 2>&1; then
+  fail_inventory docker_daemon_unavailable
+fi
+
+if (( failure_count > 0 )); then
+  emit "failure_count=$failure_count"
+  emit "readiness_issue_count=$readiness_issue_count"
+  emit 'container_runtime_inventory=blocked'
+  emit 'implementation_readiness=blocked'
+  exit 1
+fi
+
+docker_client_version="$(docker version --format '{{.Client.Version}}' 2>/dev/null || true)"
+docker_server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+docker_compose_version="$(docker compose version --short 2>/dev/null || true)"
+docker_buildx_version="$(docker buildx version 2>/dev/null | awk '{print $2; exit}' || true)"
+docker_architecture="$(docker info --format '{{.Architecture}}' 2>/dev/null || true)"
+docker_os="$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)"
+docker_storage_driver="$(docker info --format '{{.Driver}}' 2>/dev/null || true)"
+docker_cgroup_driver="$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
+docker_root_dir="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+docker_available_kib=unknown
+if [[ -n "$docker_root_dir" ]]; then
+  docker_available_kib="$(df -Pk "$docker_root_dir" 2>/dev/null | awk 'NR == 2 {print $4}' || true)"
+fi
+
+emit "docker_client_version=$(sanitize "${docker_client_version:-unknown}")"
+emit "docker_server_version=$(sanitize "${docker_server_version:-unknown}")"
+emit "docker_compose_version=$(sanitize "${docker_compose_version:-missing}")"
+emit "docker_buildx_version=$(sanitize "${docker_buildx_version:-missing}")"
+emit "docker_architecture=$(sanitize "${docker_architecture:-unknown}")"
+emit "docker_operating_system=$(sanitize "${docker_os:-unknown}")"
+emit "docker_storage_driver=$(sanitize "${docker_storage_driver:-unknown}")"
+emit "docker_cgroup_driver=$(sanitize "${docker_cgroup_driver:-unknown}")"
+emit "docker_filesystem_available_kib=$(sanitize "${docker_available_kib:-unknown}")"
+
+[[ "$docker_architecture" == x86_64 || "$docker_architecture" == amd64 ]] \
+  || flag_readiness docker_architecture_mismatch
+[[ -n "$docker_compose_version" ]] || flag_readiness docker_compose_plugin_unavailable
+[[ -n "$docker_buildx_version" ]] || flag_readiness docker_buildx_plugin_unavailable
+
+running_container_count="$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')"
+all_container_count="$(docker ps -aq 2>/dev/null | wc -l | tr -d ' ')"
+image_count="$(docker image ls -q 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+volume_count="$(docker volume ls -q 2>/dev/null | wc -l | tr -d ' ')"
+network_count="$(docker network ls -q 2>/dev/null | wc -l | tr -d ' ')"
+emit "running_container_count=$(sanitize "$running_container_count")"
+emit "all_container_count=$(sanitize "$all_container_count")"
+emit "local_image_count=$(sanitize "$image_count")"
+emit "docker_volume_count=$(sanitize "$volume_count")"
+emit "docker_network_count=$(sanitize "$network_count")"
+
+for port in 3000 1384 5432; do
+  published_count="$(docker ps --filter "publish=$port" -q 2>/dev/null | wc -l | tr -d ' ')"
+  emit "docker_published_port_${port}_container_count=$(sanitize "$published_count")"
+done
+
+image_state node node_next_amd64 node-24-slim-nextjs-16-4-1:amd64
+image_state node node_next_latest node-24-slim-nextjs-16-4-1:latest
+image_state python python_3_12_slim python:3.12-slim
+image_state python python_3_13_slim python:3.13-slim
+image_state pgvector pgvector_pg16 pgvector/pgvector:pg16
+image_state pgvector pgvector_pg17 pgvector/pgvector:pg17
+image_state pgvector pgvector_pg18 pgvector/pgvector:pg18
+
+(( node_image_count > 0 )) || flag_readiness node_next_runtime_image_not_found
+(( python_image_count > 0 )) || flag_readiness python_runtime_image_not_found
+(( pgvector_image_count > 0 )) || flag_readiness pgvector_runtime_image_not_found
+
+emit "node_runtime_image_match_count=$node_image_count"
+emit "python_runtime_image_match_count=$python_image_count"
+emit "pgvector_runtime_image_match_count=$pgvector_image_count"
+emit "failure_count=$failure_count"
+emit "readiness_issue_count=$readiness_issue_count"
+emit 'container_runtime_inventory=pass'
+if (( readiness_issue_count == 0 )); then
+  emit 'implementation_readiness=ready_for_source_scaffold'
+else
+  emit 'implementation_readiness=review_missing_runtime_artifacts'
+fi

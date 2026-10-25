@@ -1,0 +1,11 @@
+schema_version: 1
+classes:
+  - class_id: administrative_form
+    display_name: Administrative Form
+    status: active
+  - class_id: policy_sop
+    display_name: Policy or SOP
+    status: active
+  - class_id: regulation
+    display_name: Regulation
+    status: active

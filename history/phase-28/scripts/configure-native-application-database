@@ -1,0 +1,368 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Create one empty application database, a non-login owner, isolated ingestion
+# and retrieval login roles, and the vector extension. The existing native
+# database cluster is started only for this operation and stopped afterward.
+
+umask 077
+export SYSTEMD_PAGER=cat
+export SYSTEMD_LESS=FRX
+export NO_COLOR=1
+
+emit() {
+  printf '%s\n' "$1"
+}
+
+block() {
+  emit "native_application_database_configuration=blocked;reason=$1"
+  exit 1
+}
+
+if (( $# != 6 )); then
+  block invalid_argument_count
+fi
+
+expected_hostname="$1"
+expected_os_version="$2"
+database_name="$3"
+owner_role="$4"
+ingest_role="$5"
+retrieval_role="$6"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] \
+  || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] \
+  || block invalid_expected_os_version
+for identifier in "$database_name" "$owner_role" "$ingest_role" "$retrieval_role"; do
+  [[ "$identifier" =~ ^[a-z][a-z0-9_]{0,62}$ ]] \
+    || block invalid_database_identifier
+done
+[[ "$database_name" != postgres && "$database_name" != template0 \
+    && "$database_name" != template1 ]] \
+  || block reserved_database_name
+[[ "$owner_role" != postgres && "$ingest_role" != postgres \
+    && "$retrieval_role" != postgres ]] \
+  || block reserved_role_name
+[[ "$database_name" != "$owner_role" && "$database_name" != "$ingest_role" \
+    && "$database_name" != "$retrieval_role" && "$owner_role" != "$ingest_role" \
+    && "$owner_role" != "$retrieval_role" && "$ingest_role" != "$retrieval_role" ]] \
+  || block database_identifiers_not_distinct
+(( EUID == 0 )) || block root_authority_required
+
+for required in awk dpkg-query grep hostname pg_conftool pg_isready pg_lsclusters runuser sed sleep ss stat systemctl tr; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+for binary in pg_isready postgres psql; do
+  [[ -x "/usr/lib/postgresql/16/bin/$binary" ]] \
+    || block "missing_postgresql_binary_$binary"
+done
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] \
+  || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+
+postgresql_version="$(/usr/lib/postgresql/16/bin/postgres --version | awk '{print $3}')"
+[[ "$postgresql_version" == 16.15 ]] || block postgresql_version_mismatch
+[[ -f /usr/share/postgresql/16/extension/vector.control ]] \
+  || block vector_extension_control_missing
+vector_default_version="$(sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/p" /usr/share/postgresql/16/extension/vector.control)"
+[[ "$vector_default_version" == 0.8.7 ]] || block vector_extension_version_mismatch
+
+cluster_line="$(pg_lsclusters --no-header 2>/dev/null || true)"
+cluster_count="$(awk 'NF {count++} END {print count+0}' <<<"$cluster_line")"
+(( cluster_count == 1 )) || block database_cluster_count_mismatch
+read -r cluster_version cluster_name cluster_port cluster_status cluster_owner cluster_data_directory cluster_log_file \
+  <<<"$cluster_line"
+[[ "$cluster_version" == 16 && "$cluster_name" == main && "$cluster_port" == 5432 \
+    && "$cluster_status" == down && "$cluster_owner" == postgres \
+    && "$cluster_data_directory" == /var/lib/postgresql/16/main \
+    && "$cluster_log_file" == /var/log/postgresql/postgresql-16-main.log ]] \
+  || block database_cluster_contract_mismatch
+[[ "$(stat -c '%U:%G|%a' /var/lib/postgresql/16/main)" == 'postgres:postgres|700' ]] \
+  || block database_cluster_data_identity_mismatch
+[[ "$(sed -n 's/^[[:space:]]*\([^#[:space:]][^#[:space:]]*\)[[:space:]]*$/\1/p' /etc/postgresql/16/main/start.conf)" == manual ]] \
+  || block database_cluster_start_policy_mismatch
+[[ "$(pg_conftool 16 main show -s listen_addresses 2>/dev/null || true)" == 127.0.0.1 ]] \
+  || block database_cluster_listen_address_mismatch
+[[ "$(pg_conftool 16 main show -s password_encryption 2>/dev/null || true)" == scram-sha-256 ]] \
+  || block database_cluster_password_encryption_mismatch
+postgresql_conf=/etc/postgresql/16/main/postgresql.conf
+active_listen_line_count="$(awk '/^[[:space:]]*listen_addresses[[:space:]]*=/ {count++} END {print count+0}' "$postgresql_conf")"
+quoted_loopback_line_count="$(awk '/^[[:space:]]*listen_addresses[[:space:]]*=[[:space:]]*'\''127[.]0[.]0[.]1'\''([[:space:]]*#.*)?$/ {count++} END {print count+0}' "$postgresql_conf")"
+(( active_listen_line_count == 1 && quoted_loopback_line_count == 1 )) \
+  || block database_cluster_canonical_loopback_configuration_missing
+configuration_probe="$(runuser -u postgres -- /usr/lib/postgresql/16/bin/postgres \
+  -D /var/lib/postgresql/16/main \
+  --config-file="$postgresql_conf" \
+  -C data_directory 2>/dev/null || true)"
+[[ "$configuration_probe" == /var/lib/postgresql/16/main ]] \
+  || block database_cluster_configuration_probe_failed
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then
+  block postgresql_port_in_use_before_start
+fi
+[[ "$(systemctl is-active postgresql.service 2>/dev/null || true)" != active ]] \
+  || block postgresql_service_active_before_configuration
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" == disabled ]] \
+  || block postgresql_service_not_disabled
+[[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] \
+  || block postgresql_cluster_service_active_before_configuration
+[[ "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] \
+  || block postgresql_cluster_service_enabled_before_configuration
+
+cluster_started=false
+roles_created=false
+database_created=false
+configuration_committed=false
+ingest_password=''
+retrieval_password=''
+ingest_password_sql=''
+retrieval_password_sql=''
+
+cleanup() {
+  local status="$?" rollback_status=0 stop_status=0
+  trap - EXIT INT TERM ERR
+  set +e
+  if (( status != 0 )) && [[ "$configuration_committed" != true && "$cluster_started" == true ]]; then
+    if [[ "$database_created" == true ]]; then
+      printf 'DROP DATABASE IF EXISTS %s;\n' "$database_name" \
+        | runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+            --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres \
+            >/dev/null 2>&1 || rollback_status=1
+    fi
+    if [[ "$roles_created" == true ]]; then
+      printf 'DROP ROLE IF EXISTS %s; DROP ROLE IF EXISTS %s; DROP ROLE IF EXISTS %s;\n' \
+        "$retrieval_role" "$ingest_role" "$owner_role" \
+        | runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+            --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres \
+            >/dev/null 2>&1 || rollback_status=1
+    fi
+    emit "failed_configuration_rollback_exit_code=$rollback_status"
+  fi
+  if [[ "$cluster_started" == true ]] || systemctl --quiet is-active postgresql@16-main.service 2>/dev/null; then
+    systemctl stop postgresql@16-main.service >/dev/null 2>&1 || stop_status=$?
+    emit "cluster_stop_cleanup_exit_code=$stop_status"
+    (( stop_status == 0 )) || status=1
+  fi
+  ingest_password=''
+  retrieval_password=''
+  ingest_password_sql=''
+  retrieval_password_sql=''
+  unset ingest_password retrieval_password ingest_password_sql retrieval_password_sql
+  exit "$status"
+}
+
+unexpected_failure() {
+  local status="$1" line="$2"
+  trap - ERR
+  set +e
+  emit "native_application_database_configuration=blocked;reason=unexpected_failure;exit_code=$status;line=$line"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+read_confirmed_secret() {
+  local label="$1" output_name="$2" first='' second=''
+  printf 'Enter the password for %s: ' "$label" >/dev/tty
+  IFS= read -r -s first </dev/tty || block secret_input_failed
+  printf '\nConfirm the password for %s: ' "$label" >/dev/tty
+  IFS= read -r -s second </dev/tty || block secret_confirmation_input_failed
+  printf '\n' >/dev/tty
+  [[ "$first" == "$second" ]] || block secret_confirmation_mismatch
+  [[ -n "$first" ]] || block empty_role_secret
+  printf -v "$output_name" '%s' "$first"
+  first=''
+  second=''
+}
+
+escape_sql_literal() {
+  local value="$1"
+  value="${value//\'/\'\'}"
+  printf '%s' "$value"
+}
+
+emit 'purpose=configure_native_application_database'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit "postgresql_version=$postgresql_version;vector_default_version=$vector_default_version"
+emit "database_name=$database_name;owner_role=$owner_role;ingest_role=$ingest_role;retrieval_role=$retrieval_role"
+emit 'configuration_probe=pass;listen_addresses=127.0.0.1;listen_address_storage=quoted_ipv4_literal'
+emit 'authorized_actions=start_existing_local_cluster_create_empty_application_database_create_three_isolated_roles_enable_vector_extension_apply_initial_access_boundary_verify_configuration_stop_cluster'
+emit 'non_actions=no_network_access_no_package_change_no_application_schema_table_index_or_content_creation_no_secret_persistence_or_output_no_service_enablement'
+
+if ! systemctl start postgresql@16-main.service >/dev/null 2>&1; then
+  start_result="$(systemctl show postgresql@16-main.service --property=Result --value 2>/dev/null || true)"
+  start_active_state="$(systemctl show postgresql@16-main.service --property=ActiveState --value 2>/dev/null || true)"
+  start_sub_state="$(systemctl show postgresql@16-main.service --property=SubState --value 2>/dev/null || true)"
+  start_result="$(tr -cd 'A-Za-z0-9_.- ' <<<"$start_result" | tr ' ' '_')"
+  start_active_state="$(tr -cd 'A-Za-z0-9_.- ' <<<"$start_active_state" | tr ' ' '_')"
+  start_sub_state="$(tr -cd 'A-Za-z0-9_.- ' <<<"$start_sub_state" | tr ' ' '_')"
+  emit "cluster_start_result=${start_result:-unknown};cluster_start_active_state=${start_active_state:-unknown};cluster_start_sub_state=${start_sub_state:-unknown}"
+  block postgresql_cluster_start_failed
+fi
+cluster_started=true
+
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_isready \
+      --quiet --host=/var/run/postgresql --port=5432 --dbname=postgres; then
+    ready=true
+    break
+  fi
+  sleep 1
+done
+[[ "$ready" == true ]] || block postgresql_cluster_not_ready
+listener_lines="$(ss -H -ltn 'sport = :5432' 2>/dev/null || true)"
+listener_count="$(awk 'NF {count++} END {print count+0}' <<<"$listener_lines")"
+(( listener_count == 1 )) || block postgresql_listener_count_mismatch
+grep -Eq '[[:space:]]127\.0\.0\.1:5432[[:space:]]' <<<"$listener_lines" \
+  || block postgresql_listener_not_loopback
+emit "cluster_start=pass;readiness=pass;listener_address=127.0.0.1;listener_port=5432"
+
+# Do not ask the operator for application secrets until PostgreSQL has passed
+# configuration parsing, start, readiness, and loopback-listener checks.
+read_confirmed_secret "$ingest_role" ingest_password
+read_confirmed_secret "$retrieval_role" retrieval_password
+ingest_password_sql="$(escape_sql_literal "$ingest_password")"
+retrieval_password_sql="$(escape_sql_literal "$retrieval_password")"
+
+for object_name in "$database_name" "$owner_role" "$ingest_role" "$retrieval_role"; do
+  object_exists="$(runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align \
+    --dbname=postgres --command="SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = '$object_name') OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$object_name');" \
+    2>/dev/null | sed -n '1p')" || block existing_object_preflight_failed
+  [[ "$object_exists" == f ]] || block application_database_or_role_already_exists
+done
+
+if ! {
+  printf '%s\n' \
+    'SET standard_conforming_strings = on;' \
+    'BEGIN;' \
+    "CREATE ROLE $owner_role NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;" \
+    "CREATE ROLE $ingest_role LOGIN PASSWORD '$ingest_password_sql' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS;" \
+    "CREATE ROLE $retrieval_role LOGIN PASSWORD '$retrieval_password_sql' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS;" \
+    'COMMIT;'
+} | runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+      --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres \
+      >/dev/null 2>&1; then
+  block application_role_creation_failed
+fi
+roles_created=true
+ingest_password=''
+retrieval_password=''
+ingest_password_sql=''
+retrieval_password_sql=''
+unset ingest_password retrieval_password ingest_password_sql retrieval_password_sql
+
+if ! printf "CREATE DATABASE %s WITH OWNER %s ENCODING 'UTF8' TEMPLATE template0;\n" \
+    "$database_name" "$owner_role" \
+    | runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+        --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres \
+        >/dev/null 2>&1; then
+  block application_database_creation_failed
+fi
+database_created=true
+
+if ! printf '%s\n' \
+    "REVOKE ALL ON DATABASE $database_name FROM PUBLIC;" \
+    "GRANT CONNECT ON DATABASE $database_name TO $ingest_role, $retrieval_role;" \
+    "ALTER ROLE $retrieval_role IN DATABASE $database_name SET default_transaction_read_only = on;" \
+    | runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+        --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname=postgres \
+        >/dev/null 2>&1; then
+  block application_database_access_configuration_failed
+fi
+
+if ! printf '%s\n' \
+    'CREATE EXTENSION vector;' \
+    'REVOKE CREATE ON SCHEMA public FROM PUBLIC;' \
+    | runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+        --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --dbname="$database_name" \
+        >/dev/null 2>&1; then
+  block vector_extension_creation_failed
+fi
+
+query_scalar() {
+  local selected_database="$1" query="$2"
+  runuser -u postgres -- /usr/lib/postgresql/16/bin/psql \
+    --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align \
+    --dbname="$selected_database" --command="$query" 2>/dev/null \
+    | sed -n '1p'
+}
+
+database_contract="$(query_scalar postgres "SELECT datname || '|' || pg_get_userbyid(datdba) || '|' || pg_encoding_to_char(encoding) FROM pg_database WHERE datname = '$database_name';")" \
+  || block application_database_verification_failed
+[[ "$database_contract" == "$database_name|$owner_role|UTF8" ]] \
+  || block application_database_contract_mismatch
+
+for role_contract in \
+  "$owner_role|false|false|false|false|false|false|false|false" \
+  "$ingest_role|true|false|false|false|true|false|false|true" \
+  "$retrieval_role|true|false|false|false|true|false|false|true"; do
+  IFS='|' read -r role_name expected_login expected_super expected_createdb expected_createrole expected_inherit expected_replication expected_bypass expected_password \
+    <<<"$role_contract"
+  actual_role="$(query_scalar postgres "SELECT rolname || '|' || rolcanlogin || '|' || rolsuper || '|' || rolcreatedb || '|' || rolcreaterole || '|' || rolinherit || '|' || rolreplication || '|' || rolbypassrls || '|' || COALESCE(rolpassword LIKE 'SCRAM-SHA-256$%', false) FROM pg_authid WHERE rolname = '$role_name';")" \
+    || block application_role_verification_failed
+  [[ "$actual_role" == "$role_contract" ]] || block application_role_contract_mismatch
+done
+
+ingest_privileges="$(query_scalar postgres "SELECT has_database_privilege('$ingest_role', '$database_name', 'CONNECT') || '|' || has_database_privilege('$ingest_role', '$database_name', 'CREATE') || '|' || has_database_privilege('$ingest_role', '$database_name', 'TEMP');")" \
+  || block ingestion_role_privilege_verification_failed
+retrieval_privileges="$(query_scalar postgres "SELECT has_database_privilege('$retrieval_role', '$database_name', 'CONNECT') || '|' || has_database_privilege('$retrieval_role', '$database_name', 'CREATE') || '|' || has_database_privilege('$retrieval_role', '$database_name', 'TEMP');")" \
+  || block retrieval_role_privilege_verification_failed
+[[ "$ingest_privileges" == 'true|false|false' || "$ingest_privileges" == 't|f|f' ]] \
+  || block ingestion_role_privilege_contract_mismatch
+[[ "$retrieval_privileges" == 'true|false|false' || "$retrieval_privileges" == 't|f|f' ]] \
+  || block retrieval_role_privilege_contract_mismatch
+
+public_connect_revoked="$(query_scalar postgres "SELECT NOT EXISTS (SELECT 1 FROM pg_database d, LATERAL aclexplode(d.datacl) a WHERE d.datname = '$database_name' AND a.grantee = 0 AND a.privilege_type = 'CONNECT');")" \
+  || block public_database_access_verification_failed
+[[ "$public_connect_revoked" == t ]] || block public_database_connect_not_revoked
+retrieval_read_only="$(query_scalar postgres "SELECT EXISTS (SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole JOIN pg_database d ON d.oid = s.setdatabase WHERE r.rolname = '$retrieval_role' AND d.datname = '$database_name' AND 'default_transaction_read_only=on' = ANY(s.setconfig));")" \
+  || block retrieval_read_only_verification_failed
+[[ "$retrieval_read_only" == t ]] || block retrieval_read_only_not_configured
+installed_vector_version="$(query_scalar "$database_name" "SELECT extversion FROM pg_extension WHERE extname = 'vector';")" \
+  || block vector_extension_verification_failed
+[[ "$installed_vector_version" == 0.8.7 ]] || block vector_extension_contract_mismatch
+
+application_relation_count="$(query_scalar "$database_name" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_toast' AND c.relkind IN ('r','p','v','m','S','f');")" \
+  || block empty_database_verification_failed
+[[ "$application_relation_count" == 0 ]] || block unexpected_application_relation
+
+configuration_committed=true
+if ! systemctl stop postgresql@16-main.service >/dev/null 2>&1; then
+  block postgresql_cluster_stop_failed
+fi
+cluster_started=false
+
+cluster_status_after="$(pg_lsclusters --no-header 2>/dev/null | awk 'NF {print $4}')"
+[[ "$cluster_status_after" == down ]] || block database_cluster_not_stopped
+if ss -H -ltn 'sport = :5432' 2>/dev/null | grep -q .; then
+  block postgresql_listener_remains_after_stop
+fi
+service_active_after="$(systemctl is-active postgresql.service 2>/dev/null || true)"
+service_enabled_after="$(systemctl is-enabled postgresql.service 2>/dev/null || true)"
+cluster_service_active_after="$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)"
+cluster_service_enabled_after="$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)"
+[[ "$service_active_after" != active && "$service_enabled_after" == disabled \
+    && "$cluster_service_active_after" != active \
+    && "$cluster_service_enabled_after" != enabled ]] \
+  || block postgresql_service_final_state_mismatch
+
+emit "database_name=$database_name;database_owner=$owner_role;database_encoding=UTF8"
+emit "owner_role=$owner_role;owner_login=false;ingest_role=$ingest_role;ingest_login=true"
+emit "retrieval_role=$retrieval_role;retrieval_login=true;role_password_storage=scram-sha-256"
+emit 'ingest_database_privileges=connect_only;retrieval_database_privileges=connect_only;retrieval_default_transaction_read_only=true'
+emit "vector_extension_version=$installed_vector_version;application_relation_count=$application_relation_count"
+emit 'application_schema_created=false;application_table_created=false;application_index_created=false;application_content_written=false'
+emit 'role_secrets_persisted_by_helper=false;role_secrets_emitted=false'
+emit "cluster_status=$cluster_status_after;postgresql_port_5432=free;postgresql_service_active=$service_active_after;postgresql_service_enabled=$service_enabled_after"
+emit 'native_application_database_configuration=pass'

@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() {
+  printf 'ishikawa_release_verification=blocked;reason=%s\n' "$1" >&2
+  exit 1
+}
+
+if (( $# > 0 )); then
+  if [[ $# == 1 && ( "$1" == --help || "$1" == -h ) ]]; then
+    printf '%s\n' 'Usage: verify-ishikawa-release'
+    exit 0
+  fi
+  fail arguments_invalid
+fi
+
+for command_name in awk cmp find grep mktemp python3 rm sha256sum sort; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "command_missing_${command_name}"
+done
+
+readonly package_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly manifest="$package_root/SHA256SUMS"
+readonly release_record="$package_root/release.json"
+readonly application_root="$package_root/application"
+readonly database_root="$package_root/database"
+
+for directory in "$package_root" "$application_root" "$database_root"; do
+  [[ -d "$directory" && ! -L "$directory" ]] || fail package_directory_unsafe
+done
+for file in \
+  "$manifest" "$release_record" "$application_root/SHA256SUMS" \
+  "$database_root/SHA256SUMS" "$database_root/schema.sql" \
+  "$application_root/install-ishikawa"; do
+  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || fail package_file_unsafe
+done
+find "$package_root" -type l -print -quit | grep -q . && fail package_symlink_found
+
+temporary_root="$(mktemp -d /tmp/ishikawa-release-verification.XXXXXX)"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if [[ "$temporary_root" == /tmp/ishikawa-release-verification.* && -d "$temporary_root" ]]; then
+    rm -rf -- "$temporary_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+(cd -- "$package_root" && find . -type f ! -path './SHA256SUMS' -printf '%P\n' | sort) \
+  >"$temporary_root/actual-files.txt"
+awk '{print $2}' "$manifest" | sort >"$temporary_root/manifest-files.txt"
+cmp -s "$temporary_root/actual-files.txt" "$temporary_root/manifest-files.txt" \
+  || fail package_inventory_mismatch
+
+(cd -- "$package_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail package_checksum_failed
+(cd -- "$application_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail application_checksum_failed
+(cd -- "$database_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail database_checksum_failed
+
+python3 -B - "$release_record" <<'PY' || fail release_record_invalid
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "boot_autostart": False,
+    "frontier_case_count": 60,
+    "historical_mutation_files": 0,
+    "javascript_test_count": 17,
+    "native_test_count": 486,
+    "release_name": "Ishikawa v1.3 frontier",
+    "schema_version": 5,
+    "source_document_count": 0,
+}
+for key, value in expected.items():
+    if record.get(key) != value:
+        raise SystemExit(1)
+if record.get("retrieval_mrr_at_20") != 0.89545:
+    raise SystemExit(1)
+for field in ("source_manifest_sha256", "frontier_artifact_sha256", "frontier_report_sha256"):
+    value = record.get(field)
+    if not isinstance(value, str) or len(value) != 64:
+        raise SystemExit(1)
+PY
+
+grep -Fq 'schema-version-5' "$database_root/schema.sql" || fail schema_version_mismatch
+if find "$package_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q . \
+  || find "$package_root" -type d -name __pycache__ -print -quit | grep -q .; then
+  fail generated_python_file_found
+fi
+if find "$package_root" -type f \( -iname '*migration*' -o -iname '*mutation*' -o -iname '*patch*' -o -iname '*repair*' \) -print -quit | grep -q .; then
+  fail historical_mutation_file_found
+fi
+if find "$package_root" -type f \( -name '*.key' -o -name '*.pem' -o -name '*.p12' -o -name '*.pfx' \) -print -quit | grep -q .; then
+  fail secret_material_found
+fi
+if grep -R -I -E -n '/mnt/|Prj00DankoDeux|phase-28-apisachi-tokuli|local/artifacts' \
+  "$package_root" --exclude=SHA256SUMS >/dev/null; then
+  fail repository_reference_found
+fi
+
+printf '%s\n' \
+  'ishikawa_release_verification=pass;release=v1.3-frontier;schema=5;native_tests=486;javascript_tests=17;frontier_cases=60;boot_autostart=false'

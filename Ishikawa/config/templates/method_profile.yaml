@@ -1,0 +1,57 @@
+schema_version: 3
+
+chunk_method_profile_id: d72a07f81eabc1f521ab1fd54f84289979365c6c71f8e3220a53b1e8c9a1c037
+
+retrieval:
+  exact:
+    explicit_page_route: document_identifier_plus_page
+    candidate_depth: 1
+
+  lexical:
+    search_config: english
+    fallback: native_or_when_strict_empty
+    candidate_depth: 20
+
+  vector:
+    distance: cosine
+    candidate_depth: 20
+
+  fusion:
+    algorithm: reciprocal_rank_fusion
+    candidate_depth: 20
+    rrf_constant: 60
+    lane_weights:
+      exact: 1
+      lexical: 2
+      vector: 4
+
+  reranker:
+    enabled: false
+
+  candidate_representation:
+    section_page_representatives: true
+    document_local_duplicate_canonicalization: true
+    representative_evidence: expand_to_ordered_atomic_members
+
+  candidate_expansion:
+    enabled: true
+    route: ordinary_body_excluding_metadata_relationship_page
+    query_decomposition: literal_clauses_v1
+    maximum_facets: 4
+    minimum_facet_words: 3
+    document_shortlist_per_lane: 5
+    baseline_weight: 2
+    best_facet_weight: 1
+    facet_coverage_weight: 1
+
+  score_calibration:
+    enabled: true
+    algorithm: query_local_min_max_global_v1
+    weights:
+      original_lexical: 1.0
+      original_vector: 3.0
+      vector_facet_coverage: 1.0
+      document_lexical_affinity: 1.0
+      heading_path_overlap: 0.10
+    tie_breaks: heading_baseline_source_rank_chunk_id
+

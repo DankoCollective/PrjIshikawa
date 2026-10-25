@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Inspect one failed native PostgreSQL cluster start without starting, stopping,
+# enabling, disabling, resetting, or changing the cluster or its service.
+
+umask 077
+export SYSTEMD_PAGER=cat
+export SYSTEMD_LESS=FRX
+export NO_COLOR=1
+
+emit() {
+  printf '%s\n' "$1"
+}
+
+block() {
+  emit "native_database_start_failure_inspection=blocked;reason=$1"
+  exit 1
+}
+
+unexpected_failure() {
+  local status="$1" line="$2"
+  trap - ERR
+  set +e
+  emit "native_database_start_failure_inspection=blocked;reason=unexpected_failure;exit_code=$status;line=$line"
+  exit "$status"
+}
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+if (( $# != 2 )); then
+  block invalid_argument_count
+fi
+
+expected_hostname="$1"
+expected_os_version="$2"
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] \
+  || block invalid_expected_hostname
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] \
+  || block invalid_expected_os_version
+(( EUID == 0 )) || block root_authority_required
+
+for required in awk df dpkg-query grep hostname journalctl mktemp pg_conftool pg_lsclusters rm runuser sed sha256sum ss stat systemctl tail tr wc; do
+  command -v "$required" >/dev/null 2>&1 || block "missing_command_$required"
+done
+for binary in pg_controldata postgres; do
+  [[ -x "/usr/lib/postgresql/16/bin/$binary" ]] \
+    || block "missing_postgresql_binary_$binary"
+done
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || block hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] \
+  || block os_version_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == amd64 ]] || block architecture_mismatch
+
+work_root="$(mktemp -d /tmp/native-database-start-failure-inspection.XXXXXX)"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM ERR
+  set +e
+  if [[ "$work_root" == /tmp/native-database-start-failure-inspection.* && -d "$work_root" ]]; then
+    rm -rf -- "$work_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'status=$?; unexpected_failure "$status" "$LINENO"' ERR
+
+emit 'purpose=inspect_native_database_start_failure'
+emit "host=$actual_hostname;os_version=$VERSION_ID;architecture=$architecture"
+emit 'authorized_actions=read_cluster_metadata_read_configuration_metadata_probe_configuration_read_service_state_hash_and_classify_bounded_logs_read_capacity'
+emit 'non_actions=no_network_access_no_package_change_no_cluster_start_stop_restart_enable_disable_or_reset_no_database_query_or_change_no_secret_or_content_read'
+
+cluster_line="$(pg_lsclusters --no-header 2>/dev/null || true)"
+cluster_count="$(awk 'NF {count++} END {print count+0}' <<<"$cluster_line")"
+(( cluster_count == 1 )) || block database_cluster_count_mismatch
+read -r cluster_version cluster_name cluster_port cluster_status cluster_owner cluster_data_directory cluster_log_file \
+  <<<"$cluster_line"
+emit "cluster_version=$cluster_version;cluster_name=$cluster_name;cluster_port=$cluster_port;cluster_status=$cluster_status"
+emit "cluster_owner=$cluster_owner;cluster_data_directory=$cluster_data_directory;cluster_log_file=$cluster_log_file"
+
+[[ "$cluster_version" == 16 && "$cluster_name" == main && "$cluster_port" == 5432 \
+    && "$cluster_owner" == postgres && "$cluster_data_directory" == /var/lib/postgresql/16/main \
+    && "$cluster_log_file" == /var/log/postgresql/postgresql-16-main.log ]] \
+  || block database_cluster_identity_mismatch
+
+meta_active="$(systemctl is-active postgresql.service 2>/dev/null || true)"
+meta_enabled="$(systemctl is-enabled postgresql.service 2>/dev/null || true)"
+instance_active="$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)"
+instance_enabled="$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)"
+instance_failed="$(systemctl is-failed postgresql@16-main.service 2>/dev/null || true)"
+emit "postgresql_service_active=$meta_active;postgresql_service_enabled=$meta_enabled"
+emit "cluster_service_active=$instance_active;cluster_service_enabled=$instance_enabled;cluster_service_failed=$instance_failed"
+
+systemctl_value() {
+  local property="$1" value
+  value="$(systemctl show postgresql@16-main.service --property="$property" --value 2>/dev/null || true)"
+  value="$(tr -cd 'A-Za-z0-9_.:@/+,-' <<<"$value")"
+  [[ -n "$value" ]] || value=none
+  printf '%s' "$value"
+}
+unit_load_state="$(systemctl_value LoadState)"
+unit_active_state="$(systemctl_value ActiveState)"
+unit_sub_state="$(systemctl_value SubState)"
+unit_result="$(systemctl_value Result)"
+unit_exec_code="$(systemctl_value ExecMainCode)"
+unit_exec_status="$(systemctl_value ExecMainStatus)"
+unit_status_errno="$(systemctl_value StatusErrno)"
+emit "unit_load_state=$unit_load_state;unit_active_state=$unit_active_state;unit_sub_state=$unit_sub_state;unit_result=$unit_result"
+emit "unit_exec_main_code=$unit_exec_code;unit_exec_main_status=$unit_exec_status;unit_status_errno=$unit_status_errno"
+
+start_policy="$(sed -n 's/^[[:space:]]*\([^#[:space:]][^#[:space:]]*\)[[:space:]]*$/\1/p' /etc/postgresql/16/main/start.conf 2>/dev/null || true)"
+listen_addresses="$(pg_conftool 16 main show -s listen_addresses 2>/dev/null || true)"
+password_encryption="$(pg_conftool 16 main show -s password_encryption 2>/dev/null || true)"
+emit "cluster_start_policy=${start_policy:-missing};listen_addresses=${listen_addresses:-missing};password_encryption=${password_encryption:-missing}"
+
+metadata_for_path() {
+  local label="$1" selected_path="$2" metadata path_type path_owner path_group path_mode
+  if [[ -e "$selected_path" || -L "$selected_path" ]]; then
+    metadata="$(stat -c '%F|%U|%G|%a' "$selected_path" 2>/dev/null || true)"
+    IFS='|' read -r path_type path_owner path_group path_mode <<<"$metadata"
+    path_type="${path_type// /_}"
+    emit "${label}_state=present;${label}_type=$path_type;${label}_owner=$path_owner;${label}_group=$path_group;${label}_mode=$path_mode"
+  else
+    emit "${label}_state=missing"
+  fi
+}
+metadata_for_path config_directory /etc/postgresql/16/main
+metadata_for_path postgresql_conf /etc/postgresql/16/main/postgresql.conf
+metadata_for_path pg_hba_conf /etc/postgresql/16/main/pg_hba.conf
+metadata_for_path cluster_start_conf /etc/postgresql/16/main/start.conf
+metadata_for_path data_directory /var/lib/postgresql/16/main
+metadata_for_path log_directory /var/log/postgresql
+metadata_for_path cluster_log /var/log/postgresql/postgresql-16-main.log
+metadata_for_path runtime_directory /run/postgresql
+metadata_for_path external_pid_file /run/postgresql/16-main.pid
+metadata_for_path internal_pid_file /var/lib/postgresql/16/main/postmaster.pid
+
+config_readable=false
+data_accessible=false
+log_writable=false
+runtime_writable=false
+runuser -u postgres -- test -r /etc/postgresql/16/main/postgresql.conf \
+  && config_readable=true
+runuser -u postgres -- test -r /var/lib/postgresql/16/main/PG_VERSION \
+  && runuser -u postgres -- test -x /var/lib/postgresql/16/main \
+  && data_accessible=true
+runuser -u postgres -- test -w /var/log/postgresql \
+  && log_writable=true
+runuser -u postgres -- test -w /run/postgresql \
+  && runtime_writable=true
+emit "postgres_config_readable=$config_readable;postgres_data_accessible=$data_accessible;postgres_log_directory_writable=$log_writable;postgres_runtime_directory_writable=$runtime_writable"
+
+control_data="$(/usr/lib/postgresql/16/bin/pg_controldata /var/lib/postgresql/16/main 2>/dev/null || true)"
+checksum_version="$(awk -F: '/^Data page checksum version:/ {sub(/^[[:space:]]+/, "", $2); print $2}' <<<"$control_data")"
+cluster_control_state="$(awk -F: '/^Database cluster state:/ {sub(/^[[:space:]]+/, "", $2); gsub(/[[:space:]]+/, "_", $2); print $2}' <<<"$control_data")"
+emit "database_cluster_state=${cluster_control_state:-unknown};data_page_checksum_version=${checksum_version:-unknown}"
+
+config_probe_stdout="$work_root/config-probe.stdout"
+config_probe_stderr="$work_root/config-probe.stderr"
+if runuser -u postgres -- /usr/lib/postgresql/16/bin/postgres \
+    -D /var/lib/postgresql/16/main \
+    --config-file=/etc/postgresql/16/main/postgresql.conf \
+    -C data_directory >"$config_probe_stdout" 2>"$config_probe_stderr"; then
+  config_probe_exit_code=0
+else
+  config_probe_exit_code=$?
+fi
+config_probe_value="$(sed -n '1p' "$config_probe_stdout" | tr -cd 'A-Za-z0-9_.:/+-')"
+[[ -n "$config_probe_value" ]] || config_probe_value=none
+emit "configuration_probe_exit_code=$config_probe_exit_code;configuration_probe_value=$config_probe_value;configuration_probe_stderr_sha256=$(sha256sum "$config_probe_stderr" | awk '{print $1}')"
+
+listener_count="$(ss -H -ltn 'sport = :5432' 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+available_var_kib="$(df -Pk /var | awk 'NR == 2 {print $4}')"
+available_run_kib="$(df -Pk /run | awk 'NR == 2 {print $4}')"
+emit "postgresql_port_5432_listeners=$listener_count;available_var_kib=$available_var_kib;available_run_kib=$available_run_kib"
+
+journal_file="$work_root/cluster-service.journal"
+cluster_log_tail="$work_root/cluster.log.tail"
+journalctl --no-pager --quiet --unit=postgresql@16-main.service --lines=200 \
+  >"$journal_file" 2>/dev/null || true
+if [[ -f /var/log/postgresql/postgresql-16-main.log ]]; then
+  tail -n 200 /var/log/postgresql/postgresql-16-main.log >"$cluster_log_tail" 2>/dev/null || true
+else
+  : >"$cluster_log_tail"
+fi
+
+classify_start_failure() {
+  local selected_file="$1"
+  if grep -Eiq 'address already in use|could not bind|could not create any TCP/IP sockets' "$selected_file"; then
+    printf 'listener_bind_conflict'
+  elif grep -Eiq 'syntax error|configuration file.*contains errors|invalid value for parameter|unrecognized configuration parameter' "$selected_file"; then
+    printf 'configuration_error'
+  elif grep -Eiq 'permission denied|wrong ownership|invalid permissions' "$selected_file"; then
+    printf 'filesystem_permission_error'
+  elif grep -Eiq 'no space left on device|disk full' "$selected_file"; then
+    printf 'storage_capacity_error'
+  elif grep -Eiq 'could not open.*file|no such file or directory|assertpath.*failed' "$selected_file"; then
+    printf 'required_file_missing'
+  elif grep -Eiq 'lock file.*already exists|another postmaster|server is running' "$selected_file"; then
+    printf 'existing_or_stale_server_state'
+  elif grep -Eiq 'could not load library|could not access file.*vector|incompatible library' "$selected_file"; then
+    printf 'extension_library_error'
+  elif grep -Eiq 'failed with result|failed to start|fatal|panic|error' "$selected_file"; then
+    printf 'other_start_error'
+  else
+    printf 'no_classified_error'
+  fi
+}
+
+journal_lines="$(wc -l <"$journal_file" | tr -d ' ')"
+cluster_log_lines="$(wc -l <"$cluster_log_tail" | tr -d ' ')"
+journal_class="$(classify_start_failure "$journal_file")"
+cluster_log_class="$(classify_start_failure "$cluster_log_tail")"
+emit "service_journal_lines=$journal_lines;service_journal_sha256=$(sha256sum "$journal_file" | awk '{print $1}');service_journal_error_class=$journal_class"
+emit "cluster_log_tail_lines=$cluster_log_lines;cluster_log_tail_sha256=$(sha256sum "$cluster_log_tail" | awk '{print $1}');cluster_log_error_class=$cluster_log_class"
+
+emit 'database_query_performed=false;database_change_performed=false;service_change_performed=false;raw_log_retained=false'
+emit 'native_database_start_failure_inspection=pass'

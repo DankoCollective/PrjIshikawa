@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Measure synthetic evidence with the tokenizer bound to the installed
+# generation profile. This helper is intentionally environment-neutral and
+# must run through attended sudo. It does not read a credential or call a
+# model endpoint.
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly MEASURER="$SCRIPT_DIR/measure_generation_tokenizer.py"
+
+[[ "$EUID" -eq 0 ]] || {
+  printf '[generation-tokenizer] result=BLOCKED reason=root_execution_required\n' >&2
+  exit 1
+}
+[[ -f "$MEASURER" && ! -L "$MEASURER" ]] || {
+  printf '[generation-tokenizer] result=BLOCKED reason=measurer_missing_or_unsafe\n' >&2
+  exit 1
+}
+
+status=0
+python3 "$MEASURER" "$@" || status=$?
+
+output_path=""
+expect_output=false
+for argument in "$@"; do
+  if [[ "$expect_output" == true ]]; then
+    output_path="$argument"
+    expect_output=false
+  elif [[ "$argument" == --output ]]; then
+    expect_output=true
+  elif [[ "$argument" == --output=* ]]; then
+    output_path="${argument#--output=}"
+  fi
+done
+if (( status == 0 )) && [[ -n "$output_path" && -f "$output_path" ]]; then
+  if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ && "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then
+    chown "$SUDO_UID:$SUDO_GID" -- "$output_path" || {
+      printf '[generation-tokenizer] result=BLOCKED reason=artifact_ownership_return_failed\n' >&2
+      status=1
+    }
+  fi
+fi
+exit "$status"

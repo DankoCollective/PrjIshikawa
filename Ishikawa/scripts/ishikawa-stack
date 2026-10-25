@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Start, inspect, or stop the complete local Ishikawa application stack.
+#
+# Mental model:
+#   Start native PostgreSQL, then the native Retrieval API, then the
+#   host-mounted Next.js container. Require readiness between layers and stop
+#   them in reverse order. Nothing is enabled at boot.
+#
+# Inputs or prerequisites:
+#   A complete installed Ishikawa directory, the final systemd user unit, the
+#   architecture-matching Node image, and the three protected credential
+#   variables named by the service contract. Required model forwarding is an
+#   external operator action and must already exist.
+#
+# Outputs:
+#   One content-free lifecycle marker and an owner-only state record. No
+#   credential, endpoint response, document content, or exception is printed.
+#
+# Usage:
+#   scripts/ishikawa-stack start
+#   scripts/ishikawa-stack status
+#   scripts/ishikawa-stack stop
+
+usage() {
+  printf '%s\n' \
+    'Usage: ishikawa-stack {start|status|stop}' \
+    '  start   Start PostgreSQL, Retrieval API, and the web container.' \
+    '  status  Report stopped, ready, or degraded without changing state.' \
+    '  stop    Stop the web container, Retrieval API, and PostgreSQL.'
+}
+
+fail() {
+  printf 'ishikawa_stack=blocked;reason=%s\n' "$1" >&2
+  exit 1
+}
+
+[[ $# == 1 ]] || { usage >&2; exit 2; }
+action="$1"
+case "$action" in
+  start|status|stop) ;;
+  --help|-h) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly PRODUCT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+readonly PYTHON_ROOT="$PRODUCT_ROOT/application/python"
+readonly WEB_ROOT="$PRODUCT_ROOT/application/web"
+readonly CONFIG_ROOT="$PRODUCT_ROOT/config"
+readonly STATE_ROOT="$PRODUCT_ROOT/state/run"
+readonly STATE_FILE="$STATE_ROOT/stack.state"
+readonly POSTGRESQL_UNIT='postgresql@16-main.service'
+readonly POSTGRESQL_META_UNIT='postgresql.service'
+readonly RETRIEVAL_UNIT='ishikawa-retrieval-api.service'
+readonly WEB_CONTAINER='ishikawa-web'
+readonly -a SECRET_NAMES=(
+  ISHIKAWA_GEMMA_API_KEY
+  ISHIKAWA_NOMIC_API_KEY
+  ISHIKAWA_POSTGRESQL_PASSWORD
+)
+
+for required in curl docker dpkg grep id mkdir mv pg_isready python3 rm sleep ss sudo systemctl; do
+  command -v "$required" >/dev/null 2>&1 || fail 'required_command_missing'
+done
+for required_path in \
+  "$PYTHON_ROOT/ishikawa/__init__.py" \
+  "$CONFIG_ROOT/product.yaml" \
+  "$CONFIG_ROOT/deployment.yaml" \
+  "$WEB_ROOT/app" \
+  "$WEB_ROOT/components" \
+  "$WEB_ROOT/lib" \
+  "$WEB_ROOT/public" \
+  "$WEB_ROOT/package.json" \
+  "$WEB_ROOT/next.config.mjs"; do
+  [[ -e "$required_path" && ! -L "$required_path" ]] || fail 'installed_input_unsafe'
+done
+[[ -d "$STATE_ROOT" && ! -L "$STATE_ROOT" ]] || fail 'runtime_directory_unsafe'
+
+if ! stack_config_text="$(
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PYTHON_ROOT" python3 -B - \
+    "$CONFIG_ROOT/product.yaml" "$CONFIG_ROOT/deployment.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+from ishikawa.deployment import DeploymentContractError, validate_deployment_profile
+from ishikawa.errors import IshikawaValidationError
+from ishikawa.product import ProductProfileError, validate_product_profile
+from ishikawa.yaml_loader import load_restricted_yaml
+
+try:
+    product = validate_product_profile(
+        load_restricted_yaml(Path(sys.argv[1]), label="product profile")
+    )
+    deployment = validate_deployment_profile(
+        load_restricted_yaml(Path(sys.argv[2]), label="deployment profile")
+    )
+except ProductProfileError as error:
+    print(f"ishikawa_stack=blocked;reason={error}", file=sys.stderr)
+    raise SystemExit(2) from None
+except DeploymentContractError as error:
+    print("ishikawa_stack=blocked;reason=deployment_configuration_invalid", file=sys.stderr)
+    raise SystemExit(2) from None
+except IshikawaValidationError as error:
+    print(f"ishikawa_stack=blocked;reason={error.reason_code}", file=sys.stderr)
+    raise SystemExit(2) from None
+values = (
+    product.display_name,
+    product.browser_configuration_base64(),
+    deployment.web.bind_host,
+    str(deployment.web.port),
+    deployment.web.retrieval_base_url,
+    deployment.retrieval.bind_host,
+    str(deployment.retrieval.port),
+    deployment.postgresql.bind_host,
+    str(deployment.postgresql.port),
+)
+sys.stdout.write("\n".join(values))
+PY
+)"; then
+  fail 'configuration_invalid'
+fi
+mapfile -t stack_config <<<"$stack_config_text"
+(( ${#stack_config[@]} == 9 )) || fail 'configuration_invalid'
+readonly product_name="${stack_config[0]}"
+readonly product_ui_config_base64="${stack_config[1]}"
+readonly web_host="${stack_config[2]}"
+readonly web_port="${stack_config[3]}"
+readonly retrieval_base_url="${stack_config[4]}"
+readonly retrieval_host="${stack_config[5]}"
+readonly retrieval_port="${stack_config[6]}"
+readonly postgresql_host="${stack_config[7]}"
+readonly postgresql_port="${stack_config[8]}"
+
+readonly architecture="$(dpkg --print-architecture)"
+case "$architecture" in
+  amd64|arm64) ;;
+  *) fail 'host_architecture_unsupported' ;;
+esac
+readonly web_image="node-24-slim-nextjs-16-4-1:$architecture"
+
+declare -a docker_command=(docker)
+docker_ready=false
+prepare_docker() {
+  if [[ "$docker_ready" == true ]]; then
+    return
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    sudo -v >/dev/null 2>&1 || fail 'privilege_authorization_failed'
+    docker_command=(sudo docker)
+    "${docker_command[@]}" info >/dev/null 2>&1 || fail 'container_runtime_unavailable'
+  fi
+  docker_ready=true
+}
+
+unit_state() {
+  local scope="$1"
+  local unit="$2"
+  if [[ "$scope" == user ]]; then
+    systemctl --user is-active "$unit" 2>/dev/null || true
+  else
+    systemctl is-active "$unit" 2>/dev/null || true
+  fi
+}
+
+container_running() {
+  prepare_docker
+  [[ "$("${docker_command[@]}" inspect --format '{{.State.Running}}' "$WEB_CONTAINER" 2>/dev/null || true)" == true ]]
+}
+
+http_ready() {
+  local url="$1"
+  [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 "$url" 2>/dev/null || true)" == 200 ]]
+}
+
+wait_http() {
+  local url="$1"
+  local attempts="$2"
+  local attempt
+  for (( attempt = 0; attempt < attempts; attempt += 1 )); do
+    http_ready "$url" && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+wait_postgresql() {
+  local attempt
+  for (( attempt = 0; attempt < 80; attempt += 1 )); do
+    pg_isready --quiet --host "$postgresql_host" --port "$postgresql_port" && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+check_boot_posture() {
+  [[ "$(systemctl is-enabled "$POSTGRESQL_META_UNIT" 2>/dev/null || true)" != enabled ]] || \
+    fail 'postgresql_boot_enabled'
+  [[ "$(systemctl is-enabled "$POSTGRESQL_UNIT" 2>/dev/null || true)" != enabled ]] || \
+    fail 'postgresql_cluster_boot_enabled'
+  [[ "$(systemctl --user is-enabled "$RETRIEVAL_UNIT" 2>/dev/null || true)" != enabled ]] || \
+    fail 'retrieval_boot_enabled'
+}
+
+state_is_valid() {
+  [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || return 1
+  local line
+  IFS= read -r line <"$STATE_FILE" || return 1
+  [[ "$line" == 'schema=ishikawa.stack-state.v1;owner=ishikawa-stack;state=starting' || \
+     "$line" == 'schema=ishikawa.stack-state.v1;owner=ishikawa-stack;state=running' ]]
+}
+
+write_state() {
+  local state="$1"
+  local temporary="$STATE_ROOT/.stack.state.$$"
+  umask 077
+  printf 'schema=ishikawa.stack-state.v1;owner=ishikawa-stack;state=%s\n' "$state" >"$temporary"
+  mv -- "$temporary" "$STATE_FILE"
+}
+
+if [[ "$action" == status ]]; then
+  check_boot_posture
+  postgresql_state="$(unit_state system "$POSTGRESQL_UNIT")"
+  retrieval_state="$(unit_state user "$RETRIEVAL_UNIT")"
+  web_state=inactive
+  container_running && web_state=active
+  if [[ "$postgresql_state" != active && "$retrieval_state" != active && "$web_state" != active && ! -e "$STATE_FILE" ]]; then
+    printf 'ishikawa_stack=status;state=stopped;boot_enabled=false\n'
+    exit 0
+  fi
+  if state_is_valid \
+    && [[ "$postgresql_state" == active && "$retrieval_state" == active && "$web_state" == active ]] \
+    && http_ready "$retrieval_base_url/ready" \
+    && http_ready "http://$web_host:$web_port/api/ready"; then
+    printf 'ishikawa_stack=status;state=ready;boot_enabled=false\n'
+    exit 0
+  fi
+  printf 'ishikawa_stack=status;state=degraded;boot_enabled=false\n' >&2
+  exit 1
+fi
+
+if [[ "$action" == stop ]]; then
+  state_is_valid || fail 'managed_stack_state_absent_or_invalid'
+  prepare_docker
+  sudo -v >/dev/null 2>&1 || fail 'privilege_authorization_failed'
+  stop_failed=false
+  if container_running; then
+    "${docker_command[@]}" stop --time 20 "$WEB_CONTAINER" >/dev/null 2>&1 || stop_failed=true
+  fi
+  if [[ "$(unit_state user "$RETRIEVAL_UNIT")" == active ]]; then
+    systemctl --user stop "$RETRIEVAL_UNIT" >/dev/null 2>&1 || stop_failed=true
+  fi
+  systemctl --user unset-environment "${SECRET_NAMES[@]}" >/dev/null 2>&1 || stop_failed=true
+  if [[ "$(unit_state system "$POSTGRESQL_UNIT")" == active ]]; then
+    sudo systemctl stop "$POSTGRESQL_UNIT" >/dev/null 2>&1 || stop_failed=true
+  fi
+  if [[ "$stop_failed" == true ]]; then
+    fail 'stop_incomplete'
+  fi
+  [[ "$(unit_state user "$RETRIEVAL_UNIT")" != active ]] || fail 'retrieval_stop_unconfirmed'
+  [[ "$(unit_state system "$POSTGRESQL_UNIT")" != active ]] || fail 'postgresql_stop_unconfirmed'
+  container_running && fail 'web_stop_unconfirmed'
+  rm -f -- "$STATE_FILE"
+  check_boot_posture
+  printf 'ishikawa_stack=stop;state=stopped;boot_enabled=false\n'
+  exit 0
+fi
+
+check_boot_posture
+[[ ! -e "$STATE_FILE" && ! -L "$STATE_FILE" ]] || fail 'managed_stack_state_exists'
+[[ "$(unit_state system "$POSTGRESQL_UNIT")" != active ]] || fail 'postgresql_already_active'
+[[ "$(unit_state user "$RETRIEVAL_UNIT")" != active ]] || fail 'retrieval_already_active'
+prepare_docker
+container_running && fail 'web_container_already_active'
+for occupied_port in "$postgresql_port" "$retrieval_port" "$web_port"; do
+  if ss -H -ltn "( sport = :$occupied_port )" | grep -q .; then
+    fail 'configured_port_in_use'
+  fi
+done
+"${docker_command[@]}" image inspect "$web_image" >/dev/null 2>&1 || fail 'web_image_missing'
+[[ "$("${docker_command[@]}" image inspect "$web_image" --format '{{.Architecture}}' 2>/dev/null || true)" == "$architecture" ]] || \
+  fail 'web_image_architecture_mismatch'
+systemctl --user cat "$RETRIEVAL_UNIT" >/dev/null 2>&1 || fail 'retrieval_unit_missing'
+for secret_name in "${SECRET_NAMES[@]}"; do
+  [[ -n "${!secret_name-}" ]] || fail 'required_credential_missing'
+done
+
+write_state starting
+postgresql_started=false
+retrieval_started=false
+web_started=false
+environment_imported=false
+start_complete=false
+rollback_start() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if [[ "$start_complete" != true ]]; then
+    if [[ "$web_started" == true ]]; then
+      "${docker_command[@]}" stop --time 10 "$WEB_CONTAINER" >/dev/null 2>&1 || true
+    fi
+    if [[ "$retrieval_started" == true ]]; then
+      systemctl --user stop "$RETRIEVAL_UNIT" >/dev/null 2>&1 || true
+    fi
+    if [[ "$environment_imported" == true || "$retrieval_started" == true ]]; then
+      systemctl --user unset-environment "${SECRET_NAMES[@]}" >/dev/null 2>&1 || true
+    fi
+    if [[ "$postgresql_started" == true ]]; then
+      sudo systemctl stop "$POSTGRESQL_UNIT" >/dev/null 2>&1 || true
+    fi
+    rm -f -- "$STATE_FILE"
+  fi
+  exit "$status"
+}
+trap rollback_start EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+sudo -v >/dev/null 2>&1 || fail 'privilege_authorization_failed'
+sudo systemctl start "$POSTGRESQL_UNIT" >/dev/null 2>&1 || fail 'postgresql_start_failed'
+postgresql_started=true
+wait_postgresql || fail 'postgresql_readiness_failed'
+
+readiness_preflight=''
+if ! readiness_preflight="$(
+  PYTHONDONTWRITEBYTECODE=1 "$SCRIPT_DIR/ishikawa-retrieval-api" --check-readiness
+)"; then
+  [[ -z "$readiness_preflight" ]] || printf '%s\n' "$readiness_preflight" >&2
+  fail 'retrieval_readiness_preflight_failed'
+fi
+printf '%s\n' "$readiness_preflight"
+
+systemctl --user import-environment "${SECRET_NAMES[@]}" >/dev/null 2>&1 || \
+  fail 'credential_import_failed'
+environment_imported=true
+systemctl --user start "$RETRIEVAL_UNIT" >/dev/null 2>&1 || fail 'retrieval_start_failed'
+retrieval_started=true
+systemctl --user unset-environment "${SECRET_NAMES[@]}" >/dev/null 2>&1 || \
+  fail 'credential_cleanup_failed'
+environment_imported=false
+wait_http "$retrieval_base_url/live" 120 || fail 'retrieval_liveness_failed'
+if ! wait_http "$retrieval_base_url/ready" 120; then
+  if readiness_diagnostic="$(
+    PYTHONDONTWRITEBYTECODE=1 "$SCRIPT_DIR/ishikawa-retrieval-api" --check-readiness
+  )"; then
+    printf '%s\n' "$readiness_diagnostic" >&2
+  else
+    [[ -z "$readiness_diagnostic" ]] || printf '%s\n' "$readiness_diagnostic" >&2
+  fi
+  fail 'retrieval_readiness_failed_after_preflight'
+fi
+
+declare -a web_mounts=(
+  --mount "type=bind,src=$WEB_ROOT/app,dst=/opt/nextjs/app,readonly"
+  --mount "type=bind,src=$WEB_ROOT/components,dst=/opt/nextjs/components,readonly"
+  --mount "type=bind,src=$WEB_ROOT/lib,dst=/opt/nextjs/lib,readonly"
+  --mount "type=bind,src=$WEB_ROOT/public,dst=/opt/nextjs/public,readonly"
+  --mount "type=bind,src=$WEB_ROOT/package.json,dst=/opt/nextjs/package.json,readonly"
+  --mount "type=bind,src=$WEB_ROOT/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly"
+)
+"${docker_command[@]}" run --detach --rm \
+  --name "$WEB_CONTAINER" \
+  --network host \
+  --security-opt no-new-privileges \
+  --cap-drop ALL \
+  --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=$product_name" \
+  --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=$product_ui_config_base64" \
+  --env "ISHIKAWA_RETRIEVAL_BASE_URL=$retrieval_base_url" \
+  "${web_mounts[@]}" \
+  "$web_image" npm run dev -- --hostname "$web_host" --port "$web_port" \
+  >/dev/null 2>&1 || fail 'web_start_failed'
+web_started=true
+wait_http "http://$web_host:$web_port/api/live" 160 || fail 'web_liveness_failed'
+wait_http "http://$web_host:$web_port/api/ready" 120 || fail 'web_readiness_failed'
+
+write_state running
+start_complete=true
+printf 'ishikawa_stack=start;state=ready;boot_enabled=false\n'

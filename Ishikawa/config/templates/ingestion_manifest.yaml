@@ -1,0 +1,13 @@
+schema_version: 1
+
+documents:
+  - source_path: organization-wide/policies/social-media-policy-2027.pdf
+    document_key: policy.social-media
+    class_id: policy_sop
+
+  - source_path: external/regulations/federal-records-regulation.pdf
+    document_key: regulation.federal-records
+    class_id: regulation
+
+retirements:
+  - document_key: procedure.legacy-travel-request

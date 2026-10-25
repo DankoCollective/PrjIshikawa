@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Install and qualify one checksum-bound Ishikawa application package on its
+#   intended Ubuntu AMD64 host without contacting or changing dependencies.
+#
+# Mental model:
+#   Verify host identity and package bytes, inspect the extracted final-state
+#   package, invoke its atomic installer once, and validate the installed
+#   application layout and configuration through native Python imports.
+#
+# Inputs or prerequisites:
+#   An expected hostname, expected Ubuntu version, package archive, archive
+#   digest, and output path inside an operator-owned temporary directory.
+#
+# Outputs:
+#   A new ~/Documents/Ishikawa installation and one content-free result file.
+#   PostgreSQL, services, models, credentials, and source documents are not
+#   contacted or changed.
+#
+# Usage:
+#   bash ./install-and-qualify-ishikawa-application HOST 24.04 ARCHIVE SHA RESULT
+
+usage() {
+  printf '%s\n' \
+    'Usage: install-and-qualify-ishikawa-application EXPECTED-HOSTNAME EXPECTED-OS-VERSION ARCHIVE SHA256 RESULT'
+}
+
+fail() {
+  local reason="$1"
+  if [[ -n "${result_path:-}" && "$result_path" == "$working_root"/* ]]; then
+    printf 'ishikawa_application_install_qualification=blocked;reason=%s\n' "$reason" >>"$result_path" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+[[ "${1:-}" != '--help' && "${1:-}" != '-h' ]] || { usage; exit 0; }
+(( $# == 5 )) || { usage >&2; exit 2; }
+
+readonly expected_hostname="$1"
+readonly expected_os_version="$2"
+readonly archive_path="$3"
+readonly expected_archive_sha256="$4"
+result_path="$5"
+readonly working_root="$(pwd -P)"
+readonly install_root="$HOME/Documents/Ishikawa"
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail 'expected_hostname_invalid'
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail 'expected_os_version_invalid'
+[[ "$archive_path" == "$working_root"/* && -f "$archive_path" && ! -L "$archive_path" ]] || fail 'archive_path_invalid'
+[[ "$result_path" == "$working_root"/* && ! -e "$result_path" && ! -L "$result_path" ]] || fail 'result_path_invalid'
+[[ "$expected_archive_sha256" =~ ^[0-9a-f]{64}$ ]] || fail 'archive_digest_invalid'
+for required in awk bash cmp dpkg find grep hostname mktemp pdfinfo pdffonts pdftoppm pdftotext psql python3 rm sha256sum sort tar uname; do
+  command -v "$required" >/dev/null 2>&1 || fail 'required_command_missing'
+done
+python3 -B -c 'import sys,yaml,psycopg; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' || fail 'python_runtime_dependency_missing'
+
+source /etc/os-release
+[[ "${ID:-}" == 'ubuntu' && "${VERSION_ID:-}" == "$expected_os_version" ]] || fail 'operating_system_mismatch'
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || fail 'hostname_mismatch'
+[[ "$(dpkg --print-architecture)" == 'amd64' && "$(uname -m)" == 'x86_64' ]] || fail 'architecture_mismatch'
+
+actual_archive_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+[[ "$actual_archive_sha256" == "$expected_archive_sha256" ]] || fail 'archive_checksum_mismatch'
+
+extract_root="$(mktemp -d "$working_root/extracted.XXXXXX")"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if [[ "$extract_root" == "$working_root"/extracted.* && -d "$extract_root" ]]; then
+    rm -rf -- "$extract_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tar -xzf "$archive_path" -C "$extract_root" || fail 'archive_extraction_failed'
+readonly bundle_root="$extract_root/ishikawa-application-package"
+[[ -d "$bundle_root" && ! -L "$bundle_root" ]] || fail 'bundle_root_invalid'
+(
+  cd -- "$bundle_root"
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) || fail 'package_checksum_failed'
+
+if find "$bundle_root" -type l -print -quit | grep -q .; then
+  fail 'package_symlink_found'
+fi
+if find "$bundle_root" -type f \( -iname '*migration*' -o -iname '*mutation*' -o -iname '*repair*' -o -iname '*patch*' \) -print -quit | grep -q .; then
+  fail 'historical_mutation_file_packaged'
+fi
+if find "$bundle_root" -type d \( -iname migrations -o -iname mutations -o -iname repairs -o -iname patches \) -print -quit | grep -q .; then
+  fail 'historical_mutation_directory_packaged'
+fi
+
+installation_action='installed_new'
+if [[ -e "$install_root" || -L "$install_root" ]]; then
+  [[ -d "$install_root" && ! -L "$install_root" ]] || fail 'existing_installation_unsafe'
+  if ! cmp -s \
+    <(cd "$bundle_root/payload" && find . -type f -print | sort | while IFS= read -r file; do sha256sum "$file"; done) \
+    <(cd "$install_root" && find . -type f -print | sort | while IFS= read -r file; do sha256sum "$file"; done); then
+    fail 'existing_installation_identity_conflict'
+  fi
+  installation_action='reused_exact'
+else
+  install_result="$working_root/install-result.txt"
+  [[ ! -e "$install_result" && ! -L "$install_result" ]] || fail 'install_result_path_invalid'
+  bash "$bundle_root/install-ishikawa" --install-root "$install_root" >"$install_result" || fail 'installer_failed'
+  grep -Fq 'ishikawa_install=pass;' "$install_result" || fail 'installer_pass_marker_absent'
+fi
+
+installed_file_count="$(find "$install_root" -type f | awk 'END {print NR}')"
+installed_python_modules="$(find "$install_root/application/python/ishikawa" -maxdepth 1 -type f -name '*.py' | awk 'END {print NR}')"
+installed_sql_files="$(find "$install_root" -type f -name '*.sql' | awk 'END {print NR}')"
+historical_mutation_files="$(find "$install_root" \( -type f -o -type d \) \( -iname '*migration*' -o -iname '*mutation*' -o -iname '*repair*' -o -iname '*patch*' \) | awk 'END {print NR}')"
+[[ "$installed_python_modules" == '42' && "$installed_sql_files" == '0' && "$historical_mutation_files" == '0' ]] || fail 'installed_final_state_contract_failed'
+
+validation_result="$working_root/installed-validation.txt"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$install_root/application/python" python3 -B - "$install_root" >"$validation_result" <<'PY' || fail 'installed_application_validation_failed'
+from pathlib import Path
+import sys
+import yaml
+
+from ishikawa.installed_ingestion import InstalledIngestionLayout
+from ishikawa.validators import validate_class_registry, validate_document_catalog
+from ishikawa.yaml_loader import load_restricted_yaml
+
+root = Path(sys.argv[1]).resolve(strict=True)
+InstalledIngestionLayout.from_product_root(root)
+classes = validate_class_registry(
+    load_restricted_yaml(root / "config/document_classes.yaml", label="document class registry")
+)
+catalog = validate_document_catalog(
+    load_restricted_yaml(root / "config/document_catalog.yaml", label="document catalog")
+)
+product = yaml.safe_load((root / "config/product.yaml").read_text(encoding="utf-8"))
+if product != {"schema_version": 1, "display_name": "Ishikawa"}:
+    raise SystemExit(1)
+print(f"document_classes={len(classes.classes)};catalog_documents={len(catalog.documents)}")
+PY
+
+grep -Fxq 'document_classes=3;catalog_documents=0' "$validation_result" || fail 'installed_configuration_contract_failed'
+PYTHONDONTWRITEBYTECODE=1 "$install_root/scripts/ishikawa-ingest" --help >/dev/null || fail 'installed_ingestion_help_failed'
+
+{
+  printf 'target_hostname=%s;os_id=ubuntu;os_version=%s;architecture=amd64\n' "$actual_hostname" "$expected_os_version"
+  printf 'archive_sha256=%s;package_checksums=pass\n' "$actual_archive_sha256"
+  printf 'installation_action=%s;existing_installation_overwritten=false\n' "$installation_action"
+  printf 'installed_file_count=%s;installed_python_modules=%s;installed_sql_files=%s;historical_mutation_files=%s\n' \
+    "$installed_file_count" "$installed_python_modules" "$installed_sql_files" "$historical_mutation_files"
+  printf 'product_display_name=Ishikawa;document_classes=3;catalog_documents=0\n'
+  printf 'native_runtime_dependencies=pass;python_minimum=3.12\n'
+  printf 'database_changed=false;service_changed=false;model_contact=false;credential_read=false;source_documents_copied=false\n'
+  printf 'ishikawa_application_install_qualification=pass\n'
+} >"$result_path"
+

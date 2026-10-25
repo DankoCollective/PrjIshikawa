@@ -1,0 +1,37 @@
+schema_version: 2
+
+checks:
+  required_semantic_lanes:
+    - lexical
+    - vector
+  fail_closed_on_lane_error: true
+  require_authorized_candidate: true
+  require_exact_constraint_satisfaction: true
+  require_relationship_coverage: true
+  require_valid_citations: true
+  require_calibrated_relevance: true
+  allow_unique_exact_document_relevance_override: true
+  source_conflict_status: insufficient-evidence
+  incomplete_structure_status: context-limit
+
+statuses:
+  eligible: sufficient
+  unavailable: temporarily-unavailable
+  inadequate: insufficient-evidence
+  over_budget: context-limit
+
+reason_codes:
+  - EVIDENCE_SUFFICIENT
+  - EXACT_DOCUMENT_EVIDENCE_SUFFICIENT
+  - RETRIEVAL_LANE_FAILURE
+  - NO_RETRIEVAL_CANDIDATES
+  - NO_AUTHORIZED_EVIDENCE
+  - EXACT_CONSTRAINT_UNSATISFIED
+  - RELATIONSHIP_COVERAGE_INCOMPLETE
+  - SOURCE_VERSION_CONFLICT
+  - NO_RECONSTRUCTABLE_EVIDENCE
+  - CITATION_SET_INVALID
+  - RELEVANCE_NOT_QUALIFIED
+  - RELEVANCE_INSUFFICIENT
+  - COMPLETE_STRUCTURE_INCOMPLETE
+  - CONTEXT_LIMIT

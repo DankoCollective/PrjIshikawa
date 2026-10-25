@@ -32,6 +32,8 @@ report_path=''
 work_root=''
 current_stage='initialization'
 build_pid=''
+application_stage=''
+corpus_publication_stage=''
 
 result() {
   printf '\nSCRIPT RESULT\nbuild_ishikawa_release=%s\n' "$1"
@@ -63,6 +65,14 @@ cleanup() {
   fi
   if [[ -n "$work_root" && "$work_root" == /tmp/ishikawa-release-build.* && -d "$work_root" ]]; then
     rm -rf -- "$work_root"
+  fi
+  if [[ -n "$application_stage" && "$application_stage" == "$artifact_root"/.ishikawa-current.* \
+      && -d "$application_stage" && ! -L "$application_stage" ]]; then
+    rm -rf -- "$application_stage"
+  fi
+  if [[ -n "$corpus_publication_stage" && "$corpus_publication_stage" == "$artifact_root"/.ishikawa-corpus-v3-current.* \
+      && -d "$corpus_publication_stage" && ! -L "$corpus_publication_stage" ]]; then
+    rm -rf -- "$corpus_publication_stage"
   fi
   exit "$status"
 }
@@ -538,22 +548,50 @@ sha256sum "$corpus_publication_stage/$corpus_bundle_name.tar.gz" \
     'The staged corpus handoff failed its sidecar verification.' \
     'Do not publish the corpus handoff.'
 
+application_backup=''
+corpus_backup=''
 if [[ -e "$application_current" || -L "$application_current" ]]; then
   [[ -d "$application_current" && ! -L "$application_current" ]] \
     || block application_current_unsafe \
       'The stable application handoff exists but is not a regular directory.' \
       'Inspect the path before publication.'
-  mv -- "$application_current" "$artifact_root/superseded/ishikawa-current-$timestamp"
+  application_backup="$artifact_root/superseded/ishikawa-current-$timestamp"
+  [[ ! -e "$application_backup" && ! -L "$application_backup" ]] \
+    || block application_backup_exists \
+      'The selected superseded application path already exists.' \
+      'Review the retained handoff directories before rebuilding.'
 fi
-mv -- "$application_stage" "$application_current"
 if [[ -e "$corpus_current" || -L "$corpus_current" ]]; then
   [[ -d "$corpus_current" && ! -L "$corpus_current" ]] \
     || block corpus_current_unsafe \
       'The stable corpus handoff exists but is not a regular directory.' \
       'Inspect the path before publication.'
-  mv -- "$corpus_current" "$artifact_root/superseded/ishikawa-corpus-v3-current-$timestamp"
+  corpus_backup="$artifact_root/superseded/ishikawa-corpus-v3-current-$timestamp"
+  [[ ! -e "$corpus_backup" && ! -L "$corpus_backup" ]] \
+    || block corpus_backup_exists \
+      'The selected superseded corpus path already exists.' \
+      'Review the retained handoff directories before rebuilding.'
 fi
-mv -- "$corpus_publication_stage" "$corpus_current"
+
+[[ -z "$application_backup" ]] || mv -- "$application_current" "$application_backup"
+[[ -z "$corpus_backup" ]] || mv -- "$corpus_current" "$corpus_backup"
+if ! mv -- "$application_stage" "$application_current"; then
+  [[ -z "$application_backup" ]] || mv -- "$application_backup" "$application_current"
+  [[ -z "$corpus_backup" ]] || mv -- "$corpus_backup" "$corpus_current"
+  block application_publication_failed \
+    'The staged application handoff could not be promoted.' \
+    'Review local filesystem state and rerun; the prior current handoffs were restored.'
+fi
+if ! mv -- "$corpus_publication_stage" "$corpus_current"; then
+  mv -- "$application_current" "$application_stage" || true
+  [[ -z "$application_backup" ]] || mv -- "$application_backup" "$application_current"
+  [[ -z "$corpus_backup" ]] || mv -- "$corpus_backup" "$corpus_current"
+  block corpus_publication_failed \
+    'The staged corpus handoff could not be promoted.' \
+    'Review local filesystem state and rerun; the prior current handoffs were restored.'
+fi
+application_stage=''
+corpus_publication_stage=''
 
 (cd -- "$application_current" && sha256sum --check --strict "$bundle_name.tar.gz.sha256" >/dev/null) \
   || block published_application_checksum_failed \

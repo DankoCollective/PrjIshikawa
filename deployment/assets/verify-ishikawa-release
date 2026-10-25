@@ -48,6 +48,33 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+printf '%s\n' \
+  config/api_profile.yaml \
+  config/deployment.yaml \
+  config/document_catalog.yaml \
+  config/document_classes.yaml \
+  config/examples/document_catalog.yaml \
+  config/examples/ingestion_manifest.yaml \
+  config/ingestion_dependencies.yaml \
+  config/injection_profile.yaml \
+  config/logging_profile.yaml \
+  config/method_profile.yaml \
+  config/product.yaml \
+  config/query_resolution_profile.yaml \
+  config/reconstruction_profile.yaml \
+  config/relationship_types.yaml \
+  config/relevance_profile.yaml \
+  config/retrieval_service_profile.yaml \
+  config/runtime_dependencies.yaml \
+  config/scope_profile.yaml \
+  config/sufficiency_profile.yaml \
+  >"$temporary_root/expected-yaml-files.txt"
+(cd -- "$application_root/payload" \
+  && find config -type f -name '*.yaml' -printf '%p\n' | sort) \
+  >"$temporary_root/actual-yaml-files.txt"
+cmp -s "$temporary_root/expected-yaml-files.txt" "$temporary_root/actual-yaml-files.txt" \
+  || fail application_yaml_inventory_mismatch
+
 (cd -- "$package_root" && find . -type f ! -path './SHA256SUMS' -printf '%P\n' | sort) \
   >"$temporary_root/actual-files.txt"
 awk '{print $2}' "$manifest" | sort >"$temporary_root/manifest-files.txt"
@@ -73,7 +100,7 @@ expected = {
     "historical_mutation_files": 0,
     "javascript_test_count": 17,
     "native_test_count": 486,
-    "release_name": "Ishikawa v1.3 frontier",
+    "release_name": "Ishikawa v1.3",
     "schema_version": 5,
     "source_document_count": 0,
 }
@@ -105,4 +132,4 @@ if grep -R -I -E -n '/mnt/|Prj00DankoDeux|phase-28-apisachi-tokuli|local/artifac
 fi
 
 printf '%s\n' \
-  'ishikawa_release_verification=pass;release=v1.3-frontier;schema=5;native_tests=486;javascript_tests=17;frontier_cases=60;boot_autostart=false'
+  'ishikawa_release_verification=pass;release=v1.3;schema=5;native_tests=486;javascript_tests=17;frontier_cases=60;source_documents=0;boot_autostart=false'

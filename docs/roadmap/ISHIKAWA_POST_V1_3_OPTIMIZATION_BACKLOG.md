@@ -4,7 +4,7 @@ Status: Deferred. This record does not amend the frozen v1.3 release.
 
 Origin SHA-256: `8d1265d78cf7ed9d108b10ae3d57aa3ed85a901dc721cec7c81d997ed1b184eb`
 
-The evidence identity is recorded in the [v1.3 frontier freeze](../releases/ISHIKAWA_V1_3_FRONTIER_FREEZE.md).
+The evidence identity is recorded in the [v1.3 release freeze](../releases/ISHIKAWA_V1_3_RELEASE_FREEZE.md).
 Routing
 Routing is now doing the right things: policy identifiers, document names, department aliases, catalog requests, and follow-up intent are handled before ordinary semantic retrieval.
 

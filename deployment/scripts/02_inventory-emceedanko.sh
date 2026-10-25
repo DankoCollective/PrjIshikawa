@@ -2,6 +2,22 @@
 set -Eeuo pipefail
 umask 077
 
+# Purpose:
+#   Capture the read-only EmceeDanko posture required before v1.3 staging.
+#
+# Mental model:
+#   Validate local controls, run one bounded helper over attended SSH, accept
+#   only its content-free output contract, and retain the complete local report.
+#
+# Inputs or prerequisites:
+#   Strict SSH host trust and operator access to the application-host identity.
+#
+# Outputs or artifact lane:
+#   A timestamped ignored report under local/reports/emceedanko-inventory.
+#
+# Usage:
+#   bash ./deployment/scripts/02_inventory-emceedanko.sh --run
+
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
 readonly helper="$repo_root/deployment/assets/inspect-application-host"
@@ -19,7 +35,7 @@ else
   shift || true
 fi
 
-result() { printf '\nSCRIPT RESULT\ninventory_emceedanko=%s\n' "$1"; }
+result() { printf '\nSCRIPT RESULT\nscript_02_inventory_emceedanko=%s\n' "$1"; }
 fail() {
   local reason="$1" detail="$2" action="$3"
   printf '%s\n' 'FAILURE DETAIL' "stage=${stage:-preflight}" "reason=$reason" \
@@ -29,8 +45,8 @@ fail() {
 }
 usage() {
   printf '%s\n' \
-    'Usage: inventory-emceedanko.sh --validate-only' \
-    '       inventory-emceedanko.sh --run [--target SSH_ALIAS] [--identity-file ABSOLUTE_PATH]'
+    'Usage: 02_inventory-emceedanko.sh --validate-only' \
+    '       02_inventory-emceedanko.sh --run [--target SSH_ALIAS] [--identity-file ABSOLUTE_PATH]'
 }
 
 if [[ "$mode" == help ]]; then

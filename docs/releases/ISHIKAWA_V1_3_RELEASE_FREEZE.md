@@ -1,13 +1,14 @@
-# Ishikawa v1.3 Frontier Freeze
+# Ishikawa v1.3 Release Freeze
 
 ## Release identity
 
-- Release: Ishikawa v1.3 frontier
+- Release: Ishikawa v1.3
 - Freeze date: 2026-10-24
 - Origin repository commit: `2af707df7def519bd3d97658060f188ae60f7cc9`
 - Origin product path: `phase-28-apisachi-tokuli/Ishikawa`
 - Schema: version 5
-- Synthetic corpus: v3, 30 documents, 150 pages
+- Qualification corpus: synthetic v3, 30 documents, 150 pages; separate from
+  the application release
 - Retrieval MRR@20: 0.895450
 - Native regression: 486 tests passed
 - Frontier gate: 60/60 passed
@@ -26,7 +27,8 @@
 
 Raw frontier requests and responses remain ignored local evidence. The
 identities above, sanitized metrics, and product source manifest form the
-durable acceptance boundary.
+durable acceptance boundary. The qualification corpus establishes release
+quality but is not an application build input or packaged application content.
 
 ## Superseded material
 
@@ -38,3 +40,21 @@ repository and pass its fresh-install verifier before publication.
 
 The post-v1.3 optimization backlog does not amend this release. Org-lab
 migration remains deferred until EmceeDanko qualification and human acceptance.
+
+## Deployment qualification correction
+
+V13-71 preserves `127.0.0.1:1384` as the packaged Retrieval API default and
+permits the private side-by-side qualifier to configure `127.0.0.1:1385` in
+both relevant profiles. The qualifier now exercises the real packaged
+configuration validator, and its hidden credential prompts are emitted before
+input begins. This correction does not change retrieval, corpus, schema, UI, or
+the frozen frontier acceptance metrics.
+
+V13-73 corrects the schema-v5 identity carried by the application persistence
+contract so it equals the checksum of the already frozen packaged schema. The
+target qualifier now proves the staged application identity, packaged schema,
+and installed migration ledger agree immediately after schema installation,
+before any embedding or publication work. The exact boundary passes the full
+486-test native suite and a real disposable PostgreSQL 16/pgvector check using
+the `rag_ingest` role. This is a release-consistency correction; it changes no
+schema structure, corpus, retrieval behavior, UI, or frontier metric.

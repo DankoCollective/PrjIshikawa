@@ -310,6 +310,16 @@ class PersistenceTests(unittest.TestCase):
         self.assertNotIn("Document: Alpha", citation_call[1])
 
     def test_schema_mismatch_rolls_back_before_application_writes(self):
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "packaging"
+            / "database"
+            / "schema.sql"
+        )
+        self.assertEqual(
+            hashlib.sha256(schema_path.read_bytes()).hexdigest(),
+            CONSOLIDATED_SCHEMA_V5_SHA256,
+        )
         connection = FakeConnection(schema_contract="wrong")
         with self.assertRaises(PersistenceContractError):
             write_incremental_plan(

@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Purpose:
+#   Install or verify an exact side-by-side Ishikawa v1.3 candidate and retain
+#   one independently checksum-bound qualification-corpus input.
+#
+# Mental model:
+#   Verify the carried archives, inspect the accepted v1.2 runtime, install new
+#   state only in versioned sibling paths, and prove the accepted installation,
+#   rollback tree, service, and listeners did not change. Exact reruns reuse the
+#   staged bytes; drift blocks without modifying the pre-existing candidate.
+#
+# Inputs or prerequisites:
+#   Nine positional arguments supplied by Script 04, Ubuntu 24.04 amd64, an
+#   active v1.2 retrieval service, and listening web/retrieval ports.
+#
+# Outputs or artifact lane:
+#   ~/Documents/Ishikawa-v1.3, a separate qualification-input directory, and a
+#   bounded machine-readable result in the private transfer directory. It does
+#   not change a database, service, port, credential, or boot-autostart state.
+#
+# Usage:
+#   Invoked only by 04_stage-v1.3-candidate-on-emceedanko.sh.
+
+result_path=''
+candidate_created=false
+candidate_replaced=false
+candidate_replacement_root=''
+candidate_backup=''
+inputs_created=false
+inputs_replaced=false
+inputs_replacement_root=''
+inputs_backup=''
+complete=false
+extract_root=''
+inputs_stage=''
+
+fail() {
+  local reason="$1"
+  local status="${2:-1}"
+  trap - ERR
+  if [[ -n "$result_path" ]]; then
+    printf 'ishikawa_v1_3_candidate_stage=blocked;reason=%s\n' "$reason" >>"$result_path" 2>/dev/null || true
+  else
+    printf 'ishikawa_v1_3_candidate_stage=blocked;reason=%s\n' "$reason" >&2
+  fi
+  exit "$status"
+}
+unexpected_error() {
+  local status="$1" line="$2"
+  trap - ERR
+  fail "unexpected_command_failure_line_${line}" "$status"
+}
+trap 'unexpected_error "$?" "$LINENO"' ERR
+
+[[ "$#" == 9 ]] || fail argument_count_invalid
+expected_hostname="$1"
+expected_os_version="$2"
+application_archive="$3"
+application_sha256="$4"
+corpus_archive="$5"
+corpus_sha256="$6"
+result_path="$7"
+replace_unqualified_candidate="$8"
+replace_qualification_inputs="$9"
+
+readonly working_root="$(pwd -P)"
+readonly active_root="$HOME/Documents/Ishikawa"
+readonly rollback_root="$HOME/Documents/Ishikawa-before-v1.2"
+readonly candidate_root="$HOME/Documents/Ishikawa-v1.3"
+readonly inputs_root="$HOME/Documents/Ishikawa-v1.3-qualification-inputs"
+readonly application_bundle='ishikawa-v1.3'
+readonly corpus_bundle='qualification-corpus-v3'
+
+[[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail expected_hostname_invalid
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail expected_os_version_invalid
+[[ "$replace_unqualified_candidate" == true || "$replace_unqualified_candidate" == false ]] \
+  || fail replacement_mode_invalid
+[[ "$replace_qualification_inputs" == true || "$replace_qualification_inputs" == false ]] \
+  || fail qualification_input_replacement_mode_invalid
+[[ "$application_sha256" =~ ^[0-9a-f]{64}$ && "$corpus_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || fail archive_digest_invalid
+for path in "$application_archive" "$corpus_archive"; do
+  [[ "$path" == "$working_root"/* && -f "$path" && ! -L "$path" && -r "$path" ]] \
+    || fail transferred_archive_unsafe
+done
+[[ "$result_path" == "$working_root"/* && ! -e "$result_path" && ! -L "$result_path" ]] \
+  || fail result_path_unsafe
+for command_name in awk bash cp dpkg find grep hostname mkdir mktemp mv python3 rm sha256sum sort ss stat systemctl tar tr uname; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "command_missing_${command_name}"
+done
+[[ -f /etc/os-release && -r /etc/os-release ]] \
+  || fail operating_system_release_unsafe
+
+cleanup() {
+  local status="$?"
+  trap - ERR EXIT INT TERM
+  if [[ -n "$extract_root" && "$extract_root" == "$working_root"/extracted.* && -d "$extract_root" ]]; then
+    rm -rf -- "$extract_root"
+  fi
+  if [[ -n "$inputs_stage" && "$inputs_stage" == "$HOME/Documents"/.ishikawa-v1.3-inputs.* && -d "$inputs_stage" ]]; then
+    rm -rf -- "$inputs_stage"
+  fi
+  if [[ "$complete" != true ]]; then
+    if [[ "$inputs_created" == true && "$inputs_root" == "$HOME/Documents/Ishikawa-v1.3-qualification-inputs" ]]; then
+      rm -rf -- "$inputs_root"
+    fi
+    if [[ "$candidate_created" == true && "$candidate_root" == "$HOME/Documents/Ishikawa-v1.3" ]]; then
+      rm -rf -- "$candidate_root"
+    fi
+    if [[ "$candidate_replaced" == true \
+        && "$candidate_root" == "$HOME/Documents/Ishikawa-v1.3" \
+        && "$candidate_backup" == "$HOME/Documents"/.ishikawa-v1.3-replacement.*/previous \
+        && -d "$candidate_backup" && ! -L "$candidate_backup" ]]; then
+      [[ ! -e "$candidate_root" && ! -L "$candidate_root" ]] || rm -rf -- "$candidate_root"
+      mv -- "$candidate_backup" "$candidate_root"
+    fi
+    if [[ "$inputs_replaced" == true \
+        && "$inputs_root" == "$HOME/Documents/Ishikawa-v1.3-qualification-inputs" \
+        && "$inputs_backup" == "$HOME/Documents"/.ishikawa-v1.3-inputs-replacement.*/previous \
+        && -d "$inputs_backup" && ! -L "$inputs_backup" ]]; then
+      [[ ! -e "$inputs_root" && ! -L "$inputs_root" ]] || rm -rf -- "$inputs_root"
+      mv -- "$inputs_backup" "$inputs_root"
+    fi
+  fi
+  if [[ -n "$candidate_replacement_root" \
+      && "$candidate_replacement_root" == "$HOME/Documents"/.ishikawa-v1.3-replacement.* \
+      && -d "$candidate_replacement_root" ]]; then
+    rm -rf -- "$candidate_replacement_root"
+  fi
+  if [[ -n "$inputs_replacement_root" \
+      && "$inputs_replacement_root" == "$HOME/Documents"/.ishikawa-v1.3-inputs-replacement.* \
+      && -d "$inputs_replacement_root" ]]; then
+    rm -rf -- "$inputs_replacement_root"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'fail signal_interrupt 130' INT
+trap 'fail signal_termination 143' TERM
+
+actual_hostname="$(hostname -s)"
+[[ "$actual_hostname" == "$expected_hostname" ]] || fail hostname_mismatch
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || fail operating_system_mismatch
+[[ "$(dpkg --print-architecture)" == amd64 && "$(uname -m)" == x86_64 ]] \
+  || fail architecture_mismatch
+[[ "$(sha256sum -- "$application_archive" | awk '{print $1}')" == "$application_sha256" ]] \
+  || fail application_archive_checksum_mismatch
+[[ "$(sha256sum -- "$corpus_archive" | awk '{print $1}')" == "$corpus_sha256" ]] \
+  || fail corpus_archive_checksum_mismatch
+[[ -d "$active_root" && ! -L "$active_root" ]] || fail active_v1_2_installation_missing
+[[ -d "$rollback_root" && ! -L "$rollback_root" ]] || fail v1_2_rollback_installation_missing
+
+active_identity_before="$(stat -Lc '%d:%i' -- "$active_root")"
+rollback_identity_before="$(stat -Lc '%d:%i' -- "$rollback_root")"
+retrieval_state_before="$(systemctl --user is-active ishikawa-retrieval-api.service 2>/dev/null || true)"
+port_1384_before=false
+port_3000_before=false
+listener_state_before="$(ss -H -ltn '( sport = :1384 or sport = :3000 )' 2>/dev/null | sort)"
+grep -Eq '(^|[[:space:]])[^[:space:]]*:1384([[:space:]]|$)' <<<"$listener_state_before" && port_1384_before=true
+grep -Eq '(^|[[:space:]])[^[:space:]]*:3000([[:space:]]|$)' <<<"$listener_state_before" && port_3000_before=true
+[[ "$retrieval_state_before" == active && "$port_1384_before" == true && "$port_3000_before" == true ]] \
+  || fail active_v1_2_runtime_not_ready
+
+extract_root="$(mktemp -d "$working_root/extracted.XXXXXX")"
+mkdir -p -- "$extract_root/application" "$extract_root/corpus"
+tar -xzf "$application_archive" -C "$extract_root/application" || fail application_extraction_failed
+tar -xzf "$corpus_archive" -C "$extract_root/corpus" || fail corpus_extraction_failed
+application_root="$extract_root/application/$application_bundle"
+corpus_root="$extract_root/corpus/$corpus_bundle"
+[[ -d "$application_root" && ! -L "$application_root" ]] || fail application_bundle_invalid
+[[ -d "$corpus_root" && ! -L "$corpus_root" ]] || fail corpus_bundle_invalid
+bash "$application_root/verify-ishikawa-release" >/dev/null || fail application_verification_failed
+(cd -- "$corpus_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail corpus_verification_failed
+PYTHONDONTWRITEBYTECODE=1 python3 -B - "$corpus_root/transfer.json" <<'PY' \
+  || fail corpus_receipt_invalid
+import json
+import sys
+from pathlib import Path
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert record == {
+    "application_release_dependency": False,
+    "configuration_generation": "target_per_ingestion_run",
+    "corpus_identity": "synthetic-corpus-v3",
+    "document_count": 30,
+    "frontier_case_count": 60,
+    "generated_configuration": ["document_catalog.yaml", "ingestion_manifest.yaml"],
+    "page_count": 150,
+    "persistent_flat_file_index": False,
+    "purpose": "independent_qualification_corpus_transfer",
+    "relationship_count": 90,
+    "runtime_source_of_truth": "PostgreSQL after ingestion",
+    "schema_version": 1,
+}
+PY
+
+application_action='installed_new'
+if [[ -e "$candidate_root" || -L "$candidate_root" ]]; then
+  [[ -d "$candidate_root" && ! -L "$candidate_root" ]] || fail candidate_root_unsafe
+  candidate_matches=true
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 -B - \
+    "$application_root/application/payload" "$candidate_root" <<'PY'
+import hashlib
+import stat
+import sys
+from pathlib import Path
+payload, installed = (Path(value).resolve(strict=True) for value in sys.argv[1:])
+for source in payload.rglob("*"):
+    if source.is_symlink():
+        raise SystemExit(1)
+    target = installed / source.relative_to(payload)
+    if source.is_dir():
+        if not target.is_dir() or target.is_symlink():
+            raise SystemExit(1)
+        continue
+    if not source.is_file():
+        raise SystemExit(1)
+    if not target.is_file() or target.is_symlink():
+        raise SystemExit(1)
+    if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
+        raise SystemExit(1)
+    if stat.S_IMODE(source.stat().st_mode) != stat.S_IMODE(target.stat().st_mode):
+        raise SystemExit(1)
+PY
+  then
+    candidate_matches=false
+  fi
+  if [[ "$candidate_matches" == true ]]; then
+    application_action='reused_exact'
+  elif [[ "$replace_unqualified_candidate" == true ]]; then
+    candidate_replacement_root="$(mktemp -d "$HOME/Documents/.ishikawa-v1.3-replacement.XXXXXX")"
+    replacement_candidate="$candidate_replacement_root/new"
+    candidate_backup="$candidate_replacement_root/previous"
+    bash "$application_root/application/install-ishikawa" --install-root "$replacement_candidate" >/dev/null \
+      || fail replacement_candidate_install_failed
+    mv -- "$candidate_root" "$candidate_backup" \
+      || fail replacement_candidate_backup_failed
+    candidate_replaced=true
+    mv -- "$replacement_candidate" "$candidate_root" \
+      || fail replacement_candidate_publication_failed
+    application_action='replaced_unqualified'
+  else
+    fail existing_candidate_identity_mismatch
+  fi
+else
+  bash "$application_root/application/install-ishikawa" --install-root "$candidate_root" >/dev/null \
+    || fail candidate_install_failed
+  candidate_created=true
+fi
+
+corpus_action='staged_new'
+if [[ -e "$inputs_root" || -L "$inputs_root" ]]; then
+  [[ -d "$inputs_root" && ! -L "$inputs_root" ]] || fail qualification_inputs_unsafe
+  corpus_matches=true
+  if [[ "$(find "$inputs_root" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' ')" != \
+        'qualification-corpus-v3.tar.gz qualification-corpus-v3.tar.gz.sha256 ' \
+      || ! -f "$inputs_root/qualification-corpus-v3.tar.gz" \
+      || -L "$inputs_root/qualification-corpus-v3.tar.gz" \
+      || ! -f "$inputs_root/qualification-corpus-v3.tar.gz.sha256" \
+      || -L "$inputs_root/qualification-corpus-v3.tar.gz.sha256" \
+      || "$(sha256sum -- "$inputs_root/qualification-corpus-v3.tar.gz" | awk '{print $1}')" != "$corpus_sha256" ]] \
+      || ! (cd -- "$inputs_root" && sha256sum --check --strict qualification-corpus-v3.tar.gz.sha256 >/dev/null 2>&1); then
+    corpus_matches=false
+  fi
+  if [[ "$corpus_matches" == true ]]; then
+    corpus_action='reused_exact'
+  elif [[ "$replace_qualification_inputs" == true ]]; then
+    inputs_replacement_root="$(mktemp -d "$HOME/Documents/.ishikawa-v1.3-inputs-replacement.XXXXXX")"
+    replacement_inputs="$inputs_replacement_root/new"
+    inputs_backup="$inputs_replacement_root/previous"
+    mkdir -- "$replacement_inputs"
+    cp -- "$corpus_archive" "$replacement_inputs/qualification-corpus-v3.tar.gz"
+    (cd -- "$replacement_inputs" && sha256sum qualification-corpus-v3.tar.gz >qualification-corpus-v3.tar.gz.sha256)
+    (cd -- "$replacement_inputs" && sha256sum --check --strict qualification-corpus-v3.tar.gz.sha256 >/dev/null) \
+      || fail replacement_corpus_sidecar_invalid
+    mv -- "$inputs_root" "$inputs_backup" || fail replacement_inputs_backup_failed
+    inputs_replaced=true
+    mv -- "$replacement_inputs" "$inputs_root" || fail replacement_inputs_publication_failed
+    corpus_action='replaced_unqualified'
+  else
+    fail existing_corpus_identity_mismatch
+  fi
+else
+  inputs_stage="$(mktemp -d "$HOME/Documents/.ishikawa-v1.3-inputs.XXXXXX")"
+  cp -- "$corpus_archive" "$inputs_stage/qualification-corpus-v3.tar.gz"
+  (cd -- "$inputs_stage" && sha256sum qualification-corpus-v3.tar.gz >qualification-corpus-v3.tar.gz.sha256)
+  mv -- "$inputs_stage" "$inputs_root" || fail corpus_inputs_publication_failed
+  inputs_stage=''
+  inputs_created=true
+fi
+
+[[ "$(stat -Lc '%d:%i' -- "$active_root")" == "$active_identity_before" ]] \
+  || fail active_v1_2_installation_changed
+[[ "$(stat -Lc '%d:%i' -- "$rollback_root")" == "$rollback_identity_before" ]] \
+  || fail v1_2_rollback_installation_changed
+[[ "$(systemctl --user is-active ishikawa-retrieval-api.service 2>/dev/null || true)" == "$retrieval_state_before" ]] \
+  || fail active_v1_2_service_changed
+ss -H -ltn '( sport = :1384 )' 2>/dev/null | grep -q . || fail active_v1_2_retrieval_port_changed
+ss -H -ltn '( sport = :3000 )' 2>/dev/null | grep -q . || fail active_v1_2_web_port_changed
+[[ "$(ss -H -ltn '( sport = :1384 or sport = :3000 )' 2>/dev/null | sort)" == "$listener_state_before" ]] \
+  || fail active_v1_2_listener_state_changed
+
+if [[ "$candidate_replaced" == true ]]; then
+  [[ "$candidate_replacement_root" == "$HOME/Documents"/.ishikawa-v1.3-replacement.* \
+      && -d "$candidate_replacement_root" && ! -L "$candidate_replacement_root" ]] \
+    || fail replacement_workspace_unsafe
+  rm -rf -- "$candidate_replacement_root"
+  candidate_replacement_root=''
+  candidate_backup=''
+fi
+if [[ "$inputs_replaced" == true ]]; then
+  [[ "$inputs_replacement_root" == "$HOME/Documents"/.ishikawa-v1.3-inputs-replacement.* \
+      && -d "$inputs_replacement_root" && ! -L "$inputs_replacement_root" ]] \
+    || fail replacement_inputs_workspace_unsafe
+  rm -rf -- "$inputs_replacement_root"
+  inputs_replacement_root=''
+  inputs_backup=''
+fi
+
+complete=true
+{
+  printf 'target_hostname=%s;os_id=ubuntu;os_version=%s;architecture=amd64\n' "$actual_hostname" "$expected_os_version"
+  printf 'application_archive_sha256=%s;application_verification=pass;candidate_action=%s\n' "$application_sha256" "$application_action"
+  printf 'corpus_archive_sha256=%s;corpus_verification=pass;corpus_action=%s\n' "$corpus_sha256" "$corpus_action"
+  printf 'candidate_root=HOME/Documents/Ishikawa-v1.3;qualification_inputs_root=HOME/Documents/Ishikawa-v1.3-qualification-inputs\n'
+  printf 'active_v1_2_preserved=true;rollback_tree_preserved=true;active_service_unchanged=true;ports_3000_1384_unchanged=true\n'
+  printf 'database_changed=false;service_changed=false;boot_autostart_changed=false;model_contact=false;credential_read=false\n'
+  printf 'ishikawa_v1_3_candidate_stage=pass\n'
+} >"$result_path"
+rm -rf -- "$extract_root"
+extract_root=''
+trap cleanup EXIT

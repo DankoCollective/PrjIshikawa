@@ -29,6 +29,8 @@ of target mutation, or successful cleanup does not reduce the violation.
 
 ## Operating Rules
 
+- Read `danko_lab.md` before lab-specific planning or execution; verify its
+  recorded snapshot against fresh read-only inventory when current state matters.
 - Read the relevant local docs before changing procedure or evidence.
 - Follow `CODING_STANDARD.md` for script and code file style.
 - Follow `LAB_RUN_PATH_STANDARD.md` for lab script sequencing, local report write-back, remote payload handling, artifact/advisory verification, and reviewed evidence promotion.
@@ -42,6 +44,36 @@ of target mutation, or successful cleanup does not reduce the violation.
 - Do not store secrets, tokens, private/personal account identifiers, raw vector dumps, or screenshots with private values.
 - Prefer small, targeted changes over broad rewrites.
 - When a runtime choice changes, record the decision in the repository's authoritative decision list under `docs/decisions/`.
+
+## Controlled Package Capture And Import Gate
+
+Third-party packages, wheels, binaries, source archives, container images, and
+equivalent dependencies must be captured and accepted locally before they are
+carried into a lab or deployment target. The target must not independently
+download replacement bytes merely because package-manager or internet access
+is available.
+
+1. Resolve and download the exact version, revision, platform, and runtime
+   variant into ignored persistent local staging, using a partial filename and
+   resumable transfer when supported.
+2. Record the authoritative source, capture date, version identity, expected
+   size, upstream checksum or its documented absence, local SHA-256, signature
+   status when available, license disposition, and advisory sources.
+3. Review advisory affectedness and close every action-required finding through
+   a fixed version, patch, disabled feature, compensating control, evidenced
+   non-applicability, or explicit operator-approved deferral.
+4. Promote only the reviewed bytes into the stable local handoff, verify them
+   independently, carry those exact bytes to the target, and verify them again
+   before install or import. Prefer offline installation from that verified
+   carried set.
+5. On rerun, reuse only checksum-identical staged bytes. Preserve useful public
+   downloads after a later validation failure; promptly remove secrets and
+   protected temporary content under their separate cleanup rules.
+6. Record any exception as a numbered, frozen decision before target use.
+
+`LAB_RUN_PATH_STANDARD.md` remains the detailed execution standard; this gate
+makes its package-capture discipline an explicit part of the agent control
+surface.
 
 ## Decision List Format And Freeze Gate
 
@@ -162,6 +194,8 @@ may reasonably run longer than 15 seconds:
    manufacture a pass.
 7. On success, review, block, interruption, or signal, print and record one
    unambiguous terminal result, report path, cleanup status, and next gate.
+   Put the `SCRIPT RESULT` heading and final result marker on their own lines;
+   never append them to another status or report-path line.
    Preserve conventional nonzero signal status such as `130` for `SIGINT` and
    `143` for `SIGTERM`; never let an interrupted run appear successful.
 8. Keep milestone output secret-safe. Never print credentials, tokens,
@@ -270,6 +304,22 @@ transfer-ready, installable, repair-capable, or rollback-capable:
 7. State separately what still requires live-target proof. Passing isolated
    mocks never establishes actual target service, container, journal, timeout,
    or rollback behavior.
+8. Exercise the exact packaged or installed filesystem layout used by the
+   operator. A source-tree pass cannot prove relative paths, copied assets,
+   generated configuration, permissions, or validators in the installed tree.
+9. Run real first-party validators and test suites inside the harness whenever
+   they are available. Mock only the external boundary being isolated; a mock
+   that replaces the behavior under qualification cannot establish its pass.
+10. Before expensive download, embedding, generation, or publication work,
+    execute every deterministic identity, schema, configuration, inventory-
+    definition, and prerequisite gate whose inputs are already available.
+11. Preserve metric semantics end to end. Name and independently test records,
+    distinct pairs, groups, documents, chunks, and other cardinalities; use the
+    same authoritative query at generation, qualification, and acceptance
+    boundaries rather than comparing similarly sized but different measures.
+12. An operator-facing qualification script should execute and verify its own
+    result in one run. Do not require a second analysis script merely to learn
+    whether the first run satisfied its declared acceptance contract.
 
 These gates apply before publication into a stable `-current` handoff. A later
 failure may require a new build, but it does not permit silently changing the

@@ -155,15 +155,19 @@ def validate_retrieval_service_profile(value: Any) -> RetrievalServicePolicy:
         "process_model": "separate_process",
         "lifecycle": "start_on_demand",
     }
+    default_port = network["default_port"]
     expected_network = {
         "default_bind_address": "127.0.0.1",
-        "default_port": 1384,
+        "default_port": default_port,
         "allowed_client": "ishikawa_nextjs_server",
     }
     if (
         dict(identity) != expected_identity
         or dict(runtime) != expected_runtime
-        or dict(network) != expected_network
+        or network["default_bind_address"] != expected_network["default_bind_address"]
+        or network["allowed_client"] != expected_network["allowed_client"]
+        or type(default_port) is not int
+        or not 1 <= default_port <= 65535
     ):
         raise RetrievalServiceContractError("retrieval service profile contract is invalid")
     canonical = {

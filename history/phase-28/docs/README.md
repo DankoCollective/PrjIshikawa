@@ -313,7 +313,7 @@ The proposed product and Chat UI are named `Ishikawa`. The durable proposed
 application architecture, host and repository layouts, configuration
 responsibilities, retirement and quarantine workflows, ingestion writer, and
 forward-migration boundary are recorded in
-[`../Ishikawa/docs/ARCHITECTURE.md`](../Ishikawa/docs/ARCHITECTURE.md).
+[`../../../Ishikawa/docs/ARCHITECTURE.md`](../../../Ishikawa/docs/ARCHITECTURE.md).
 
 Retrieval implementation now reaches the accepted native HTTP boundary.
 Operator-executed Scripts `62` through `69` accepted the multi-turn API,

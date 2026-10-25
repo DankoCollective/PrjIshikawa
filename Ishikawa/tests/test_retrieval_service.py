@@ -23,6 +23,7 @@ from ishikawa.retrieval_service import (
     RetrievedEvidence,
     RetrievalDependencyUnavailable,
     RetrievalOperationalTelemetry,
+    RetrievalServiceContractError,
     RetrievalServicePorts,
     orchestrate_chat,
     validate_retrieval_service_profile,
@@ -171,6 +172,25 @@ class RetrievalServiceTests(unittest.TestCase):
         self.assertEqual(self.service_policy.lifecycle, "start_on_demand")
         self.assertEqual(self.service_policy.default_bind_address, "127.0.0.1")
         self.assertEqual(self.service_policy.default_port, 1384)
+
+        profile_path = (
+            Path(__file__).resolve().parents[1]
+            / "config/templates/retrieval_service_profile.yaml"
+        )
+        alternate = load_restricted_yaml(profile_path, label="retrieval service profile")
+        alternate["network"]["default_port"] = 1385
+        alternate_policy = validate_retrieval_service_profile(alternate)
+        self.assertEqual(alternate_policy.default_bind_address, "127.0.0.1")
+        self.assertEqual(alternate_policy.default_port, 1385)
+
+        for invalid_port in (True, 0, 65536, "1385"):
+            with self.subTest(invalid_port=invalid_port):
+                invalid = load_restricted_yaml(
+                    profile_path, label="retrieval service profile"
+                )
+                invalid["network"]["default_port"] = invalid_port
+                with self.assertRaises(RetrievalServiceContractError):
+                    validate_retrieval_service_profile(invalid)
 
     def test_answered_path_obeys_gate_order_and_returns_segment_derived_answer(self):
         calls: list[str] = []

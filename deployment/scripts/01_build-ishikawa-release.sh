@@ -2,6 +2,25 @@
 set -Eeuo pipefail
 umask 077
 
+# Purpose:
+#   Build, qualify, and atomically publish the corpus-agnostic Ishikawa v1.3
+#   application release.
+#
+# Mental model:
+#   Validate frozen inputs, run native and browser tests, build twice, require
+#   byte-identical archives, prove a fresh installation, and publish only the
+#   verified archive to the stable current handoff.
+#
+# Inputs or prerequisites:
+#   Frozen v1.3 source, local test/build dependencies, Docker, and attended sudo
+#   only when the local container test path requires it.
+#
+# Outputs or artifact lane:
+#   local/artifacts/ishikawa-v1.3-current and a detailed ignored local report.
+#
+# Usage:
+#   bash ./deployment/scripts/01_build-ishikawa-release.sh --run
+
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
 readonly product_root="$repo_root/Ishikawa"
@@ -14,14 +33,11 @@ readonly source_manifest="$repo_root/docs/releases/ISHIKAWA_V1_3_SOURCE_SHA256SU
 readonly release_readme="$repo_root/deployment/assets/README-v1.3.md"
 readonly release_verifier="$repo_root/deployment/assets/verify-ishikawa-release"
 readonly decision_record="$repo_root/docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md"
-readonly freeze_record="$repo_root/docs/releases/ISHIKAWA_V1_3_FRONTIER_FREEZE.md"
-readonly corpus_root="$repo_root/qualification/corpus-v3"
+readonly freeze_record="$repo_root/docs/releases/ISHIKAWA_V1_3_RELEASE_FREEZE.md"
 readonly report_root="$repo_root/local/reports/ishikawa-release-build"
 readonly artifact_root="$repo_root/local/artifacts"
-readonly application_current="$artifact_root/ishikawa-current"
-readonly corpus_current="$artifact_root/ishikawa-corpus-v3-current"
-readonly bundle_name='ishikawa-v1.3-frontier'
-readonly corpus_bundle_name='ishikawa-synthetic-corpus-v3'
+readonly application_current="$artifact_root/ishikawa-v1.3-current"
+readonly bundle_name='ishikawa-v1.3'
 readonly expected_native_tests=486
 readonly expected_javascript_tests=17
 readonly frontier_artifact_sha256='1ccb7d59ed67073213051d28cd6142ab445b616e34a6ef7eecb22b174b52d972'
@@ -33,10 +49,9 @@ work_root=''
 current_stage='initialization'
 build_pid=''
 application_stage=''
-corpus_publication_stage=''
 
 result() {
-  printf '\nSCRIPT RESULT\nbuild_ishikawa_release=%s\n' "$1"
+  printf '\nSCRIPT RESULT\nscript_01_build_ishikawa_release=%s\n' "$1"
 }
 
 block() {
@@ -66,13 +81,9 @@ cleanup() {
   if [[ -n "$work_root" && "$work_root" == /tmp/ishikawa-release-build.* && -d "$work_root" ]]; then
     rm -rf -- "$work_root"
   fi
-  if [[ -n "$application_stage" && "$application_stage" == "$artifact_root"/.ishikawa-current.* \
+  if [[ -n "$application_stage" && "$application_stage" == "$artifact_root"/.ishikawa-v1.3-current.* \
       && -d "$application_stage" && ! -L "$application_stage" ]]; then
     rm -rf -- "$application_stage"
-  fi
-  if [[ -n "$corpus_publication_stage" && "$corpus_publication_stage" == "$artifact_root"/.ishikawa-corpus-v3-current.* \
-      && -d "$corpus_publication_stage" && ! -L "$corpus_publication_stage" ]]; then
-    rm -rf -- "$corpus_publication_stage"
   fi
   exit "$status"
 }
@@ -104,35 +115,43 @@ for file in "$test_runner" "$source_manifest" "$release_readme" \
       "A required release input is missing, unreadable, or a symbolic link: ${file}." \
       'Restore the frozen repository input and rerun this script.'; }
 done
-for directory in "$product_root" "$python_root" "$web_root" "$corpus_root/source"; do
+for directory in "$product_root" "$python_root" "$web_root"; do
   [[ -d "$directory" && ! -L "$directory" ]] \
     || { current_stage='preflight'; block required_directory_unsafe \
       "A required release directory is missing or unsafe: ${directory}." \
       'Restore the frozen repository directory and rerun this script.'; }
 done
 
-find "$product_root" "$corpus_root" -type l -print -quit | grep -q . \
+find "$product_root" -type l -print -quit | grep -q . \
   && { current_stage='preflight'; block source_symlink_found \
-    'The frozen product or corpus contains a symbolic link.' \
+    'The frozen product contains a symbolic link.' \
     'Replace the link with an explicitly reviewed regular file.'; }
 [[ "$(find "$python_root" -maxdepth 1 -type f -name '*.py' | awk 'END {print NR+0}')" == 52 ]] \
   || { current_stage='preflight'; block python_inventory_mismatch \
     'The canonical Python module inventory is not 52 files.' \
     'Review source drift before rebuilding the release.'; }
-[[ "$(find "$corpus_root/source" -maxdepth 1 -type f -name '*.pdf' | awk 'END {print NR+0}')" == 30 ]] \
-  || { current_stage='preflight'; block corpus_inventory_mismatch \
-    'Synthetic corpus v3 does not contain exactly 30 source PDFs.' \
-    'Restore the accepted corpus fixture before rebuilding.'; }
-for decision in V13-60 V13-61 V13-62 V13-63 V13-64 V13-65 V13-66 V13-67; do
-  grep -Fq "### ${decision} " "$decision_record" \
+for decision in V13-60 V13-61 V13-62 V13-63 V13-64 V13-65 V13-66 V13-67 \
+  V13-68 V13-69 V13-70 V13-71 V13-72 V13-73 V13-74; do
+  decision_block="$(awk -v header="### ${decision} " '
+    index($0, header) == 1 {capture=1}
+    capture && /^### / && index($0, header) != 1 {exit}
+    capture {print}
+  ' "$decision_record")"
+  [[ -n "$decision_block" ]] \
     || { current_stage='preflight'; block "${decision,,}_missing" \
       "The frozen release decision ${decision} is absent." \
       'Restore the frozen decision record and rerun this script.'; }
+  for field in Decision Recommendation Reason/Evidence; do
+    [[ "$(grep -c "^${field}:" <<<"$decision_block")" == 1 ]] \
+      || { current_stage='preflight'; block "${decision,,}_format_invalid" \
+        "The release decision ${decision} does not contain exactly one ${field} field." \
+        'Reconcile the decision with the repository control-surface format and rerun this script.'; }
+  done
+  [[ "$(grep -Ec '^Status: Frozen([. ]|$)' <<<"$decision_block")" == 1 ]] \
+    || { current_stage='preflight'; block "${decision,,}_not_frozen" \
+      "The release decision ${decision} is not recorded with the canonical Frozen status." \
+      'Restore the frozen decision status and rerun this script.'; }
 done
-grep -Fq 'Status: FROZEN.' "$decision_record" \
-  || { current_stage='preflight'; block frozen_status_missing \
-    'The release decision list does not contain frozen status markers.' \
-    'Restore the frozen decision record and rerun this script.'; }
 
 actual_manifest="$(mktemp /tmp/ishikawa-source-manifest.XXXXXX)"
 (
@@ -165,7 +184,7 @@ PY
 if [[ "$mode" == '--validate-only' ]]; then
   printf '%s\n' \
     'purpose=validate_frozen_ishikawa_v1_3_release_build' \
-    'source_manifest=pass;python_modules=52;corpus_documents=30;remote_contact=false;model_contact=false;database_contact=false' \
+    'source_manifest=pass;python_modules=52;source_documents=0;corpus_dependency=false;remote_contact=false;model_contact=false;database_contact=false' \
     'expected_prompts=at_most_one_attended_sudo_prompt_for_docker_during_run' \
     'expected_duration=about_2_to_5_minutes'
   result ready
@@ -184,27 +203,10 @@ work_root="$(mktemp -d /tmp/ishikawa-release-build.XXXXXX)" \
     'Correct /tmp availability and rerun this script.'; }
 
 emit() { printf '%s\n' "$1" | tee -a "$report_path"; }
-emit 'purpose=build_and_publish_frozen_ishikawa_v1_3_frontier_release'
+emit 'purpose=build_and_publish_frozen_ishikawa_v1_3_release'
 emit "report_path=$report_path"
-emit 'authorized_actions=run_local_tests_use_existing_local_container_image_assemble_verify_and_publish_local_release_and_synthetic_corpus_bundles'
+emit 'authorized_actions=run_local_tests_use_existing_local_container_image_assemble_verify_and_publish_local_application_release'
 emit 'non_actions=no_remote_contact_no_model_contact_no_database_contact_no_credential_read_no_service_start_no_image_pull_no_black_corpus_access_no_boot_autostart_change'
-
-current_stage='native_tests'
-emit 'milestone=native_tests;state=start'
-native_result="$work_root/native-tests.txt"
-PYTHONDONTWRITEBYTECODE=1 bash "$test_runner" >"$native_result" 2>&1 \
-  || { tail -n 120 "$native_result" | tee -a "$report_path"; block native_tests_failed \
-    'The complete canonical native test suite failed.' \
-    'Correct every test failure before rebuilding.'; }
-grep -Fq "Ran $expected_native_tests tests" "$native_result" \
-  || block native_test_count_mismatch \
-    'The native suite passed with an unexpected test inventory.' \
-    'Review missing or added tests before rebuilding.'
-grep -Fxq 'ishikawa_local_validation_tests=PASS' "$native_result" \
-  || block native_pass_marker_missing \
-    'The native suite omitted its exact pass marker.' \
-    'Treat the run as unqualified and inspect the retained report.'
-emit "milestone=native_tests;state=pass;tests=$expected_native_tests"
 
 current_stage='container_access'
 docker_command=(docker)
@@ -232,6 +234,24 @@ image="node-24-slim-nextjs-16-4-1:${architecture}"
   || block image_architecture_mismatch \
     'The accepted web image architecture does not match the build host.' \
     'Restore the correct architecture-tagged image.'
+emit "milestone=container_access;state=pass;architecture=$architecture;image=$image"
+
+current_stage='native_tests'
+emit 'milestone=native_tests;state=start'
+native_result="$work_root/native-tests.txt"
+PYTHONDONTWRITEBYTECODE=1 bash "$test_runner" >"$native_result" 2>&1 \
+  || { tail -n 120 "$native_result" | tee -a "$report_path"; block native_tests_failed \
+    'The complete canonical native test suite failed.' \
+    'Correct every test failure before rebuilding.'; }
+grep -Fq "Ran $expected_native_tests tests" "$native_result" \
+  || block native_test_count_mismatch \
+    'The native suite passed with an unexpected test inventory.' \
+    'Review missing or added tests before rebuilding.'
+grep -Fxq 'ishikawa_local_validation_tests=PASS' "$native_result" \
+  || block native_pass_marker_missing \
+    'The native suite omitted its exact pass marker.' \
+    'Treat the run as unqualified and inspect the retained report.'
+emit "milestone=native_tests;state=pass;tests=$expected_native_tests"
 
 declare -a web_mounts=(
   --mount "type=bind,src=$web_root/app,dst=/opt/nextjs/app,readonly"
@@ -413,7 +433,7 @@ record = {
     "historical_mutation_files": 0,
     "javascript_test_count": 17,
     "native_test_count": 486,
-    "release_name": "Ishikawa v1.3 frontier",
+    "release_name": "Ishikawa v1.3",
     "retrieval_mrr_at_20": 0.89545,
     "schema_version": 5,
     "source_document_count": 0,
@@ -479,20 +499,6 @@ PYTHONDONTWRITEBYTECODE=1 "$fresh_install/scripts/ishikawa-retrieval-api" --chec
     'Correct the packaged configuration before publication.'
 emit 'milestone=fresh_install;state=pass;service_started=false;database_changed=false'
 
-current_stage='corpus_bundle'
-emit 'milestone=corpus_bundle;state=start'
-corpus_stage="$work_root/$corpus_bundle_name"
-cp -r -- "$corpus_root" "$corpus_stage"
-find "$corpus_stage" -type d -name __pycache__ -prune -exec rm -rf -- {} +
-find "$corpus_stage" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-write_manifest "$corpus_stage"
-corpus_archive="$work_root/$corpus_bundle_name.tar.gz"
-tar --sort=name --format=posix --mtime='UTC 2026-10-24' --owner=0 --group=0 --numeric-owner \
-  --pax-option=delete=atime,delete=ctime -C "$work_root" -cf - "$corpus_bundle_name" \
-  | gzip -n >"$corpus_archive"
-corpus_archive_sha256="$(sha256sum -- "$corpus_archive" | awk '{print $1}')"
-emit "milestone=corpus_bundle;state=pass;documents=30;archive_sha256=$corpus_archive_sha256"
-
 current_stage='coding_standard'
 emit 'milestone=coding_standard;state=start'
 if tar -tzf "$archive_a" | grep -E '/(__pycache__|node_modules|\.next)/|\.(pyc|pyo)$' >/dev/null; then
@@ -509,9 +515,8 @@ emit 'milestone=coding_standard;state=pass;deterministic=true;fresh_install=true
 
 current_stage='publication'
 emit 'milestone=publication;state=start'
-application_stage="$artifact_root/.ishikawa-current.${timestamp}.$$"
-corpus_publication_stage="$artifact_root/.ishikawa-corpus-v3-current.${timestamp}.$$"
-mkdir -p -- "$application_stage" "$corpus_publication_stage" "$artifact_root/superseded"
+application_stage="$artifact_root/.ishikawa-v1.3-current.${timestamp}.$$"
+mkdir -p -- "$application_stage" "$artifact_root/superseded"
 cp -- "$archive_a" "$application_stage/$bundle_name.tar.gz"
 (
   cd -- "$application_stage"
@@ -532,82 +537,43 @@ record = {
     "frontier_artifact_sha256": frontier_artifact,
     "frontier_report_sha256": frontier_report,
     "human_ui_validation": "accepted",
-    "release": "Ishikawa v1.3 frontier",
+    "release": "Ishikawa v1.3",
     "source_manifest_sha256": source_manifest,
 }
 Path(output).write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
-cp -- "$corpus_archive" "$corpus_publication_stage/$corpus_bundle_name.tar.gz"
-(
-  cd -- "$corpus_publication_stage"
-  sha256sum "$corpus_bundle_name.tar.gz" >"$corpus_bundle_name.tar.gz.sha256"
-)
-
 (cd -- "$application_stage" && sha256sum --check --strict "$bundle_name.tar.gz.sha256" >/dev/null) \
   || block application_publication_checksum_failed \
     'The staged application handoff failed its sidecar verification.' \
     'Do not publish the application handoff.'
-(cd -- "$corpus_publication_stage" && sha256sum --check --strict "$corpus_bundle_name.tar.gz.sha256" >/dev/null) \
-  || block corpus_publication_checksum_failed \
-    'The staged corpus handoff failed its sidecar verification.' \
-    'Do not publish the corpus handoff.'
-
 application_backup=''
-corpus_backup=''
 if [[ -e "$application_current" || -L "$application_current" ]]; then
   [[ -d "$application_current" && ! -L "$application_current" ]] \
     || block application_current_unsafe \
       'The stable application handoff exists but is not a regular directory.' \
       'Inspect the path before publication.'
-  application_backup="$artifact_root/superseded/ishikawa-current-$timestamp"
+  application_backup="$artifact_root/superseded/ishikawa-v1.3-current-$timestamp"
   [[ ! -e "$application_backup" && ! -L "$application_backup" ]] \
     || block application_backup_exists \
       'The selected superseded application path already exists.' \
       'Review the retained handoff directories before rebuilding.'
 fi
-if [[ -e "$corpus_current" || -L "$corpus_current" ]]; then
-  [[ -d "$corpus_current" && ! -L "$corpus_current" ]] \
-    || block corpus_current_unsafe \
-      'The stable corpus handoff exists but is not a regular directory.' \
-      'Inspect the path before publication.'
-  corpus_backup="$artifact_root/superseded/ishikawa-corpus-v3-current-$timestamp"
-  [[ ! -e "$corpus_backup" && ! -L "$corpus_backup" ]] \
-    || block corpus_backup_exists \
-      'The selected superseded corpus path already exists.' \
-      'Review the retained handoff directories before rebuilding.'
-fi
 
 [[ -z "$application_backup" ]] || mv -- "$application_current" "$application_backup"
-[[ -z "$corpus_backup" ]] || mv -- "$corpus_current" "$corpus_backup"
 if ! mv -- "$application_stage" "$application_current"; then
   [[ -z "$application_backup" ]] || mv -- "$application_backup" "$application_current"
-  [[ -z "$corpus_backup" ]] || mv -- "$corpus_backup" "$corpus_current"
   block application_publication_failed \
     'The staged application handoff could not be promoted.' \
-    'Review local filesystem state and rerun; the prior current handoffs were restored.'
-fi
-if ! mv -- "$corpus_publication_stage" "$corpus_current"; then
-  mv -- "$application_current" "$application_stage" || true
-  [[ -z "$application_backup" ]] || mv -- "$application_backup" "$application_current"
-  [[ -z "$corpus_backup" ]] || mv -- "$corpus_backup" "$corpus_current"
-  block corpus_publication_failed \
-    'The staged corpus handoff could not be promoted.' \
-    'Review local filesystem state and rerun; the prior current handoffs were restored.'
+    'Review local filesystem state and rerun; the prior current handoff was restored.'
 fi
 application_stage=''
-corpus_publication_stage=''
 
 (cd -- "$application_current" && sha256sum --check --strict "$bundle_name.tar.gz.sha256" >/dev/null) \
   || block published_application_checksum_failed \
     'The published application handoff failed independent verification.' \
     'Stop and inspect the stable handoff path.'
-(cd -- "$corpus_current" && sha256sum --check --strict "$corpus_bundle_name.tar.gz.sha256" >/dev/null) \
-  || block published_corpus_checksum_failed \
-    'The published corpus handoff failed independent verification.' \
-    'Stop and inspect the stable handoff path.'
-
-emit "milestone=publication;state=pass;application_current=$application_current;corpus_current=$corpus_current"
-emit "application_archive_sha256=$application_archive_sha256;corpus_archive_sha256=$corpus_archive_sha256"
+emit "milestone=publication;state=pass;application_current=$application_current"
+emit "application_archive_sha256=$application_archive_sha256;source_documents=0;corpus_dependency=false"
 emit 'target_contact=false;database_contact=false;model_contact=false;service_changed=false;boot_autostart_changed=false'
 emit 'next_gate=operator_run_emceedanko_inventory_and_disposable_qualification'
 result pass | tee -a "$report_path"

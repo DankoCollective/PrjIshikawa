@@ -31,10 +31,17 @@ source text. Nomic provides query and document embeddings.
 
 ## Authoritative files
 
+- Danko Lab systems and services: `danko_lab.md`
 - Agent behavior: `AGENT_OPERATION.md` and `AGENT_PERSONA.md`
 - Code and package rules: `CODING_STANDARD.md`
 - Operator-run and remote rules: `LAB_RUN_PATH_STANDARD.md`
 - SSH connection reuse: `SSH_CONNECTION_REUSE_STANDARD.md`
 - Current decisions: `docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`
-- Release freeze: `docs/releases/ISHIKAWA_V1_3_FRONTIER_FREEZE.md`
+- Release freeze: `docs/releases/ISHIKAWA_V1_3_RELEASE_FREEZE.md`
 - Execution order: `PROJECT_RUNBOOK.md`
+- Accounts, services, commands, and permissions:
+  `docs/operations/ISHIKAWA_V1_3_OPERATING_SURFACE.md`
+- Document catalog, manifest, and ingestion procedure:
+  `docs/operations/CORPUS_INGESTION_RUNBOOK.md`
+- Current repository reconciliation evidence:
+  `docs/releases/ISHIKAWA_V1_3_REPOSITORY_SWEEP.md`

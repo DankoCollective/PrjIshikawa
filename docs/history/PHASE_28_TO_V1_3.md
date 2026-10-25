@@ -14,7 +14,7 @@ fresh-install or target replay interface.
 The v1.3 frontier boundary was reached after synthetic corpus v3 expanded the
 fixture to 30 documents and 150 pages, retrieval reached MRR@20 0.895450, the
 60-question frontier gate passed with complete required citation coverage, and
-the operator accepted the local UI. `docs/releases/ISHIKAWA_V1_3_FRONTIER_FREEZE.md`
+the operator accepted the local UI. `docs/releases/ISHIKAWA_V1_3_RELEASE_FREEZE.md`
 records the exact evidence identities.
 
 Beginning with v1.3, this repository owns Ishikawa source, release packaging,

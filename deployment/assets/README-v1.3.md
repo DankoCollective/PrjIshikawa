@@ -1,12 +1,13 @@
-# Ishikawa v1.3 frontier deployment package
+# Ishikawa v1.3 deployment package
 
 This archive contains the frozen Ishikawa v1.3 application payload and the
 complete empty PostgreSQL schema-version-5 target. It does not contain
 organizational source documents, credentials, model responses, operating-system
 packages, container images, historical migrations, or development repairs.
 
-The synthetic corpus v3 qualification fixture is carried in a separate,
-checksum-bound archive. Verify this package before installation:
+Qualification corpora are independent inputs and are never embedded in or
+required to build this application release. Verify this package before
+installation:
 
 ```bash
 bash ./verify-ishikawa-release

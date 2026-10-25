@@ -27,7 +27,7 @@ from .relationships import (
 )
 
 CONSOLIDATED_SCHEMA_V5_SHA256 = (
-    "3b55d00880e6e09e401e282b7f62314fb635c6a859c23ad3e87c58aa23237e8b"
+    "1fdbed2439fb5bfecaef5dd857f380661c298f8459d6cc2319114b78e5a09c5d"
 )
 
 

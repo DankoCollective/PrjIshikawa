@@ -680,17 +680,22 @@ target_verify_identity_and_payload() {
 }
 
 target_verify_candidate() {
-  local expected_modes actual_modes
+  local expected_modes actual_modes candidate_checksum_output candidate_mismatch_paths
   for path in "$candidate_root" "$corpus_input_root" "$active_v1_2_root" "$rollback_v1_2_root"; do
     [[ -d "$path" && ! -L "$path" ]] \
       || target_fail required_installation_unsafe "Required installation path is missing or unsafe: ${path}." \
         'Restore the Script 04 side-by-side boundary before Script 06.'
   done
-  (cd -- "$candidate_root" \
-    && sha256sum --check --strict "$target_payload_root/candidate-SHA256SUMS" >/dev/null) \
-    || target_fail staged_candidate_checksum_failed \
-      'The staged v1.3 candidate no longer matches the exact Script 01 application.' \
+  if ! candidate_checksum_output="$(cd -- "$candidate_root" \
+      && sha256sum --check --strict --quiet \
+        "$target_payload_root/candidate-SHA256SUMS" 2>&1)"; then
+    candidate_mismatch_paths="$(printf '%s\n' "$candidate_checksum_output" \
+      | awk '/: FAILED/ && count < 10 {sub(/: FAILED.*/, ""); if (count++) printf ","; printf "%s", $0} END {if (count) printf "\n"}')"
+    [[ -n "$candidate_mismatch_paths" ]] || candidate_mismatch_paths='unclassified'
+    target_fail staged_candidate_checksum_failed \
+      "The staged v1.3 candidate no longer matches the exact Script 01 application. Mismatch paths: ${candidate_mismatch_paths}." \
       'Restage the exact qualified candidate with Script 04.'
+  fi
   PYTHONDONTWRITEBYTECODE=1 python3 -B - \
     "$candidate_root" "$target_payload_root/candidate-SHA256SUMS" <<'PY' \
     || target_fail staged_candidate_inventory_failed \

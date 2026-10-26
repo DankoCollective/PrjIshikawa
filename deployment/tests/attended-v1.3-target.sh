@@ -368,6 +368,24 @@ grep -Fxq 'reason=model_health_unavailable' "$last_result" || fail model_failure
   || fail model_failure_mutated_state
 
 reset_fresh_state
+candidate_drift_path="$candidate/config/deployment.yaml"
+candidate_drift_backup="$test_root/state/deployment.yaml.exact"
+cp -p -- "$candidate_drift_path" "$candidate_drift_backup"
+printf '\n# checksum-path regression drift\n' >>"$candidate_drift_path"
+run_target candidate-checksum-failure --target-launch 5
+(( target_status != 0 )) || fail candidate_checksum_failure_accepted
+grep -Fxq 'reason=staged_candidate_checksum_failed' "$last_result" \
+  || fail candidate_checksum_failure_reason_missing
+grep -Fxq 'detail=The staged v1.3 candidate no longer matches the exact Script 01 application. Mismatch paths: config/deployment.yaml.' "$last_result" \
+  || fail candidate_checksum_failure_path_missing
+[[ "$(<"$test_root/state/database")" == none \
+    && "$(<"$test_root/state/unit")" == active \
+    && "$(<"$test_root/state/postgres")" == active \
+    && ! -e "$test_root/home/Documents/Ishikawa-v1.3-attended" ]] \
+  || fail candidate_checksum_failure_mutated_state
+mv -- "$candidate_drift_backup" "$candidate_drift_path"
+
+reset_fresh_state
 run_target web-failure --target-launch 5 0 1
 (( target_status != 0 )) || fail web_failure_accepted
 grep -Fxq 'reason=v1_3_web_start_failed' "$last_result" || fail web_failure_reason_missing
@@ -461,7 +479,7 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
   || fail qualified_candidate_changed
 
 printf '%s\n' \
-  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;partial_state_rejection=pass' \
+  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;candidate_checksum_path_detail=pass;partial_state_rejection=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

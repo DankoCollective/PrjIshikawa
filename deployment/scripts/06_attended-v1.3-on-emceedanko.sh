@@ -144,6 +144,7 @@ target_web_root_cause='unreported_failure'
 target_web_log_sha256='none'
 target_web_log_bytes='0'
 target_v1_2_preflight_started=false
+target_v1_3_preswitch_proven=false
 target_gemma_key=''
 target_nomic_key=''
 target_v1_2_database_password=''
@@ -1705,7 +1706,14 @@ PY
 }
 
 target_prelaunch_readiness() {
-  local readiness
+  local failure_action="${1:-}" readiness
+  if [[ -z "$failure_action" ]]; then
+    if [[ "$target_waive_v1_2_rollback" == true ]]; then
+      failure_action='Keep v1.2 stopped under the explicit waiver; correct only the named v1.3 dependency and retry.'
+    else
+      failure_action='Allow automatic v1.2 restoration and correct the named dependency before retrying.'
+    fi
+  fi
   readiness="$(
     ISHIKAWA_GEMMA_API_KEY="$target_gemma_key" \
     ISHIKAWA_NOMIC_API_KEY="$target_nomic_key" \
@@ -1714,18 +1722,22 @@ target_prelaunch_readiness() {
       "$runtime_root/scripts/ishikawa-retrieval-api" --check-readiness
   )" || target_fail v1_3_readiness_preflight_failed \
     'The real v1.3 readiness path rejected configuration, storage, database, Gemma, or Nomic.' \
-    'Allow automatic v1.2 restoration and correct the named dependency before retrying.'
+    "$failure_action"
   grep -Fxq 'ishikawa_retrieval_api_readiness=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass' \
     <<<"$readiness" \
     || target_fail v1_3_readiness_marker_invalid \
       'The v1.3 readiness command omitted its exact all-pass marker.' \
-      'Allow automatic v1.2 restoration and review the attended runtime.'
+      "$failure_action"
   target_emit READINESS 'state=pass;v1_3_configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass'
 }
 
 target_start_private_postgresql_runtime() {
   local data_root="$runtime_root/state/postgresql/data"
   local socket_root="$runtime_root/state/postgresql/socket"
+  local failure_action='Allow automatic v1.2 restoration and inspect only the protected v1.3 cluster.'
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    failure_action='Keep v1.2 stopped under the explicit waiver and inspect only the protected v1.3 cluster.'
+  fi
   target_stage='v1_3_postgresql_start'
   mkdir -m 0700 -p -- "$socket_root"
   "$target_pg_ctl" -D "$data_root" \
@@ -1735,18 +1747,108 @@ target_start_private_postgresql_runtime() {
     2>"$target_payload_root/pg-runtime-start.stderr" \
     || target_fail v1_3_postgresql_start_failed \
       'The isolated durable v1.3 PostgreSQL cluster did not start on canonical port 5432.' \
-      'Allow automatic v1.2 restoration and inspect only the protected v1.3 cluster log.'
+      "$failure_action"
   target_private_pg_started=true
   "$target_pg_isready" --quiet --host 127.0.0.1 --port 5432 \
     || target_fail v1_3_postgresql_readiness_failed \
       'The isolated durable v1.3 PostgreSQL cluster did not become ready on port 5432.' \
-      'Allow automatic v1.2 restoration and inspect only the v1.3 private cluster.'
+      "$failure_action"
   target_emit DATABASE 'state=pass;cluster=isolated_durable;bind=127.0.0.1:5432;v1_2_cluster=stopped'
 }
 
+target_start_private_postgresql_preswitch() {
+  local data_root="$runtime_root/state/postgresql/data"
+  local socket_root="$runtime_root/state/postgresql/socket"
+  target_stage='v1_3_preswitch_postgresql_start'
+  mkdir -m 0700 -p -- "$socket_root"
+  "$target_pg_ctl" -D "$data_root" \
+    -o "-k $socket_root -h 127.0.0.1 -p $private_postgresql_port" \
+    -l "$runtime_root/state/postgresql/postgresql.log" -w start \
+    >"$target_payload_root/pg-preswitch-start.stdout" \
+    2>"$target_payload_root/pg-preswitch-start.stderr" \
+    || target_fail v1_3_preswitch_postgresql_start_failed \
+      'The isolated durable v1.3 cluster could not start on private port 65438 for the integrated pre-switchover proof.' \
+      'Keep any existing v1.2 runtime untouched and inspect only the protected v1.3 cluster log.'
+  target_private_pg_started=true
+  "$target_pg_isready" --quiet --host 127.0.0.1 --port "$private_postgresql_port" \
+    || target_fail v1_3_preswitch_postgresql_readiness_failed \
+      'The isolated durable v1.3 cluster did not become ready on private port 65438.' \
+      'Keep any existing v1.2 runtime untouched and inspect only the v1.3 private cluster.'
+  target_emit DATABASE \
+    "state=preswitch_pass;cluster=isolated_durable;bind=127.0.0.1:${private_postgresql_port};v1_2_not_stopped_by_script=true"
+}
+
+target_validate_runtime_configuration() {
+  local failure_reason="$1" failure_detail="$2" failure_action="$3" marker=''
+  marker="$(env -u ISHIKAWA_GEMMA_API_KEY -u ISHIKAWA_NOMIC_API_KEY \
+    -u ISHIKAWA_POSTGRESQL_PASSWORD PYTHONDONTWRITEBYTECODE=1 \
+    "$runtime_root/scripts/ishikawa-retrieval-api" --check-config)" \
+    || target_fail "$failure_reason" "$failure_detail" "$failure_action"
+  grep -Eq '^ishikawa_retrieval_api_configuration=pass;policy_digest=[0-9a-f]{64};credential_read=false;dependency_contact=false$' \
+    <<<"$marker" \
+    || target_fail "${failure_reason}_marker_invalid" \
+      'The real v1.3 configuration validator omitted its exact content-free pass marker.' \
+      "$failure_action"
+}
+
+target_prove_v1_3_stack_before_waived_switch() {
+  target_stage='v1_3_integrated_preswitch_proof'
+  target_emit STACK_PREFLIGHT \
+    'state=start;scope=database_api_models_ui;postgresql_port=65438;retrieval_api_port=8384;ui_port=3384;v1_2_not_stopped_by_script=true'
+  target_configure_runtime "$runtime_root" "$private_postgresql_port"
+  target_validate_runtime_configuration \
+    v1_3_preswitch_configuration_invalid \
+    'The private-port v1.3 profile failed its real configuration validator.' \
+    'Keep any existing v1.2 runtime untouched and correct only the v1.3 attended profile.'
+  target_start_private_postgresql_preswitch
+  target_prelaunch_readiness \
+    'Keep any existing v1.2 runtime untouched; correct only the named v1.3 dependency and rerun the integrated proof.'
+  target_launch_v1_3 preswitch
+  target_v1_3_preswitch_proven=true
+  target_emit STACK_PREFLIGHT \
+    'state=pass;durable_database=ready;corpus_v3=ready;gemma=ready;nomic=ready;retrieval_api=http://127.0.0.1:8384/ready;ui=http://127.0.0.1:3384/api/ready;v1_2_not_stopped_by_script=true'
+}
+
+target_transition_proven_v1_3_to_runtime_port() {
+  target_stage='v1_3_postgresql_port_transition'
+  target_emit SWITCH \
+    'state=start;action=transition_proven_v1_3_postgresql;from=65438;to=5432;v1_2_stopped=true'
+  target_stop_v1_3
+  if [[ "$target_cleanup_failed" == true ]] \
+      || target_container_exists "$v1_3_container" \
+      || target_port_listening "$ui_port" \
+      || target_port_listening "$retrieval_port" \
+      || target_port_listening "$private_postgresql_port"; then
+    target_fail v1_3_preswitch_cleanup_failed \
+      'The proven private-port v1.3 stack did not stop cleanly for its required PostgreSQL port transition.' \
+      'Keep v1.2 stopped under the explicit waiver and reconcile only the named v1.3 processes and ports.'
+  fi
+  target_configure_runtime "$runtime_root" 5432
+  target_validate_runtime_configuration \
+    v1_3_runtime_configuration_invalid \
+    'The final port-5432 v1.3 profile failed its real configuration validator after the proven pre-switchover run.' \
+    'Keep v1.2 stopped under the explicit waiver and correct only the v1.3 attended profile.'
+  target_emit SWITCH \
+    'state=pass;proven_v1_3_stopped_cleanly=true;postgresql_runtime_port=5432;ui_port=3384;retrieval_api_port=8384;next=relaunch_proven_v1_3'
+}
+
 target_stop_v1_2_for_switch() {
+  local -a required_free_ports=()
   target_stage='v1_2_attended_stop'
-  target_emit SWITCH 'state=start;action=stop_v1_2;next=start_v1_3'
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    [[ "$target_v1_3_preswitch_proven" == true && -n "$target_api_pid" ]] \
+      && target_pid_is_attended_api "$target_api_pid" \
+      || target_fail v1_3_preswitch_proof_missing \
+        'The rollback-waived path reached switchover without a live, proven v1.3 Retrieval API.' \
+        'Keep any existing v1.2 runtime untouched and rerun the integrated v1.3 proof.'
+    target_container_running "$v1_3_container" \
+      && target_http_ready 'http://127.0.0.1:8384/ready' \
+      && target_http_ready 'http://127.0.0.1:3384/api/ready' \
+      || target_fail v1_3_preswitch_proof_lost \
+        'The proven v1.3 API or UI stopped being ready before v1.2 switchover.' \
+        'Keep any existing v1.2 runtime untouched and correct only the v1.3 attended stack.'
+  fi
+  target_emit SWITCH 'state=start;action=stop_v1_2;next=finalize_v1_3'
   target_v1_2_stopped=true
   target_container_running "$v1_2_container" \
     && "${target_docker[@]}" stop --time 20 "$v1_2_container" >/dev/null \
@@ -1782,9 +1884,10 @@ target_stop_v1_2_for_switch() {
     || target_fail v1_2_postgresql_stop_unconfirmed \
       'The accepted v1.2 PostgreSQL unit remained active at switchover.' \
       'Allow automatic restoration and inspect the host PostgreSQL unit.'
-  local -a required_free_ports=(5432 "$ui_port" "$retrieval_port")
   if [[ "$target_waive_v1_2_rollback" == false ]]; then
-    required_free_ports=(3000 1384 "${required_free_ports[@]}")
+    required_free_ports=(3000 1384 5432 "$ui_port" "$retrieval_port")
+  else
+    required_free_ports=(5432)
   fi
   for port in "${required_free_ports[@]}"; do
     ! target_port_listening "$port" \
@@ -1792,13 +1895,28 @@ target_stop_v1_2_for_switch() {
         "Port ${port} remained occupied at the launch boundary." \
         'Allow automatic v1.2 restoration and identify the exact listener owner.'
   done
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    target_container_running "$v1_3_container" \
+      && target_http_ready 'http://127.0.0.1:8384/ready' \
+      && target_http_ready 'http://127.0.0.1:3384/api/ready' \
+      || target_fail v1_3_preswitch_proof_lost_during_switch \
+        'The proven v1.3 API or UI lost readiness while v1.2 was being stopped.' \
+        'Keep v1.2 stopped under the explicit waiver and reconcile only the v1.3 attended stack.'
+  fi
   target_emit SWITCH "state=pass;v1_2_stopped=true;v1_2_postgresql_stopped=true;accepted_database_files_untouched=true;launch_boundary=immediate;v1_2_rollback_guarantee=$(target_v1_2_rollback_posture)"
 }
 
 target_launch_v1_3() {
   local pid_file="$runtime_root/state/run/attended-v1.3.pid"
+  local launch_phase="${1:-final}" failure_action=''
   local home_status asset_status dependency_status
-  target_stage='v1_3_attended_launch'
+  if [[ "$launch_phase" == preswitch ]]; then
+    target_stage='v1_3_integrated_preswitch_launch'
+    failure_action='Keep any existing v1.2 runtime untouched; inspect only the protected v1.3 evidence and correct the reported v1.3 boundary.'
+  else
+    target_stage='v1_3_attended_launch'
+    failure_action='Keep the session attended; apply the selected rollback posture and inspect only the protected v1.3 evidence.'
+  fi
   rm -f -- "$pid_file"
   export ISHIKAWA_GEMMA_API_KEY="$target_gemma_key"
   export ISHIKAWA_NOMIC_API_KEY="$target_nomic_key"
@@ -1823,26 +1941,26 @@ target_launch_v1_3() {
   [[ -s "$pid_file" ]] \
     || target_fail v1_3_api_pid_missing \
       'The package-local v1.3 Retrieval API did not publish its PID.' \
-      'Allow automatic v1.2 restoration and inspect the protected v1.3 log.'
+      "$failure_action"
   IFS= read -r target_api_pid <"$pid_file"
   [[ "$target_api_pid" =~ ^[0-9]+$ && -d "/proc/$target_api_pid" ]] \
     || target_fail v1_3_api_process_missing \
       'The package-local v1.3 Retrieval API exited during startup.' \
-      'Allow automatic v1.2 restoration and inspect the protected v1.3 log.'
+      "$failure_action"
   target_wait_http 'http://127.0.0.1:8384/ready' 180 API \
     || target_fail v1_3_api_not_ready \
       "The package-local v1.3 Retrieval API did not become ready on port 8384;root_cause=$(target_safe_root_cause "$runtime_root/state/logs/attended-retrieval.stdout" "$runtime_root/state/logs/attended-retrieval.stderr")." \
-      'Allow automatic v1.2 restoration and inspect its content-free readiness marker.'
+      "$failure_action"
   target_emit API 'state=pass;bind=127.0.0.1:8384;execution=package_local;autostart=false'
   target_start_web "$runtime_root" "$v1_3_container" true true \
     || target_fail v1_3_web_start_failed \
       'The distinct attended v1.3 web container failed to start.' \
-      'Allow automatic v1.2 restoration and inspect bounded container state.'
+      "$failure_action"
   if ! target_wait_web 200; then
     target_capture_web_diagnostic "$v1_3_container"
     target_fail v1_3_web_not_ready \
       "The attended v1.3 UI did not become ready on port 3384;root_cause=${target_web_root_cause};container_running=${target_web_container_state};container_exit_code=${target_web_exit_code};container_oom_killed=${target_web_oom_killed};web_live_http=${target_web_live_status};web_ready_http=${target_web_ready_status};api_ready_http=${target_web_api_status};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
-      'Allow automatic v1.2 restoration and inspect the protected attended web log only if the content-safe detail is insufficient.'
+      "$failure_action"
   fi
   home_status="$(target_http_status 'http://127.0.0.1:3384/')"
   asset_status="$(target_http_status 'http://127.0.0.1:3384/theme-init.js')"
@@ -1852,18 +1970,18 @@ target_launch_v1_3() {
     target_capture_web_diagnostic "$v1_3_container"
     target_fail v1_3_web_surface_not_ready \
       "The attended UI readiness route passed but a required UI surface failed;home_http=${home_status};asset_http=${asset_status};dependencies_http=${dependency_status};root_cause=${target_web_root_cause};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
-      'Allow automatic v1.2 restoration and correct the reported UI surface before retrying.'
+      "$failure_action"
   fi
   [[ "$(systemctl --user is-enabled "$v1_2_unit" 2>/dev/null || true)" != enabled \
       && "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled \
       && "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] \
     || target_fail boot_posture_changed \
       'Boot autostart changed during attended launch.' \
-      'Allow automatic v1.2 restoration and restore the boot-disabled posture.'
+      "$failure_action"
   ! systemctl --user cat 'ishikawa-v1.3-retrieval-api.service' >/dev/null 2>&1 \
     || target_fail persistent_v1_3_unit_appeared \
       'A persistent v1.3 user unit appeared during the attended launch.' \
-      'Allow automatic v1.2 restoration and reconcile the unapproved unit.'
+      "$failure_action"
   target_emit WEB 'state=pass;ui=http://127.0.0.1:3384;liveness=pass;home=pass;static_asset=pass;retrieval_proxy=ready;dependency_proxy=ready;container=ishikawa-v1.3-web'
 }
 
@@ -1918,8 +2036,14 @@ target_launch_main() {
     *) target_fail database_state_invalid 'The v1.3 database state classifier returned an invalid value.' \
         'Review Script 06 before target mutation.' ;;
   esac
-  target_preflight_web_runtime
-  target_stop_v1_2_for_switch
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    target_prove_v1_3_stack_before_waived_switch
+    target_stop_v1_2_for_switch
+    target_transition_proven_v1_3_to_runtime_port
+  else
+    target_preflight_web_runtime
+    target_stop_v1_2_for_switch
+  fi
   target_start_private_postgresql_runtime
   target_prelaunch_readiness
   target_launch_v1_3
@@ -2336,7 +2460,7 @@ emit "report_path=$report_path;state=start;action=${mode#--}" READINESS
 emit "application_archive_sha256=$expected_application_sha256;script_05_report_sha256=$expected_script05_report_sha256;payload_sha256=$payload_sha256" READINESS
 if [[ "$mode" == --run ]]; then
   if [[ "$waive_v1_2_rollback" == true ]]; then
-    emit 'authorized_actions=authenticate_transfer_verify_create_or_reuse_isolated_durable_v1_3_postgresql_cluster_schema_and_corpus_build_attended_runtime_stop_any_present_v1_2_application_and_host_postgresql_start_v1_3_postgresql_on_5432_start_v1_3_on_3384_8384' READINESS
+    emit 'authorized_actions=authenticate_transfer_verify_create_or_reuse_isolated_durable_v1_3_postgresql_cluster_schema_and_corpus_build_attended_runtime_prove_integrated_v1_3_on_65438_8384_3384_before_v1_2_stop_stop_any_present_v1_2_application_and_host_postgresql_transition_v1_3_postgresql_to_5432_relaunch_v1_3_on_8384_3384' READINESS
     emit 'recovery_posture=v1_2_rollback_guarantee_waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true' READINESS
     emit 'non_actions=no_v1_2_file_or_database_deletion_no_rollback_tree_change_no_canonical_unit_replacement_no_boot_autostart_no_candidate_mutation_no_org_lab_packaging' READINESS
     emit 'expected_duration=fresh_approximately_15_to_30_minutes_reuse_approximately_5_minutes;prompts=ssh_then_attended_sudo_then_four_hidden_v1_3_runtime_credentials;heartbeat_max_seconds=25' READINESS

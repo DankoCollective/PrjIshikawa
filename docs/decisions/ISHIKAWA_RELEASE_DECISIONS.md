@@ -389,3 +389,37 @@ target lifecycle regressions enforce the v1.3 identity, unchanged v1.2 launch
 arguments, v1.2 recreation success and failure cleanup, waiver non-contact,
 pre-switchover preservation, automatic restoration, acceptance, rollback,
 candidate immutability, and one standalone result contract.
+
+### V13-78 — Integrated v1.3 proof before rollback-waived switchover
+
+Decision: With the explicit V13-76 waiver, do not modify, refresh, requalify,
+or test v1.2. Before Script 06 issues any v1.2 stop command, it must run the
+durable corpus-v3 database on private port `65438`, the package-local v1.3
+Retrieval API on `8384`, and the exact v1.3 UI container on `3384`, and prove
+the integrated database, corpus inventory, Gemma, Nomic, API, proxy, home, and
+static-asset readiness chain. Only after that proof passes may Script 06 stop
+any present v1.2 UI, API, and host PostgreSQL runtime. Because the frozen final
+runtime requires PostgreSQL port `5432`, Script 06 must then stop only the
+proven v1.3 processes, validate the configuration transition from `65438` to
+`5432`, and relaunch the same durable v1.3 runtime on `5432`/`8384`/`3384` for
+human validation. A later v1.3 failure does not require v1.2 restoration.
+
+Status: Frozen by operator direction on 2026-10-25.
+
+Recommendation: Preserve v1.2 files and database temporarily as historical
+recovery material, but do not make them an acceptance dependency and do not
+run the default-path disposable v1.2 recreation proof under the waiver. Keep
+v1.3 autostart disabled, retain the v1.3-only `.next` tmpfs and deployment-user
+identity, and keep org-lab packaging blocked until human UI acceptance.
+
+Reason/Evidence: Component-level database/model checks plus a standalone UI
+proof did not demonstrate the complete v1.3 request path before v1.2 was
+stopped. The revised executable lifecycle starts the complete v1.3 stack while
+leaving v1.2 untouched, verifies API and UI readiness on their final ports,
+checks that readiness again across the v1.2 stop boundary, and makes the
+unavoidable PostgreSQL port transition explicit. A forced pre-switchover API
+failure proves cleanup of v1.3 private state while the active v1.2 UI, API, and
+PostgreSQL runtime remain unchanged. The complete regression matrix also
+proves waived retry, post-switchover failure cleanup without v1.2 restoration,
+final launch, acceptance, explicit conditional rollback, candidate
+immutability, and the standalone result contract.

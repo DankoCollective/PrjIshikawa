@@ -440,6 +440,7 @@ run_target() {
   local web_surface_fail="${16:-0}"
   local acceptance_surface_fail="${17:-0}"
   local v1_2_web_recreate_fail="${18:-0}"
+  local api_fail="${19:-0}"
   local output="$test_root/${name}.stdout" result_path="$test_root/payload/${name}-result.txt"
   local command secrets='' waiver_option=''
   rm -f -- "$result_path"
@@ -472,6 +473,7 @@ run_target() {
     ISHIKAWA_TEST_WEB_SURFACE_FAIL="$web_surface_fail" \
     ISHIKAWA_TEST_ACCEPTANCE_SURFACE_FAIL="$acceptance_surface_fail" \
     ISHIKAWA_TEST_V12_WEB_RECREATE_FAIL="$v1_2_web_recreate_fail" \
+    ISHIKAWA_TEST_API_FAIL="$api_fail" \
     ISHIKAWA_TEST_MODEL_FAIL="$model_fail" \
     ISHIKAWA_TEST_RESTORE_FAIL="$restore_fail" \
     ISHIKAWA_TEST_DB_COUNT_FAIL="$database_count_fail" \
@@ -581,6 +583,22 @@ grep -Fxq '[WEB_PREFLIGHT] state=start;scope=exact_attended_runtime;port=3384;v1
   || fail web_preflight_failure_boundary_invalid
 
 reset_fresh_state
+run_target waived-integrated-api-failure --target-launch 4 0 0 0 0 0 '' none 1 0 0 0 0 0 0 0 1
+(( target_status != 0 )) || fail waived_integrated_api_failure_accepted
+grep -Eq '^reason=v1_3_api_(process_missing|not_ready)$' "$last_result" \
+  || fail waived_integrated_api_failure_reason_missing
+grep -Fxq '[STACK_PREFLIGHT] state=start;scope=database_api_models_ui;postgresql_port=65438;retrieval_api_port=8384;ui_port=3384;v1_2_not_stopped_by_script=true' \
+  "$last_output" || fail waived_integrated_preflight_start_missing
+! grep -Fq '[SWITCH] state=start;action=stop_v1_2' "$last_output" \
+  || fail waived_integrated_failure_stopped_v1_2
+[[ "$(<"$test_root/state/unit")" == active \
+    && "$(<"$test_root/state/postgres")" == active \
+    && "$(grep -Fxc ishikawa-web "$test_root/state/containers")" -eq 1 \
+    && "$(<"$test_root/state/private-pg-port")" == none \
+    && -f "$test_root/home/Documents/Ishikawa-v1.3-attended/state/postgresql/data/PG_VERSION" ]] \
+  || fail waived_integrated_api_failure_changed_v1_2
+
+reset_fresh_state
 printf '%s\n' inactive >"$test_root/state/unit"
 printf '%s\n' inactive >"$test_root/state/postgres"
 : >"$test_root/state/containers"
@@ -656,6 +674,15 @@ grep -Fxq 'ishikawa_v1_3_emceedanko_attended_launch=pass' "$last_result" \
 grep -Fq 'action=reused_exact' "$last_output" || fail waived_reuse_marker_missing
 grep -Fq 'v1_2_rollback_guarantee=waived' "$last_output" \
   || fail waived_launch_posture_missing
+grep -Fxq '[STACK_PREFLIGHT] state=pass;durable_database=ready;corpus_v3=ready;gemma=ready;nomic=ready;retrieval_api=http://127.0.0.1:8384/ready;ui=http://127.0.0.1:3384/api/ready;v1_2_not_stopped_by_script=true' \
+  "$last_output" || fail waived_integrated_preflight_pass_missing
+preswitch_line="$(grep -Fn '[STACK_PREFLIGHT] state=pass;' "$last_output" | cut -d: -f1)"
+switch_line="$(grep -Fn '[SWITCH] state=start;action=stop_v1_2;' "$last_output" | cut -d: -f1)"
+[[ "$preswitch_line" =~ ^[0-9]+$ && "$switch_line" =~ ^[0-9]+$ \
+    && "$preswitch_line" -lt "$switch_line" ]] \
+  || fail waived_integrated_preflight_order_invalid
+grep -Fxq '[SWITCH] state=pass;proven_v1_3_stopped_cleanly=true;postgresql_runtime_port=5432;ui_port=3384;retrieval_api_port=8384;next=relaunch_proven_v1_3' \
+  "$last_output" || fail waived_runtime_port_transition_missing
 grep -Eq 'node-24-slim-nextjs-16-4-1:amd64 next dev --hostname 127\.0\.0\.1 --port 3384$' \
   "$test_root/state/v13-web-run-args" \
   || fail v1_3_direct_next_command_missing
@@ -838,7 +865,7 @@ printf '%s\n' \
   'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;direct_next_preflight_no_mutation=pass;credential_boundary_detail=pass;v1_2_readiness_component_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
   'pre_switchover_web_runtime_proof=pass;pre_switchover_web_failure_preserves_v1_2=pass;generated_state_tmpfs=pass;v1_3_host_identity=pass' \
   'v1_2_disposable_recreation_proof=pass;v1_2_recreation_failure_preserves_runtime=pass;v1_2_launcher_identity_unchanged=pass' \
-  'explicit_v1_2_rollback_waiver=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;web_supervision_diagnostics=pass;web_surface_diagnostics=pass;exited_web_log_retention=pass;protected_web_log_boundary=pass;direct_next_runtime=pass;v1_2_npm_restore_unchanged=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
+  'explicit_v1_2_rollback_waiver=pass;integrated_v1_3_preswitch_proof=pass;preswitch_api_failure_preserves_v1_2=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;web_supervision_diagnostics=pass;web_surface_diagnostics=pass;exited_web_log_retention=pass;protected_web_log_boundary=pass;direct_next_runtime=pass;v1_2_npm_restore_unchanged=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

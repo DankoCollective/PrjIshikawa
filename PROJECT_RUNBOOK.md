@@ -46,15 +46,23 @@
     that proof container before any durable v1.3 database work. The explicit
     V13-76 `--waive-v1-2-rollback` path does not require v1.2 readiness, its
     database password, its separate model forwards, or the disposable v1.2
-    recreation proof; this waiver is valid only with `--run`.
+    recreation proof; this waiver is valid only with `--run`. Instead, the
+    waiver path starts the durable v1.3 database on private port `65438`, the
+    package-local Retrieval API on `8384`, and the exact UI on `3384`, and
+    requires the integrated database, corpus-v3, Gemma, Nomic, API, and UI
+    readiness chain to pass before issuing any v1.2 stop command.
 11. For a fresh run, Script 06 creates the corpus-v3 catalog and manifest,
     builds schema v5 and ingests corpus v3 in a dedicated durable PostgreSQL
     cluster on private validation port `65438`, and revalidates the complete
     corpus inventory. It never opens or modifies the accepted v1.2 database.
-12. Only at the immediate attended launch boundary, Script 06 stops any
-    present v1.2 UI, Retrieval API, and host PostgreSQL cluster. It then starts
-    the isolated v1.3 cluster on `5432`, the package-local Retrieval API on
-    `8384`, and the distinct UI container on `3384`. No v1.3 systemd unit is
+12. Only after the applicable pre-switchover proof, Script 06 stops any
+    present v1.2 UI, Retrieval API, and host PostgreSQL cluster. On the waiver
+    path, the already-proven v1.3 API and UI must remain ready throughout that
+    stop; Script 06 then cleanly stops only the proven v1.3 stack, changes its
+    PostgreSQL profile from private validation port `65438` to required runtime
+    port `5432`, and relaunches v1.3 on `5432`/`8384`/`3384` for human
+    validation. On the default path it starts that final v1.3 arrangement
+    directly after the reversible switchover. No v1.3 systemd unit is
     installed or enabled, and all boot autostart remains disabled. The v1.3 UI
     runs as the numeric deployment-account UID/GID with `HOME=/tmp`, exact
     source mounted read-only, and generated `.next` state isolated in a

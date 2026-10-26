@@ -34,9 +34,10 @@ The v1.3.1 source manifest contains 211 files and has SHA-256:
 - Script 08 wrapper harness: validation-only, exact runtime-image binding,
   checksum-bound application-source transfer, native application build,
   verified return, atomic publication, repeat supersession, nested build
-  failure, runtime-image mismatch, returned checksum/receipt refusal,
-  host-identity refusal, signal propagation, current-handoff preservation, and
-  remote cleanup passed.
+  failure, nested source-validation failure with precise reason/detail
+  propagation, local helper-validation failure propagation, runtime-image
+  mismatch, returned checksum/receipt refusal, host-identity refusal, signal
+  propagation, current-handoff preservation, and remote cleanup passed.
 - Permanent stack lifecycle harness: clean start/status/stop, restart with a
   fresh build, production-build failure cleanup, build timeout cleanup,
   liveness failure cleanup, stale-container preflight, PostgreSQL failure
@@ -81,7 +82,16 @@ This record does not claim that the corrected generic AMD64 image or v1.3.1
 application candidate has been scanned, requalified, accepted, or promoted.
 
 Corrected Script 07 subsequently passed and is recorded in
-`ISHIKAWA_V1_3_1_RUNTIME_IMAGE_BUILD.md`. The remaining ordered gates are:
+`ISHIKAWA_V1_3_1_RUNTIME_IMAGE_BUILD.md`. The first attended Script 08
+execution stopped before building because Script 01's target-side validation
+failed. That attempt published no application
+handoff and removed its private transfer. Its wrapper had suppressed the
+nested reason; the bounded correction now aligns the target prerequisite
+inventory with Script 01 and preserves the complete inner failure detail.
+The full regression set passed after that correction. Script 08 must be rerun
+to resolve or identify the exact target-side prerequisite.
+
+The remaining ordered gates are:
 
 1. run Script 08 to build the exact v1.3.1 application candidate natively on
    EmceeDanko and verify its application

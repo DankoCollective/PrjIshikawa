@@ -207,17 +207,37 @@ find "$product_root" -type l -print -quit | grep -q . \
   && block product_source_symlink_found 'The product source contains a symbolic link.' 'Replace it with a reviewed regular file.'
 bash -n "${BASH_SOURCE[0]}" "$target_helper" "$application_builder" \
   || block shell_syntax_invalid 'Script 08 or a transferred build command failed shell parsing.' 'Correct every parse error.'
-builder_validation="$(bash "$application_builder" --validate-only 2>&1)" \
-  || block application_builder_validation_failed \
-    'The application builder failed its local noncontact validation.' \
-    'Correct the complete source validation before target contact.'
+trap - ERR
+set +e
+builder_validation="$(bash "$application_builder" --validate-only 2>&1)"
+builder_validation_status="$?"
+set -e
+trap 'unexpected_error "$?" "$LINENO"' ERR
+if (( builder_validation_status != 0 )); then
+  printf '%s\n' "$builder_validation" >&2
+  nested_reason="$(sed -n 's/^reason=\([a-z0-9_]*\)$/\1/p' \
+    <<<"$builder_validation" | tail -n 1)"
+  block "${nested_reason:-application_builder_validation_failed}" \
+    "The application builder validation exited with status ${builder_validation_status}." \
+    'Correct the complete nested validation detail before target contact.'
+fi
 grep -Fxq 'script_01_build_ishikawa_release=ready' <<<"$builder_validation" \
   || block application_builder_ready_marker_missing 'The application builder omitted its ready result.' 'Treat it as unvalidated.'
+trap - ERR
+set +e
 helper_validation="$(ISHIKAWA_RUNTIME_HANDOFF_ROOT="$runtime_root" \
-  bash "$target_helper" --validate-only 2>&1)" \
-  || block target_helper_validation_failed \
-    'The native application helper failed its noncontact validation.' \
-    'Correct the complete helper validation before target contact.'
+  bash "$target_helper" --validate-only 2>&1)"
+helper_validation_status="$?"
+set -e
+trap 'unexpected_error "$?" "$LINENO"' ERR
+if (( helper_validation_status != 0 )); then
+  printf '%s\n' "$helper_validation" >&2
+  nested_reason="$(sed -n 's/^reason=\([a-z0-9_]*\)$/\1/p' \
+    <<<"$helper_validation" | tail -n 1)"
+  block "${nested_reason:-target_helper_validation_failed}" \
+    "The native application helper validation exited with status ${helper_validation_status}." \
+    'Correct the complete nested helper detail before target contact.'
+fi
 grep -Fxq 'v1_3_1_application_build=ready' <<<"$helper_validation" \
   || block target_helper_ready_marker_missing 'The native helper omitted its ready result.' 'Treat it as unvalidated.'
 (

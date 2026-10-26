@@ -50,6 +50,11 @@ cat >"$fixture/deployment/scripts/01_build-ishikawa-release.sh" <<'MOCK'
 set -Eeuo pipefail
 mode="${1:-}"
 if [[ "$mode" == --validate-only ]]; then
+  if [[ "${MOCK_APPLICATION_VALIDATE_FAIL:-false}" == true ]]; then
+    printf 'FAILURE DETAIL\nstage=preflight\nreason=source_manifest_mismatch\ndetail=fixture\noperator_action=fixture\n' >&2
+    printf '\nSCRIPT RESULT\nscript_01_build_ishikawa_release=blocked\n' >&2
+    exit 40
+  fi
   printf '\nSCRIPT RESULT\nscript_01_build_ishikawa_release=ready\n'
   exit 0
 fi
@@ -199,6 +204,7 @@ HOME="$ISHIKAWA_FAKE_REMOTE_HOME" \
 PATH="$ISHIKAWA_FAKE_REMOTE_BIN:/usr/bin:/bin" \
 MOCK_APPLICATION_BUILD_FAIL="${MOCK_APPLICATION_BUILD_FAIL:-false}" \
 MOCK_APPLICATION_BUILD_DELAY="${MOCK_APPLICATION_BUILD_DELAY:-0}" \
+MOCK_APPLICATION_VALIDATE_FAIL="${MOCK_REMOTE_APPLICATION_VALIDATE_FAIL:-false}" \
 MOCK_REMOTE_HOST_FAIL="${MOCK_REMOTE_HOST_FAIL:-false}" \
 MOCK_REMOTE_IMAGE_FAIL="${MOCK_REMOTE_IMAGE_FAIL:-false}" \
   bash -c "$remote_command"
@@ -259,6 +265,7 @@ run_wrapper() {
   ISHIKAWA_FAKE_REMOTE_HOME="$test_root/remote-home" \
   ISHIKAWA_FAKE_REMOTE_BIN="$test_root/remote-bin" \
   ISHIKAWA_SCRIPT08_REPORT_ROOT="$test_root/reports" \
+  MOCK_REMOTE_APPLICATION_VALIDATE_FAIL="${MOCK_REMOTE_APPLICATION_VALIDATE_FAIL:-false}" \
     bash "$wrapper" --run --target FakeEmcee "$@" >"$output" 2>&1
 }
 
@@ -268,6 +275,38 @@ grep -Fxq 'script_08_v1_3_1_application_build=ready' <<<"$validation_output" \
   || fail validate_only_marker_missing
 grep -Fq 'target_contact=false;target_mutation=false' <<<"$validation_output" \
   || fail validate_only_contact_contract_missing
+
+cp -- "$runtime/build-receipt.json" "$test_root/runtime-receipt.backup"
+python3 -B - "$runtime/build-receipt.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+record = json.loads(path.read_text(encoding="utf-8"))
+record["image_reference"] = "node-next-runtime:wrong"
+path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+(
+  cd -- "$runtime"
+  while IFS= read -r name; do sha256sum -- "$name"; done < <(
+    find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+  ) >SHA256SUMS
+)
+set +e
+helper_failure_output="$(PATH="$test_root/bin:$PATH" \
+  bash "$wrapper" --validate-only --target FakeEmcee 2>&1)"
+helper_failure_status="$?"
+set -e
+(( helper_failure_status != 0 )) || fail helper_validation_failure_reported_success
+grep -Fq 'reason=runtime_receipt_mismatch' <<<"$helper_failure_output" \
+  || fail helper_validation_failure_reason_missing
+mv -- "$test_root/runtime-receipt.backup" "$runtime/build-receipt.json"
+(
+  cd -- "$runtime"
+  while IFS= read -r name; do sha256sum -- "$name"; done < <(
+    find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+  ) >SHA256SUMS
+)
 
 run_wrapper "$test_root/first.txt" \
   || { sed -n '1,260p' "$test_root/first.txt" >&2; fail first_native_build_failed; }
@@ -296,6 +335,18 @@ grep -Fq 'reason=next_build_failed' "$test_root/build-failure.txt" \
   || fail build_failure_reason_missing
 [[ "$(sha256sum "$handoff/SHA256SUMS" | awk '{print $1}')" == "$current_manifest_sha" ]] \
   || fail build_failure_changed_current
+
+set +e
+MOCK_REMOTE_APPLICATION_VALIDATE_FAIL=true run_wrapper "$test_root/validation-failure.txt"
+validation_failure_status="$?"
+set -e
+(( validation_failure_status != 0 )) || fail validation_failure_reported_success
+grep -Fq 'reason=source_manifest_mismatch' "$test_root/validation-failure.txt" \
+  || { sed -n '1,260p' "$test_root/validation-failure.txt" >&2; fail validation_failure_reason_missing; }
+grep -Fq 'detail=fixture' "$test_root/validation-failure.txt" \
+  || fail validation_failure_detail_missing
+[[ "$(sha256sum "$handoff/SHA256SUMS" | awk '{print $1}')" == "$current_manifest_sha" ]] \
+  || fail validation_failure_changed_current
 
 set +e
 MOCK_REMOTE_IMAGE_FAIL=true run_wrapper "$test_root/image-failure.txt"
@@ -360,6 +411,6 @@ find /tmp -maxdepth 1 -type d -name 'ishikawa-application-build-20*' -print -qui
 
 printf '%s\n' \
   'validate_only=pass;native_build=pass;artifact_return=pass;publication=pass;rerun=pass;supersession=pass' \
-  'nested_build_failure=pass;runtime_image_mismatch=pass;return_checksum_refusal=pass;return_receipt_refusal=pass' \
+  'helper_validation_failure=pass;nested_validation_failure=pass;nested_build_failure=pass;runtime_image_mismatch=pass;return_checksum_refusal=pass;return_receipt_refusal=pass' \
   'host_identity_refusal=pass;current_preservation=pass;signal_propagation=pass;remote_cleanup=pass'
 printf '\nSCRIPT RESULT\nnative_application_build_wrapper_test=pass\n'

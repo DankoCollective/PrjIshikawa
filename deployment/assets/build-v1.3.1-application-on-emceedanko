@@ -108,8 +108,12 @@ fi
     'Restore the frozen native build host or stop for an operator decision.'
 
 current_stage='source_preflight'
-for command_name in awk bash date df docker dpkg find grep hostname jq mkdir mktemp \
-  nproc python3 readlink rm sha256sum sudo tail tee uname; do
+# Keep this union aligned with every command required by Script 01 so the
+# native helper reports a missing host prerequisite directly instead of
+# collapsing it into a nested validation failure.
+for command_name in awk bash cmp cp date df diff docker dpkg find grep gzip \
+  hostname id install jq kill mkdir mktemp mv nproc python3 readlink rm sed \
+  sha256sum sort stat sudo tail tar tee uname; do
   command -v "$command_name" >/dev/null 2>&1 \
     || block "command_missing_${command_name}" \
       "Required command unavailable: ${command_name}." \
@@ -125,10 +129,20 @@ bash -n "${BASH_SOURCE[0]}" "$application_builder" \
   || block shell_syntax_invalid \
     'The native helper or application builder failed shell parsing.' \
     'Correct every parse error before execution.'
-builder_validation="$(bash "$application_builder" --validate-only 2>&1)" \
-  || block application_builder_validation_failed \
-    'The application builder failed nonmutating source validation.' \
-    'Correct the complete validation result before execution.'
+trap - ERR
+set +e
+builder_validation="$(bash "$application_builder" --validate-only 2>&1)"
+builder_validation_status="$?"
+set -e
+trap 'unexpected_error "$?" "$LINENO"' ERR
+if (( builder_validation_status != 0 )); then
+  printf '%s\n' "$builder_validation" >&2
+  nested_reason="$(sed -n 's/^reason=\([a-z0-9_]*\)$/\1/p' \
+    <<<"$builder_validation" | tail -n 1)"
+  block "${nested_reason:-application_builder_validation_failed}" \
+    "The application builder validation exited with status ${builder_validation_status}." \
+    'Correct the complete nested validation detail before execution.'
+fi
 grep -Fxq 'script_01_build_ishikawa_release=ready' <<<"$builder_validation" \
   || block application_builder_ready_marker_missing \
     'The application builder omitted its exact ready marker.' \

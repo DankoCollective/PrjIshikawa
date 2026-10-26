@@ -464,10 +464,10 @@ assemblies, fresh installation, application SBOM/license, verified return,
 atomic candidate publication, and cleanup. Evidence:
 `deployment/evidence/ISHIKAWA_V1_3_1_APPLICATION_BUILD.md`. Script 09 then
 passed exact-byte side-by-side production requalification and the operator
-accepted the v1.3.1 UI; candidate cleanup remains the immediate gate. Frozen
-V13-91 and numbered Script 10 define the subsequent attended promotion on
-EmceeDanko without changing the org-lab carry design. The package remains
-**NOT CARRY-READY** until cleanup, promotion acceptance, and every remaining
+accepted the v1.3.1 UI. Candidate cleanup and its checksum-bound evidence are
+complete. Frozen V13-91 and numbered Script 10 define the immediate attended
+promotion on EmceeDanko without changing the org-lab carry design. The package
+remains **NOT CARRY-READY** until promotion acceptance and every remaining
 mandatory package gate pass.
 
 ## Mandatory package checklist

@@ -182,14 +182,23 @@ the isolated qualification root and container, freed ports `3385`/`8385`, and
 revalidated accepted v1.3. Local evidence publication subsequently blocked
 because GNU `cp --no-preserve=mode,ownership` still attempted `chmod` on the
 Windows-backed WSL repository mount. The target cleanup result was not
-published, so the current checksum-bound evidence set correctly remains at
-qualification plus acceptance until cleanup is rerun. The bounded correction
-copies only the flat content-free evidence files, compares every destination
-byte-for-byte, and then regenerates and verifies `SHA256SUMS`; it never copies
-POSIX metadata. The same latent later-lifecycle publication path was corrected
-in Script 10 before promotion. Both wrapper lifecycle suites and an
-end-to-end publication exercise on the actual Windows-backed artifact lane
-pass after the correction.
+published by that invocation. The bounded correction copies only the flat
+content-free evidence files, compares every destination byte-for-byte, and
+then regenerates and verifies `SHA256SUMS`; it never copies POSIX metadata.
+The same latent later-lifecycle publication path was corrected in Script 10
+before promotion. Both wrapper lifecycle suites and an end-to-end publication
+exercise on the actual Windows-backed artifact lane pass after the correction.
+
+The idempotent Script 09 cleanup rerun then passed and atomically published all
+three lifecycle receipts. The cleanup report SHA-256 is
+`145b28e6a9107b364b85b157db9d0d19e44cf54cfd84b226899094410ba4b40e`;
+the cleanup receipt SHA-256 is
+`4f902861ea4b8c65976f8ca32cf8e1cb06245140454068159bccc84762cf7b8d`;
+and the final evidence-manifest SHA-256 is
+`538b7af657941916189ff420214b8d5adacb4f1cb620ee4ae6b5e0693f6e2263`.
+The verified result records candidate removal, free qualification ports,
+accepted v1.3 readiness, disabled boot autostart, and no accepted-database or
+accepted-application mutation.
 
 Frozen V13-91 authorizes one attended EmceeDanko promotion lifecycle after
 Script 09 cleanup. Numbered Script 10 now binds the exact Script 07 image,
@@ -209,21 +218,18 @@ acceptance, explicit rollback, failed-launch automatic restoration, database
 inventory refusal, old-image consumer refusal, exact-evidence validation,
 WSL-safe publication, returned-receipt refusal, nested target failure, signal
 propagation, and remote cleanup. Together with the pre-existing suite, all 18
-deployment harnesses pass. This is implementation evidence only: Script 09
-cleanup and the attended Script 10 target lifecycle have not yet run.
+deployment harnesses pass. Script 09 cleanup is complete; the attended Script
+10 target lifecycle has not yet run.
 
 The remaining ordered gates are:
 
-1. remove only the accepted isolated v1.3.1 qualification candidate with
-   Script 09 `--cleanup` and preserve the verified qualification and
-   acceptance receipts;
-2. promote the exact v1.3.1 bytes with Script 10, review the production-port
+1. promote the exact v1.3.1 bytes with Script 10, review the production-port
    UI, and record acceptance or explicitly roll back before acceptance;
-3. complete the exact-image and exact-application advisory disposition from
+2. complete the exact-image and exact-application advisory disposition from
    their recorded SBOMs;
-4. accept the read-only Tech inventory and resolve any required offline native
+3. accept the read-only Tech inventory and resolve any required offline native
    prerequisite payload;
-5. complete independent review and atomically promote the exact carry bytes to
+4. complete independent review and atomically promote the exact carry bytes to
    the stable handoff.
 
 Current disposition:

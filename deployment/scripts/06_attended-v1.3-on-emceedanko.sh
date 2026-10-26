@@ -9,12 +9,14 @@ umask 077
 # Mental model:
 #   Revalidate the frozen release and Script 05 evidence locally, transfer one
 #   checksum-bound copy of this script plus final-schema inputs, and perform all
-#   target preflights while v1.2 is still ready. Build or revalidate an isolated
-#   durable v1.3 database and attended runtime copy, then stop v1.2 immediately
-#   before starting a package-local v1.3 API process and distinct web container.
-#   A failed launch automatically stops v1.3 and restores the verified v1.2
-#   service and web container. Separate accept and rollback modes close the
-#   attended gate without installing or enabling a new user unit.
+#   target preflights while v1.2 is still ready by default. Build or revalidate
+#   an isolated durable v1.3 database and attended runtime copy, then stop v1.2
+#   immediately before starting a package-local v1.3 API process and distinct
+#   web container. The default failed-launch path restores verified v1.2. The
+#   explicit V13-76 waiver skips that readiness and restoration guarantee while
+#   preserving both installations and database trees on disk. Separate accept
+#   and rollback modes close the attended gate without installing or enabling a
+#   new user unit.
 #
 # Inputs or prerequisites:
 #   The exact Script 01 archive, exact Script 05 report/current artifact, staged
@@ -31,6 +33,7 @@ umask 077
 # Usage:
 #   bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --validate-only
 #   bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --run
+#   bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --run --waive-v1-2-rollback
 #   bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --accept
 #   bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --rollback
 
@@ -134,6 +137,7 @@ target_nomic_key=''
 target_v1_2_database_password=''
 target_v1_3_ingest_password=''
 target_v1_3_retrieval_password=''
+target_waive_v1_2_rollback=false
 target_payload_root=''
 target_expected_hostname='EmceeDanko'
 target_expected_os_version='24.04'
@@ -145,6 +149,14 @@ target_docker=()
 target_emit() {
   local tag="$1" message="$2"
   printf '[%s] %s\n' "$tag" "$message"
+}
+
+target_v1_2_rollback_posture() {
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    printf waived
+  else
+    printf verified
+  fi
 }
 
 target_fail() {
@@ -448,6 +460,13 @@ target_write_result() {
     printf 'database=%s;postgresql_port=5432;postgresql_cluster=isolated_durable;schema_version=5;ui_port=%s;retrieval_api_port=%s;port_1384_purpose=v1_2_runtime_and_rollback\n' \
       "$database_name" "$ui_port" "$retrieval_port"
     printf 'candidate_mutated=false;v1_2_database_mutated=false;rollback_tree_mutated=false;boot_autostart_changed=false\n'
+    if [[ "$mode" == --target-launch ]]; then
+      if [[ "$target_waive_v1_2_rollback" == true ]]; then
+        printf 'v1_2_rollback_guarantee=waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true\n'
+      else
+        printf 'v1_2_rollback_guarantee=verified;automatic_v1_2_restoration=true;v1_2_files_and_database_preserved=true\n'
+      fi
+    fi
     printf 'v1_2_restored=%s;cleanup=%s\n' \
       "$target_v1_2_restored" \
       "$([[ "$target_cleanup_failed" == false ]] && printf pass || printf blocked)"
@@ -488,7 +507,10 @@ target_exit() {
   if [[ "$target_complete" != true ]]; then
     if [[ "$mode" == --target-launch && "$target_v1_2_stopped" == true ]]; then
       target_stop_v1_3
-      if ! target_restore_v1_2; then
+      if [[ "$target_waive_v1_2_rollback" == true ]]; then
+        target_detail="${target_detail:-The v1.3 launch failed.} Automatic v1.2 restoration was deliberately waived; v1.2 remains stopped and both database trees are preserved."
+        target_action='Correct the reported v1.3 dependency and rerun Script 06 with the same waiver. Restore v1.2 only after its password and model routes are available.'
+      elif ! target_restore_v1_2; then
         target_cleanup_failed=true
         target_detail="${target_detail:-The v1.3 launch failed.} Automatic v1.2 restoration also failed."
         target_action='Keep the session attended; inspect ports 3000, 1384, 3384, and 8384, then run Script 06 --rollback after correcting the reported dependency.'
@@ -573,6 +595,7 @@ target_parse_arguments() {
       --result-path) target_result_path="${2:-}"; shift 2 ;;
       --gemma-base-url) target_gemma_base_url="${2:-}"; shift 2 ;;
       --nomic-base-url) target_nomic_base_url="${2:-}"; shift 2 ;;
+      --waive-v1-2-rollback) target_waive_v1_2_rollback=true; shift ;;
       *) target_fail argument_invalid "Unsupported internal target argument: $1." \
           'Invoke target actions only through the Script 06 wrapper.' 2 ;;
     esac
@@ -594,6 +617,10 @@ target_parse_arguments() {
   validate_loopback_url "$target_nomic_base_url" \
     || target_fail nomic_url_invalid 'Nomic must use a bounded loopback HTTP base URL.' \
       'Correct --nomic-base-url.' 2
+  [[ "$target_waive_v1_2_rollback" == false || "$mode" == --target-launch ]] \
+    || target_fail rollback_waiver_mode_invalid \
+      'The v1.2 rollback waiver is valid only for the attended launch action.' \
+      'Use the waiver only with Script 06 --run.' 2
 }
 
 target_prepare_docker() {
@@ -780,24 +807,31 @@ target_check_boot_and_ports() {
       && "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] \
     || target_fail postgresql_boot_enabled 'PostgreSQL is unexpectedly enabled at boot.' \
       'Restore the accepted boot-disabled posture before Script 06.'
-  [[ "$(systemctl --user is-active "$v1_2_unit" 2>/dev/null || true)" == active ]] \
-    || target_fail v1_2_retrieval_not_active 'The accepted v1.2 Retrieval API is not active.' \
-      'Restore accepted v1.2 before launching the attended candidate.'
-  [[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" == active ]] \
-    || target_fail postgresql_not_active 'The accepted PostgreSQL 16 cluster is not active.' \
-      'Restore accepted v1.2 before launching the attended candidate.'
-  target_container_running "$v1_2_container" \
-    || target_fail v1_2_web_not_active 'The accepted v1.2 web container is not active.' \
-      'Restore accepted v1.2 before launching the attended candidate.'
   ! target_container_exists "$v1_3_container" \
     || target_fail stale_v1_3_container_found \
       'A container already owns the reserved attended v1.3 container name.' \
       'Inspect and explicitly reconcile the stale attended container before Script 06.'
-  for port in 3000 1384 5432; do
-    target_port_listening "$port" \
-      || target_fail "v1_2_port_${port}_missing" "Required accepted listener ${port} is absent." \
+  if [[ "$target_waive_v1_2_rollback" == false ]]; then
+    [[ "$(systemctl --user is-active "$v1_2_unit" 2>/dev/null || true)" == active ]] \
+      || target_fail v1_2_retrieval_not_active 'The accepted v1.2 Retrieval API is not active.' \
         'Restore accepted v1.2 before launching the attended candidate.'
-  done
+    [[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" == active ]] \
+      || target_fail postgresql_not_active 'The accepted PostgreSQL 16 cluster is not active.' \
+        'Restore accepted v1.2 before launching the attended candidate.'
+    target_container_running "$v1_2_container" \
+      || target_fail v1_2_web_not_active 'The accepted v1.2 web container is not active.' \
+        'Restore accepted v1.2 before launching the attended candidate.'
+    for port in 3000 1384 5432; do
+      target_port_listening "$port" \
+        || target_fail "v1_2_port_${port}_missing" "Required accepted listener ${port} is absent." \
+          'Restore accepted v1.2 before launching the attended candidate.'
+    done
+  elif [[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]]; then
+    ! target_port_listening 5432 \
+      || target_fail canonical_postgresql_port_in_use \
+        'Port 5432 is occupied by a process outside the stopped host PostgreSQL unit.' \
+        'Identify the unexpected listener before running the rollback-waived launch.'
+  fi
   for port in "$ui_port" "$retrieval_port" "$private_postgresql_port"; do
     ! target_port_listening "$port" \
       || target_fail attended_port_in_use \
@@ -808,7 +842,11 @@ target_check_boot_and_ports() {
     && target_fail persistent_v1_3_unit_found \
       'A persistent v1.3 user unit already exists; Script 06 uses package-local execution only.' \
       'Review and remove or explicitly reconcile the unapproved unit before rerunning.'
-  target_emit READINESS 'state=pass;v1_2=ready;ports_3000_1384_5432=present;ports_3384_8384_65438=free;boot_autostart=false'
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    target_emit READINESS 'state=pass;v1_2_rollback=waived;v1_2_runtime=not_required;ports_3384_8384_65438=free;port_5432=host_postgresql_or_free;boot_autostart=false'
+  else
+    target_emit READINESS 'state=pass;v1_2=ready;ports_3000_1384_5432=present;ports_3384_8384_65438=free;boot_autostart=false'
+  fi
 }
 
 target_probe_models() {
@@ -1415,14 +1453,27 @@ target_stop_v1_2_for_switch() {
   target_container_running "$v1_2_container" \
     && "${target_docker[@]}" stop --time 20 "$v1_2_container" >/dev/null \
     || true
-  systemctl --user stop "$v1_2_unit" >/dev/null \
-    || target_fail v1_2_retrieval_stop_failed \
-      'The accepted v1.2 Retrieval API did not stop for attended switchover.' \
-      'Keep v1.2 in service and inspect the user unit before retrying.'
-  sudo systemctl stop postgresql@16-main.service >/dev/null \
-    || target_fail v1_2_postgresql_stop_failed \
-      'The accepted v1.2 PostgreSQL cluster did not stop for the isolated-cluster switchover.' \
-      'Allow automatic restoration and inspect the host PostgreSQL unit.'
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    systemctl --user stop "$v1_2_unit" >/dev/null 2>&1 \
+      || [[ "$(systemctl --user is-active "$v1_2_unit" 2>/dev/null || true)" != active ]] \
+      || target_fail v1_2_retrieval_stop_failed \
+        'An active v1.2 Retrieval API could not be stopped for attended switchover.' \
+        'Inspect the active user unit before retrying the rollback-waived launch.'
+    sudo systemctl stop postgresql@16-main.service >/dev/null 2>&1 \
+      || [[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] \
+      || target_fail v1_2_postgresql_stop_failed \
+        'An active host PostgreSQL cluster could not be stopped for the isolated-cluster switchover.' \
+        'Inspect the active PostgreSQL unit before retrying the rollback-waived launch.'
+  else
+    systemctl --user stop "$v1_2_unit" >/dev/null \
+      || target_fail v1_2_retrieval_stop_failed \
+        'The accepted v1.2 Retrieval API did not stop for attended switchover.' \
+        'Keep v1.2 in service and inspect the user unit before retrying.'
+    sudo systemctl stop postgresql@16-main.service >/dev/null \
+      || target_fail v1_2_postgresql_stop_failed \
+        'The accepted v1.2 PostgreSQL cluster did not stop for the isolated-cluster switchover.' \
+        'Allow automatic restoration and inspect the host PostgreSQL unit.'
+  fi
   if [[ "$(systemctl --user is-active "$v1_2_unit" 2>/dev/null || true)" == active ]] \
       || target_container_running "$v1_2_container"; then
     target_fail v1_2_stop_unconfirmed \
@@ -1433,13 +1484,17 @@ target_stop_v1_2_for_switch() {
     || target_fail v1_2_postgresql_stop_unconfirmed \
       'The accepted v1.2 PostgreSQL unit remained active at switchover.' \
       'Allow automatic restoration and inspect the host PostgreSQL unit.'
-  for port in 3000 1384 5432 "$ui_port" "$retrieval_port"; do
+  local -a required_free_ports=(5432 "$ui_port" "$retrieval_port")
+  if [[ "$target_waive_v1_2_rollback" == false ]]; then
+    required_free_ports=(3000 1384 "${required_free_ports[@]}")
+  fi
+  for port in "${required_free_ports[@]}"; do
     ! target_port_listening "$port" \
       || target_fail switchover_port_not_free \
         "Port ${port} remained occupied at the launch boundary." \
         'Allow automatic v1.2 restoration and identify the exact listener owner.'
   done
-  target_emit SWITCH 'state=pass;v1_2_stopped=true;v1_2_postgresql_stopped=true;accepted_database_files_untouched=true;launch_boundary=immediate'
+  target_emit SWITCH "state=pass;v1_2_stopped=true;v1_2_postgresql_stopped=true;accepted_database_files_untouched=true;launch_boundary=immediate;v1_2_rollback_guarantee=$(target_v1_2_rollback_posture)"
 }
 
 target_launch_v1_3() {
@@ -1527,11 +1582,17 @@ target_launch_main() {
   target_emit IMAGE 'state=pass;image=node-24-slim-nextjs-16-4-1:amd64;identity=exact'
   target_read_secret 'Gemma API key' target_gemma_key 1 4096
   target_read_secret 'Nomic API key' target_nomic_key 32 1024
-  target_read_secret 'v1.2 PostgreSQL retrieval password (rollback only)' target_v1_2_database_password 1 4096
+  if [[ "$target_waive_v1_2_rollback" == false ]]; then
+    target_read_secret 'v1.2 PostgreSQL retrieval password (rollback only)' target_v1_2_database_password 1 4096
+  fi
   target_read_secret 'v1.3 PostgreSQL ingestion password' target_v1_3_ingest_password 16 4096
   target_read_secret 'v1.3 PostgreSQL retrieval password' target_v1_3_retrieval_password 16 4096
   target_probe_models
-  target_validate_v1_2_restore_credentials
+  if [[ "$target_waive_v1_2_rollback" == true ]]; then
+    target_emit READINESS 'state=pass;v1_2_rollback=waived;v1_2_password_read=false;v1_2_readiness_contact=false'
+  else
+    target_validate_v1_2_restore_credentials
+  fi
   target_database_state
   case "$target_database_action" in
     fresh) target_create_database_and_runtime ;;
@@ -1545,7 +1606,7 @@ target_launch_main() {
   target_launch_v1_3
   target_stage='complete'
   target_complete=true
-  target_emit SUMMARY 'state=pass;v1_3=ready;v1_2=stopped;database=isolated_durable;boot_autostart=false;next_gate=human_ui_accept_or_rollback'
+  target_emit SUMMARY "state=pass;v1_3=ready;v1_2=stopped;database=isolated_durable;boot_autostart=false;v1_2_rollback_guarantee=$(target_v1_2_rollback_posture);next_gate=human_ui_accept_or_rollback"
 }
 
 target_accept_main() {
@@ -1679,6 +1740,7 @@ expected_os_version="${APPLICATION_HOST_EXPECTED_OS_VERSION:-24.04}"
 identity_file="${APPLICATION_HOST_IDENTITY_FILE:-}"
 gemma_base_url="${ISHIKAWA_GEMMA_BASE_URL:-http://127.0.0.1:8000}"
 nomic_base_url="${ISHIKAWA_NOMIC_BASE_URL:-http://127.0.0.1:8001}"
+waive_v1_2_rollback=false
 report_root="${ISHIKAWA_SCRIPT06_REPORT_ROOT:-$default_report_root}"
 script05_report_override="${ISHIKAWA_SCRIPT06_SCRIPT05_REPORT:-}"
 stage='argument_validation'
@@ -1700,7 +1762,8 @@ usage() {
     '  --report-root ABSOLUTE_PATH     Override the ignored local report lane.' \
     '  --script-05-report ABSOLUTE_PATH Bind one exact retained Script 05 report.' \
     '  --gemma-base-url LOOPBACK_URL   Override the target Gemma forward.' \
-    '  --nomic-base-url LOOPBACK_URL   Override the target Nomic forward.'
+    '  --nomic-base-url LOOPBACK_URL   Override the target Nomic forward.' \
+    '  --waive-v1-2-rollback           With --run only, skip the v1.2 readiness and automatic-restoration guarantee.'
 }
 
 result() {
@@ -1771,6 +1834,7 @@ while (( $# > 0 )); do
     --script-05-report) [[ $# -ge 2 ]] || block script05_report_missing 'The Script 05 report path is missing.' 'Supply the exact retained report.' 2; script05_report_override="$2"; shift 2 ;;
     --gemma-base-url) [[ $# -ge 2 ]] || block gemma_url_missing 'The Gemma URL is missing.' 'Supply a bounded loopback URL.' 2; gemma_base_url="$2"; shift 2 ;;
     --nomic-base-url) [[ $# -ge 2 ]] || block nomic_url_missing 'The Nomic URL is missing.' 'Supply a bounded loopback URL.' 2; nomic_base_url="$2"; shift 2 ;;
+    --waive-v1-2-rollback) waive_v1_2_rollback=true; shift ;;
     --help|-h) usage; exit 0 ;;
     *) block argument_invalid "Unsupported argument: $1" 'Use --help and rerun.' 2 ;;
   esac
@@ -1778,6 +1842,10 @@ done
 [[ "$mode" == --validate-only || "$mode" == --run || "$mode" == --accept || "$mode" == --rollback ]] \
   || block mode_invalid 'Select exactly one public Script 06 mode.' \
     'Use --validate-only, --run, --accept, or --rollback.' 2
+[[ "$waive_v1_2_rollback" == false || "$mode" == --run ]] \
+  || block rollback_waiver_mode_invalid \
+    'The v1.2 rollback waiver is valid only with Script 06 --run.' \
+    'Remove the waiver or select --run.' 2
 [[ "$target" =~ ^[A-Za-z0-9_@.:-]+$ ]] \
   || block target_invalid 'The SSH target is not bounded.' 'Use a configured alias or USER@HOST.' 2
 [[ "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ \
@@ -1939,9 +2007,16 @@ emit() {
 emit "report_path=$report_path;state=start;action=${mode#--}" READINESS
 emit "application_archive_sha256=$expected_application_sha256;script_05_report_sha256=$expected_script05_report_sha256;payload_sha256=$payload_sha256" READINESS
 if [[ "$mode" == --run ]]; then
-  emit 'authorized_actions=authenticate_transfer_verify_create_or_reuse_isolated_durable_v1_3_postgresql_cluster_schema_and_corpus_build_attended_runtime_stop_v1_2_application_and_host_postgresql_start_v1_3_postgresql_on_5432_start_v1_3_on_3384_8384_restore_v1_2_on_failed_launch' READINESS
-  emit 'non_actions=no_v1_2_file_or_database_change_no_rollback_tree_change_no_canonical_unit_replacement_no_boot_autostart_no_candidate_mutation_no_org_lab_packaging' READINESS
-  emit 'expected_duration=fresh_approximately_15_to_30_minutes_reuse_approximately_5_minutes;prompts=ssh_then_attended_sudo_then_five_hidden_credentials;heartbeat_max_seconds=25' READINESS
+  if [[ "$waive_v1_2_rollback" == true ]]; then
+    emit 'authorized_actions=authenticate_transfer_verify_create_or_reuse_isolated_durable_v1_3_postgresql_cluster_schema_and_corpus_build_attended_runtime_stop_any_present_v1_2_application_and_host_postgresql_start_v1_3_postgresql_on_5432_start_v1_3_on_3384_8384' READINESS
+    emit 'recovery_posture=v1_2_rollback_guarantee_waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true' READINESS
+    emit 'non_actions=no_v1_2_file_or_database_deletion_no_rollback_tree_change_no_canonical_unit_replacement_no_boot_autostart_no_candidate_mutation_no_org_lab_packaging' READINESS
+    emit 'expected_duration=fresh_approximately_15_to_30_minutes_reuse_approximately_5_minutes;prompts=ssh_then_attended_sudo_then_four_hidden_v1_3_runtime_credentials;heartbeat_max_seconds=25' READINESS
+  else
+    emit 'authorized_actions=authenticate_transfer_verify_create_or_reuse_isolated_durable_v1_3_postgresql_cluster_schema_and_corpus_build_attended_runtime_stop_v1_2_application_and_host_postgresql_start_v1_3_postgresql_on_5432_start_v1_3_on_3384_8384_restore_v1_2_on_failed_launch' READINESS
+    emit 'non_actions=no_v1_2_file_or_database_change_no_rollback_tree_change_no_canonical_unit_replacement_no_boot_autostart_no_candidate_mutation_no_org_lab_packaging' READINESS
+    emit 'expected_duration=fresh_approximately_15_to_30_minutes_reuse_approximately_5_minutes;prompts=ssh_then_attended_sudo_then_five_hidden_credentials;heartbeat_max_seconds=25' READINESS
+  fi
 elif [[ "$mode" == --accept ]]; then
   emit 'authorized_actions=verify_running_attended_v1_3_and_record_explicit_human_ui_acceptance' READINESS
   emit 'non_actions=no_promotion_no_org_lab_packaging_no_service_restart_no_database_change_no_boot_autostart' READINESS
@@ -1994,12 +2069,14 @@ case "$mode" in
   --accept) internal_mode='--target-accept'; expected_contract='ishikawa_v1_3_emceedanko_human_ui_acceptance=pass'; stage_tag='ACCEPT' ;;
   --rollback) internal_mode='--target-rollback'; expected_contract='ishikawa_v1_3_emceedanko_attended_rollback=pass'; stage_tag='ROLLBACK' ;;
 esac
+target_waiver_option=''
+[[ "$waive_v1_2_rollback" == false ]] || target_waiver_option=' --waive-v1-2-rollback'
 stage='target_action'
 emit "state=start;action=${mode#--};target_prompts_visible=true" "$stage_tag"
 trap - ERR
 set +e
 ssh -tt "${ssh_args[@]}" -o BatchMode=yes "$target" \
-  "cd '$remote_root/payload' && ISHIKAWA_SCRIPT06_INTERNAL=1 bash ./attended-v1.3-on-emceedanko '$internal_mode' --expected-hostname '$expected_hostname' --expected-os-version '$expected_os_version' --expected-architecture amd64 --payload-root '$remote_root/payload' --result-path '$remote_root/payload/target-result.txt' --gemma-base-url '$gemma_base_url' --nomic-base-url '$nomic_base_url'" \
+  "cd '$remote_root/payload' && ISHIKAWA_SCRIPT06_INTERNAL=1 bash ./attended-v1.3-on-emceedanko '$internal_mode' --expected-hostname '$expected_hostname' --expected-os-version '$expected_os_version' --expected-architecture amd64 --payload-root '$remote_root/payload' --result-path '$remote_root/payload/target-result.txt' --gemma-base-url '$gemma_base_url' --nomic-base-url '$nomic_base_url'$target_waiver_option" \
   </dev/tty 2>&1 | tee -a "$report_path"
 pipeline_status=("${PIPESTATUS[@]}")
 remote_status="${pipeline_status[0]}"
@@ -2039,6 +2116,19 @@ for fact in \
     || block target_result_boundary_invalid "The target result lacks safety fact: ${fact}." \
       'Treat the action as blocked and inspect target state.'
 done
+if [[ "$mode" == --run ]]; then
+  if [[ "$waive_v1_2_rollback" == true ]]; then
+    grep -Fxq 'v1_2_rollback_guarantee=waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true' "$work_root/target-result.txt" \
+      || block target_result_recovery_posture_invalid \
+        'The target result did not attest the selected v1.2 rollback waiver.' \
+        'Treat the launch as blocked and inspect target state.'
+  else
+    grep -Fxq 'v1_2_rollback_guarantee=verified;automatic_v1_2_restoration=true;v1_2_files_and_database_preserved=true' "$work_root/target-result.txt" \
+      || block target_result_recovery_posture_invalid \
+        'The target result did not attest the default v1.2 rollback guarantee.' \
+        'Treat the launch as blocked and inspect target state.'
+  fi
+fi
 emit "state=pass;action=${mode#--};target_result=pass" "$stage_tag"
 
 stage='remote_cleanup'
@@ -2055,7 +2145,13 @@ if [[ "$mode" == --run ]]; then
   emit 'target_ui_address=http://127.0.0.1:3384' SUMMARY
   emit "ui_forward_command=ssh -N -L 3384:127.0.0.1:3384 $target" SUMMARY
   emit "acceptance_command=bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --accept --target $target" SUMMARY
-  emit "rollback_command=bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --rollback --target $target" SUMMARY
+  if [[ "$waive_v1_2_rollback" == true ]]; then
+    emit 'recovery_posture=v1_2_rollback_guarantee_waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true' SUMMARY
+    emit "conditional_rollback_command=bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --rollback --target $target" SUMMARY
+    emit 'conditional_rollback_requires=v1_2_postgresql_password_and_model_forwards_on_8000_8001' SUMMARY
+  else
+    emit "rollback_command=bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --rollback --target $target" SUMMARY
+  fi
   emit 'next_gate=attended_human_ui_review;org_lab_packaging=false' SUMMARY
 elif [[ "$mode" == --accept ]]; then
   emit 'human_ui_acceptance=accepted;next_gate=review_receipt_before_separate_org_lab_packaging' SUMMARY

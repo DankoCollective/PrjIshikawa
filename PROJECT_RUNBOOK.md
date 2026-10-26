@@ -39,19 +39,25 @@
    metric may substitute for the other.
 10. Script 06 revalidates the exact application, candidate, corpus-v3 input,
     and Script 05 evidence, then completes all host, model, PostgreSQL 16,
-    pgvector, capacity, image, configuration, layout, and port preflights while
-    v1.2 remains ready.
+    pgvector, capacity, image, configuration, layout, and port preflights. Its
+    default `--run` path also requires v1.2 to remain ready. The explicit
+    V13-76 `--waive-v1-2-rollback` path does not require v1.2 readiness, its
+    database password, or its separate model forwards; this waiver is valid
+    only with `--run`.
 11. For a fresh run, Script 06 creates the corpus-v3 catalog and manifest,
     builds schema v5 and ingests corpus v3 in a dedicated durable PostgreSQL
     cluster on private validation port `65438`, and revalidates the complete
     corpus inventory. It never opens or modifies the accepted v1.2 database.
-12. Only at the immediate attended launch boundary, Script 06 stops the v1.2
-    UI, Retrieval API, and host PostgreSQL cluster. It then starts the isolated
-    v1.3 cluster on `5432`, the package-local Retrieval API on `8384`, and the
-    distinct UI container on `3384`. No v1.3 systemd unit is installed or
-    enabled, and all boot autostart remains disabled. Any failed launch stops
-    v1.3 and automatically restores the untouched v1.2 PostgreSQL cluster,
-    Retrieval API, and UI.
+12. Only at the immediate attended launch boundary, Script 06 stops any
+    present v1.2 UI, Retrieval API, and host PostgreSQL cluster. It then starts
+    the isolated v1.3 cluster on `5432`, the package-local Retrieval API on
+    `8384`, and the distinct UI container on `3384`. No v1.3 systemd unit is
+    installed or enabled, and all boot autostart remains disabled. On the
+    default path, any failed launch stops v1.3 and automatically restores the
+    untouched v1.2 PostgreSQL cluster, Retrieval API, and UI. On the explicit
+    V13-76 waiver path, a failed launch stops v1.3, preserves both installation
+    and database trees, leaves v1.2 stopped, and reports that automatic
+    restoration was deliberately waived.
 13. Record acceptance with Script 06 `--accept` or restore v1.2 with Script 06
     `--rollback`. Rollback preserves the isolated durable v1.3 cluster for
     review or an exact retry. Assemble the org-lab
@@ -73,12 +79,17 @@ and Nomic API-key input. It does not log or retain either value. A clean Script
 attended production-port human UI gate; it does not itself promote v1.3 or stop
 v1.2.
 
-Script 06 `--run` prompts for the Gemma key, Nomic key, accepted v1.2 retrieval
-password, and separate v1.3 ingestion/retrieval passwords through hidden
-terminal input. It prints the local UI address, SSH forwarding command, and
-exact `--accept` and `--rollback` commands after a passing launch. Script 06
-does not promote v1.3 into the canonical v1.2 path and does not authorize
-org-lab packaging.
+Script 06's default `--run` prompts for the Gemma key, Nomic key, accepted
+v1.2 retrieval password, and separate v1.3 ingestion/retrieval passwords
+through hidden terminal input. `--run --waive-v1-2-rollback` omits the v1.2
+password and readiness contact, so it requires only the Gemma and Nomic model
+forwards selected for v1.3 plus the two v1.3 database passwords. A passing
+launch prints the local UI address, SSH forwarding command, and exact
+`--accept` command. The default path prints an unconditional `--rollback`
+command; the waiver path prints the same command as conditional recovery and
+states that it first requires the v1.2 password and its `8000`/`8001` model
+forwards. Script 06 does not promote v1.3 into the canonical v1.2 path and does
+not authorize org-lab packaging.
 
 ## Evidence rules
 

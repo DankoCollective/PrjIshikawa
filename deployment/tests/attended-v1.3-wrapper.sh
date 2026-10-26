@@ -93,6 +93,8 @@ if [[ "$command_text" == *"ISHIKAWA_SCRIPT06_INTERNAL=1"* ]]; then
   mode=launch
   [[ "$command_text" == *"--target-accept"* ]] && mode=accept
   [[ "$command_text" == *"--target-rollback"* ]] && mode=rollback
+  waiver=false
+  [[ "$command_text" != *"--waive-v1-2-rollback"* ]] || waiver=true
   common() {
     printf "%s\n" \
       "target_hostname=EmceeDanko;os_id=ubuntu;os_version=24.04;architecture=amd64" \
@@ -104,6 +106,7 @@ if [[ "$command_text" == *"ISHIKAWA_SCRIPT06_INTERNAL=1"* ]]; then
     {
       common
       printf "%s\n" \
+        "$([[ "$waiver" == true ]] && printf "v1_2_rollback_guarantee=waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true" || printf "v1_2_rollback_guarantee=verified;automatic_v1_2_restoration=true;v1_2_files_and_database_preserved=true")" \
         "v1_2_restored=true;cleanup=pass" \
         "FAILURE DETAIL" \
         "stage=v1_3_attended_launch" \
@@ -127,6 +130,7 @@ if [[ "$command_text" == *"ISHIKAWA_SCRIPT06_INTERNAL=1"* ]]; then
     case "$mode" in
       launch)
         printf "%s\n" \
+          "$([[ "$waiver" == true ]] && printf "v1_2_rollback_guarantee=waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true" || printf "v1_2_rollback_guarantee=verified;automatic_v1_2_restoration=true;v1_2_files_and_database_preserved=true")" \
           "durable_v1_3_database=ready;documents=30;pages=150;authoritative_chunks=786;retrieval_candidates=943;embeddings=943;relationship_records=240;relationship_pairs=90" \
           "attended_runtime=ready;ui=http://127.0.0.1:3384;retrieval_api=http://127.0.0.1:8384;v1_2_stopped=true" \
           "ishikawa_v1_3_emceedanko_attended_launch=pass" ;;
@@ -165,6 +169,10 @@ run_public() {
   shift 3
   last_output="$output"
   command="bash '$orchestrator' '$public_mode' --target TestTarget --report-root '$test_root/reports'"
+  for argument in "$@"; do
+    [[ "$argument" == --waive-v1-2-rollback ]] || fail invalid_wrapper_test_argument
+    command+=" '$argument'"
+  done
   set +e
   PATH="$test_root/bin:$PATH" \
     ISHIKAWA_WRAPPER_REMOTE="$test_root/remote" \
@@ -190,6 +198,22 @@ grep -Fq 'acceptance_command=bash ./deployment/scripts/06_attended-v1.3-on-emcee
 grep -Fq 'rollback_command=bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --rollback --target TestTarget' "$last_output" || fail rollback_command_missing
 [[ -z "$(find "$test_root/remote" -mindepth 1 -print -quit)" ]] || fail launch_remote_cleanup_failed
 
+run_public waived-launch-success --run success --waive-v1-2-rollback
+(( public_status == 0 )) || fail waived_launch_wrapper_failed
+assert_single_result "$last_output" pass
+grep -Fq 'recovery_posture=v1_2_rollback_guarantee_waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true' "$last_output" \
+  || fail waived_recovery_posture_missing
+grep -Fq 'prompts=ssh_then_attended_sudo_then_four_hidden_v1_3_runtime_credentials' "$last_output" \
+  || fail waived_prompt_contract_missing
+grep -Fq 'conditional_rollback_command=bash ./deployment/scripts/06_attended-v1.3-on-emceedanko.sh --rollback --target TestTarget' "$last_output" \
+  || fail conditional_rollback_command_missing
+grep -Fq 'conditional_rollback_requires=v1_2_postgresql_password_and_model_forwards_on_8000_8001' "$last_output" \
+  || fail conditional_rollback_requirements_missing
+! grep -Fq '[SUMMARY] rollback_command=' "$last_output" \
+  || fail unconditional_rollback_command_present
+[[ -z "$(find "$test_root/remote" -mindepth 1 -print -quit)" ]] \
+  || fail waived_launch_remote_cleanup_failed
+
 run_public launch-failure --run remote_failure
 (( public_status == 17 )) || fail remote_failure_status_invalid
 assert_single_result "$last_output" blocked
@@ -201,6 +225,12 @@ run_public accept-success --accept success
 (( public_status == 0 )) || fail accept_wrapper_failed
 assert_single_result "$last_output" pass
 grep -Fq '[ACCEPT] state=pass;action=accept;target_result=pass' "$last_output" || fail accept_milestone_missing
+
+run_public invalid-accept-waiver --accept success --waive-v1-2-rollback
+(( public_status == 2 )) || fail invalid_accept_waiver_status
+assert_single_result "$last_output" blocked
+grep -Fxq 'reason=rollback_waiver_mode_invalid' "$last_output" \
+  || fail invalid_accept_waiver_reason_missing
 
 run_public rollback-success --rollback success
 (( public_status == 0 )) || fail rollback_wrapper_failed
@@ -224,6 +254,6 @@ grep -Fxq 'selected_ports=ui:3384,retrieval_api:8384;port_1384_purpose=v1_2_runt
 
 printf '%s\n' \
   'local_evidence_revalidation=pass;payload_assembly=pass;transfer_verification=pass;temporary_remote_cleanup=pass' \
-  'launch_wrapper=pass;remote_failure_propagation=pass;accept_wrapper=pass;rollback_wrapper=pass;validate_only=pass' \
+  'launch_wrapper=pass;rollback_waiver_wrapper=pass;waiver_mode_restriction=pass;remote_failure_propagation=pass;accept_wrapper=pass;rollback_wrapper=pass;validate_only=pass' \
   'signal_cleanup=pass;single_result_contract=pass;ui_and_operator_commands=pass'
 printf '\nSCRIPT RESULT\nattended_v1_3_wrapper_test=pass\n'

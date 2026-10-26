@@ -180,7 +180,13 @@ case "$action" in
   is-active)
     if [[ "$scope" == user && "$unit" == ishikawa-retrieval-api.service ]]; then cat "$ISHIKAWA_TEST_STATE/unit"; elif [[ "$unit" == postgresql@16-main.service ]]; then cat "$ISHIKAWA_TEST_STATE/postgres"; else printf "inactive\n"; fi ;;
   stop)
-    if [[ "$scope" == user ]]; then printf "inactive\n" >"$ISHIKAWA_TEST_STATE/unit"; else printf "inactive\n" >"$ISHIKAWA_TEST_STATE/postgres"; fi ;;
+    if [[ "$scope" == user ]]; then
+      [[ "$(cat "$ISHIKAWA_TEST_STATE/unit")" != inactive ]] || exit 5
+      printf "inactive\n" >"$ISHIKAWA_TEST_STATE/unit"
+    else
+      [[ "$(cat "$ISHIKAWA_TEST_STATE/postgres")" != inactive ]] || exit 5
+      printf "inactive\n" >"$ISHIKAWA_TEST_STATE/postgres"
+    fi ;;
   start)
     [[ "${ISHIKAWA_TEST_RESTORE_FAIL:-0}" != 1 ]] || exit 1
     if [[ "$scope" == user ]]; then printf "active\n" >"$ISHIKAWA_TEST_STATE/unit"; else printf "active\n" >"$ISHIKAWA_TEST_STATE/postgres"; fi ;;
@@ -327,18 +333,21 @@ run_target() {
   local database_count_fail="${8:-0}"
   local secret_override="${9:-}"
   local v1_2_component_fail="${10:-none}"
+  local waive_v1_2_rollback="${11:-0}"
   local output="$test_root/${name}.stdout" result_path="$test_root/payload/${name}-result.txt"
-  local command secrets=''
+  local command secrets='' waiver_option=''
   rm -f -- "$result_path"
   last_output="$output"; last_result="$result_path"
   case "$secret_count" in
     0) secrets='' ;;
     3) secrets=$'gemma-test-key\nnomic-test-key-012345678901234567890123456789\nv12-test-password\n' ;;
+    4) secrets=$'gemma-test-key\nnomic-test-key-012345678901234567890123456789\nv13-ingest-test-password\nv13-retrieval-test-password\n' ;;
     5) secrets=$'gemma-test-key\nnomic-test-key-012345678901234567890123456789\nv12-test-password\nv13-ingest-test-password\nv13-retrieval-test-password\n' ;;
     *) fail invalid_test_secret_count ;;
   esac
   [[ -z "$secret_override" ]] || secrets="$secret_override"
-  command="ISHIKAWA_SCRIPT06_INTERNAL=1 bash '$orchestrator' '$internal_mode' --expected-hostname EmceeDanko --expected-os-version 24.04 --expected-architecture amd64 --payload-root '$test_root/payload' --result-path '$result_path' --gemma-base-url 'http://127.0.0.1:$model_port' --nomic-base-url 'http://127.0.0.1:$model_port'"
+  [[ "$waive_v1_2_rollback" == 0 ]] || waiver_option=' --waive-v1-2-rollback'
+  command="ISHIKAWA_SCRIPT06_INTERNAL=1 bash '$orchestrator' '$internal_mode' --expected-hostname EmceeDanko --expected-os-version 24.04 --expected-architecture amd64 --payload-root '$test_root/payload' --result-path '$result_path' --gemma-base-url 'http://127.0.0.1:$model_port' --nomic-base-url 'http://127.0.0.1:$model_port'$waiver_option"
   set +e
   printf '%s' "$secrets" | \
     HOME="$test_root/home" PATH="$test_root/bin:$PATH" \
@@ -402,6 +411,52 @@ grep -Fxq 'detail=The v1.2 real readiness path failed;readiness_marker=ishikawa_
     && "$(<"$test_root/state/postgres")" == active \
     && ! -e "$test_root/home/Documents/Ishikawa-v1.3-attended" ]] \
   || fail v1_2_model_route_failure_mutated_state
+
+reset_fresh_state
+printf '%s\n' inactive >"$test_root/state/unit"
+printf '%s\n' inactive >"$test_root/state/postgres"
+: >"$test_root/state/containers"
+run_target waived-web-failure --target-launch 4 0 1 0 0 0 '' gemma 1
+(( target_status != 0 )) || fail waived_web_failure_accepted
+grep -Fxq 'reason=v1_3_web_start_failed' "$last_result" \
+  || fail waived_web_failure_reason_missing
+grep -Fq 'Automatic v1.2 restoration was deliberately waived; v1.2 remains stopped and both database trees are preserved.' "$last_result" \
+  || fail waived_failure_recovery_detail_missing
+grep -Fxq 'v1_2_rollback_guarantee=waived;automatic_v1_2_restoration=false;v1_2_files_and_database_preserved=true' "$last_result" \
+  || fail waived_recovery_posture_missing
+grep -Fxq 'v1_2_restored=false;cleanup=pass' "$last_result" \
+  || fail waived_failure_cleanup_marker_missing
+grep -Fxq '[READINESS] state=pass;v1_2_rollback=waived;v1_2_password_read=false;v1_2_readiness_contact=false' "$last_output" \
+  || fail waived_readiness_marker_missing
+! grep -Fq '[INPUT REQUIRED] v1.2 PostgreSQL retrieval password' "$last_output" \
+  || fail waived_v1_2_password_prompted
+[[ "$(<"$test_root/state/database")" == rag_catalog \
+    && "$(<"$test_root/state/private-pg-port")" == none \
+    && "$(<"$test_root/state/postgres")" == inactive \
+    && "$(<"$test_root/state/unit")" == inactive \
+    && -f "$test_root/home/Documents/Ishikawa-v1.3-attended/state/postgresql/data/PG_VERSION" ]] \
+  || fail waived_failure_state_invalid
+
+run_target waived-reuse-launch --target-launch 4 0 0 0 0 0 '' gemma 1
+(( target_status == 0 )) || fail waived_reuse_launch_failed
+grep -Fxq 'ishikawa_v1_3_emceedanko_attended_launch=pass' "$last_result" \
+  || fail waived_launch_marker_missing
+grep -Fq 'action=reused_exact' "$last_output" || fail waived_reuse_marker_missing
+grep -Fq 'v1_2_rollback_guarantee=waived' "$last_output" \
+  || fail waived_launch_posture_missing
+[[ "$(<"$test_root/state/postgres")" == inactive \
+    && "$(<"$test_root/state/unit")" == inactive \
+    && "$(<"$test_root/state/private-pg-port")" == 5432 ]] \
+  || fail waived_launch_state_invalid
+
+run_target waived-conditional-rollback --target-rollback 3
+(( target_status == 0 )) || fail waived_conditional_rollback_failed
+grep -Fxq 'ishikawa_v1_3_emceedanko_attended_rollback=pass' "$last_result" \
+  || fail waived_conditional_rollback_marker_missing
+[[ "$(<"$test_root/state/postgres")" == active \
+    && "$(<"$test_root/state/unit")" == active \
+    && "$(<"$test_root/state/private-pg-port")" == none ]] \
+  || fail waived_conditional_rollback_state_invalid
 
 reset_fresh_state
 candidate_drift_path="$candidate/config/deployment.yaml"
@@ -532,6 +587,7 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
 
 printf '%s\n' \
   'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;credential_boundary_detail=pass;v1_2_readiness_component_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
+  'explicit_v1_2_rollback_waiver=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

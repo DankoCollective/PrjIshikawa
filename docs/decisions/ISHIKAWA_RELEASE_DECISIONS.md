@@ -8,14 +8,14 @@ journey.
 
 ## Current Status
 
-Items V13-60 through V13-75 are frozen through the operator-approved release
-journey and bounded corrections to that existing contract. Implementation must
-preserve the accepted product behavior and qualification thresholds unless a
-later numbered decision explicitly reopens them. Scripts 01-06 implement the
-corpus-agnostic build, independent corpus export, read-only inventory,
-side-by-side staging, disposable qualification, and attended deployment
-sequence. Script 05 passed on EmceeDanko with 60/60 frontier cases and proved
-cleanup. The active gate is attended v1.3 human UI validation on EmceeDanko.
+Items V13-60 through V13-76 are frozen through the operator-approved release
+journey and bounded corrections to that contract. V13-76 adds an explicit
+waiver path without weakening Script 06's default reversible behavior. Scripts
+01-06 implement the corpus-agnostic build, independent corpus export,
+read-only inventory, side-by-side staging, disposable qualification, and
+attended deployment sequence. Script 05 passed on EmceeDanko with 60/60
+frontier cases and proved cleanup. The active gate is attended v1.3 human UI
+validation on EmceeDanko using the operator-selected V13-76 waiver posture.
 
 ## Decisions
 
@@ -312,3 +312,45 @@ restoration-failure reporting, durable reuse, attended launch, human
 acceptance, explicit rollback, remote failure propagation, signal cleanup,
 single-result output, and unchanged v1.2 and candidate boundaries without
 contacting EmceeDanko.
+
+### V13-76 — Explicit waiver of the v1.2 rollback guarantee
+
+Decision: Script 06 may expose a separately named, explicit operator flag that
+launches the already-qualified v1.3 candidate without
+requiring v1.2 model routes, its PostgreSQL retrieval password, real v1.2
+readiness, or automatic v1.2 restoration after a failed switchover.
+
+Status: Frozen by operator direction on 2026-10-25.
+
+Recommendation: Add `--waive-v1-2-rollback` only to Script 06 `--run`, retain
+the current reversible behavior as the default, continue preserving the v1.2
+installation, database files, and rollback tree on disk, and require only the
+v1.3 Gemma/Nomic forwards on EmceeDanko loopback ports `18000` and `18001` for
+the waived run. The flag must skip the v1.2 password prompt and readiness gate,
+stop any present v1.2 UI, API, and host PostgreSQL processes only at the
+immediate switchover, and start the same isolated corpus-v3 v1.3 runtime on
+`3384`, `8384`, and `5432`. If launch fails after switchover, Script 06 must
+stop v1.3, preserve both database trees and installations, leave v1.2 stopped,
+and report that automatic recovery was deliberately waived. It must not delete,
+overwrite, promote, install a service, enable autostart, or package for org-lab.
+
+Reason/Evidence: The exact v1.3 model probes pass through `18000`/`18001`, but
+the frozen v1.2 recovery proof additionally depends on its configured
+`8000`/`8001` routes and remembered database password. The operator stated
+that proving v1.3 with corpus v3 is now more important than retaining a ready
+v1.2 rollback and directed that v1.2 preservation must not gate v1.3
+installation, configuration, or testing. Keeping the existing default avoids
+silently weakening V13-75, while an explicit flag makes the reduced recovery
+posture unmistakable and replay-safe. The implementation changes
+`deployment/scripts/06_attended-v1.3-on-emceedanko.sh`, its executable target
+and wrapper regressions under `deployment/tests/`, and the Script 06 procedure
+in `PROJECT_RUNBOOK.md`; target-side execution remains package-local and the
+transferred orchestrator remains temporary. Alternatives are to retain the
+current four-forward/password-dependent rollback guarantee, or destructively
+retire v1.2 before v1.3 acceptance; the latter is not recommended because it
+provides no benefit to the v1.3 proof. Executable regressions prove the default
+reversible path remains intact, inactive v1.2 does not gate the waiver, no
+v1.2 password is requested or readiness contact made, a failed waived launch
+stops v1.3 without attempting v1.2 restoration, the durable v1.3 database can
+be reused for an exact retry, and explicit later rollback remains conditional
+on restoring the v1.2 dependencies.

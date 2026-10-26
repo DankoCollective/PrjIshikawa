@@ -44,6 +44,8 @@ grep -Fxq 'script_01_build_ishikawa_release=ready' <<<"$release_validation" \
   || fail release_ready_marker_missing
 grep -Fq 'source_documents=0;corpus_dependency=false' <<<"$release_validation" \
   || fail release_independence_marker_missing
+grep -Fq 'V13-76' "$release_builder" \
+  || fail rollback_waiver_decision_gate_missing
 
 corpus_validation="$(bash "$corpus_exporter" --validate-only 2>&1)" \
   || fail corpus_validation_failed

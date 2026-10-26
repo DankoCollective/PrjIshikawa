@@ -60,6 +60,10 @@ ingestion path.
    is absent from the host, accepted v1.2 owns the port before switchover, and
    the port remains free afterward for automatic or explicit v1.2 rollback.
    Script 06 reports that purpose without an Anderson ownership label.
+9. Added the operator-approved V13-76 Script 06 rollback waiver as an explicit
+   `--run` flag while retaining the reversible default. The waiver removes the
+   v1.2 password, readiness, model-forward, and automatic-restoration gates;
+   it does not delete or overwrite either installation or database tree.
 
 No frozen `Ishikawa/**` application byte was changed by these sweep
 corrections. The application modifications already present in the working tree
@@ -79,13 +83,16 @@ remain covered by the accepted source manifest and validation results below.
 - Attended Script 06 target lifecycle tests: pass, including preflight
   no-mutation failure, fresh-build cleanup, exact durable reuse, real
   configuration/catalog/manifest validators, failed-launch restoration,
-  restoration-failure reporting, partial-state preservation, unrelated-PID
-  protection, unsafe-runtime-path rejection and preservation, acceptance,
-  rollback, and candidate/v1.2 preservation.
+  restoration-failure reporting, explicit rollback waiver with inactive v1.2,
+  waived failed-launch cleanup, durable retry, conditional later rollback,
+  partial-state preservation, unrelated-PID protection, unsafe-runtime-path
+  rejection and preservation, acceptance, rollback, and candidate/v1.2
+  preservation.
 - Attended Script 06 wrapper tests: pass, including exact evidence and payload
-  validation, launch/accept/rollback modes, precise remote-failure propagation,
-  SIGTERM cleanup, one result marker, UI address, and operator commands.
-- Script 01 decision/release validation through V13-75: pass.
+  validation, launch/accept/rollback modes, waiver propagation and mode
+  restriction, precise remote-failure propagation, SIGTERM cleanup, one result
+  marker, UI address, and operator commands.
+- Script 01 decision/release validation through V13-76: pass.
 - Script 06 local exact-evidence validation: pass with no target, database,
   service, or credential contact.
 - Shell syntax: 27 active scripts, pass.

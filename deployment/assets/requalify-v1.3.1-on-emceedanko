@@ -4,7 +4,7 @@ umask 077
 
 # Purpose:
 #   Requalify the exact external Ishikawa v1.3.1 application and exact generic
-#   runtime image together on EmceeDanko without changing the accepted v1.3
+#   runtime image together on EmceeDanko without changing the accepted
 #   application, database, services, or boot posture.
 #
 # Mental model:
@@ -14,17 +14,60 @@ umask 077
 #   tmpfs. Exercise the complete synthetic frontier and a fresh-container
 #   rebuild, then leave the exact candidate running only for attended review.
 #
-# This helper is transferred and invoked only by numbered Script 09.
+# This helper is transferred and invoked only by the reviewed numbered wrapper.
+
+profile="${ISHIKAWA_REQUALIFICATION_PROFILE:-legacy}"
+case "$profile" in
+  legacy)
+    expected_runtime_archive_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
+    expected_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
+    candidate_root="$HOME/Documents/Ishikawa-v1.3.1-qualification"
+    accepted_root="$HOME/Documents/Ishikawa-v1.3-attended"
+    container_name='ishikawa-v1.3.1-qualification-web'
+    qualification_slug='v1.3.1-qualification'
+    action_schema='ishikawa.emceedanko-v1.3.1-action.v1'
+    qualification_schema='ishikawa.emceedanko-v1.3.1-qualification.v1'
+    acceptance_schema='ishikawa.emceedanko-v1.3.1-acceptance.v1'
+    baseline_invariant='accepted_v1_3_mutated'
+    baseline_label='accepted_v1_3'
+    wrapper_label='Script 09'
+    helper_ready_marker='v1_3_1_requalification_helper=ready'
+    run_marker='v1_3_1_requalification=pass'
+    accept_marker='v1_3_1_requalification_acceptance=pass'
+    cleanup_marker='v1_3_1_requalification_cleanup=pass'
+    ;;
+  runtime-refresh)
+    expected_runtime_archive_sha256='b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1'
+    expected_image_id='sha256:6c93bcb5ed22de92420c4de4892eecdd08f1badc8b19e4d6f4488711f8f7a31a'
+    candidate_root="$HOME/Documents/Ishikawa-v1.3.1-runtime-qualification"
+    accepted_root="$HOME/Documents/Ishikawa-v1.3.1"
+    container_name='ishikawa-v1.3.1-runtime-qualification-web'
+    qualification_slug='v1.3.1-runtime-qualification'
+    action_schema='ishikawa.emceedanko-v1.3.1-runtime-action.v1'
+    qualification_schema='ishikawa.emceedanko-v1.3.1-runtime-qualification.v1'
+    acceptance_schema='ishikawa.emceedanko-v1.3.1-runtime-acceptance.v1'
+    baseline_invariant='accepted_v1_3_1_mutated'
+    baseline_label='accepted_v1_3_1'
+    wrapper_label='Script 12'
+    helper_ready_marker='v1_3_1_runtime_requalification_helper=ready'
+    run_marker='v1_3_1_runtime_requalification=pass'
+    accept_marker='v1_3_1_runtime_requalification_acceptance=pass'
+    cleanup_marker='v1_3_1_runtime_requalification_cleanup=pass'
+    ;;
+  *)
+    printf 'Unsupported requalification profile: %s\n' "$profile" >&2
+    exit 2
+    ;;
+esac
 
 readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
-readonly expected_runtime_archive_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
-readonly expected_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
 readonly expected_image_reference='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
 readonly expected_frontier_cases_sha256='2ba5f61518ca17b0eaa26f024abe35418b050f9bd8d5b3e1677062c9d7a626a3'
 readonly expected_evaluator_sha256='9d03a2f257b5fee34bdb6683456bafba71a56338b220026394f04335f6db5a09'
-readonly candidate_root="$HOME/Documents/Ishikawa-v1.3.1-qualification"
-readonly accepted_root="$HOME/Documents/Ishikawa-v1.3-attended"
-readonly container_name='ishikawa-v1.3.1-qualification-web'
+readonly profile expected_runtime_archive_sha256 expected_image_id candidate_root
+readonly accepted_root container_name qualification_slug action_schema
+readonly qualification_schema acceptance_schema baseline_invariant baseline_label
+readonly wrapper_label helper_ready_marker run_marker accept_marker cleanup_marker
 readonly ui_port=3385
 readonly retrieval_port=8385
 readonly postgresql_port=5432
@@ -60,7 +103,7 @@ write_result() {
   local state="$1" reason="${2:-none}" detail="${3:-none}"
   [[ -n "$result_path" ]] || return 0
   {
-    printf 'schema=ishikawa.emceedanko-v1.3.1-action.v1\n'
+    printf 'schema=%s\n' "$action_schema"
     printf 'mode=%s\n' "${mode#--}"
     printf 'state=%s\n' "$state"
     printf 'reason=%s\n' "$reason"
@@ -70,7 +113,7 @@ write_result() {
     printf 'image_id=%s\n' "$expected_image_id"
     printf 'ui_port=%s\nretrieval_api_port=%s\npostgresql_port=%s\n' \
       "$ui_port" "$retrieval_port" "$postgresql_port"
-    printf 'accepted_v1_3_mutated=false\naccepted_database_mutated=false\nboot_autostart=false\n'
+    printf '%s=false\naccepted_database_mutated=false\nboot_autostart=false\n' "$baseline_invariant"
   } >"$result_path"
   chmod 0600 "$result_path"
 }
@@ -128,7 +171,7 @@ prepare_docker() {
 }
 
 stop_candidate() {
-  local pid_file="$candidate_root/state/run/v1.3.1-qualification.pid" pid=''
+  local pid_file="$candidate_root/state/run/${qualification_slug}.pid" pid=''
   if [[ -n "$active_pid" ]] && kill -0 "$active_pid" 2>/dev/null; then
     kill -TERM -- "-$active_pid" 2>/dev/null || kill -TERM "$active_pid" 2>/dev/null || true
     for _attempt in {1..100}; do
@@ -197,14 +240,14 @@ unexpected_error() {
   local status="$1" line="$2"
   fail unexpected_command_failure \
     "An unhandled command failed at helper line ${line} with exit code ${status}." \
-    'Use the retained Script 09 report to correct the complete failing stage.' \
+    "Use the retained ${wrapper_label} report to correct the complete failing stage." \
     "$status"
 }
 
 trap 'unexpected_error "$?" "$LINENO"' ERR
-trap 'stage=interrupted; fail signal_hangup "The target qualification received SIGHUP." "Review automatic cleanup and rerun Script 09." 129' HUP
-trap 'stage=interrupted; fail signal_interrupt "The target qualification was interrupted." "Review automatic cleanup and rerun Script 09." 130' INT
-trap 'stage=interrupted; fail signal_termination "The target qualification received SIGTERM." "Review automatic cleanup and rerun Script 09." 143' TERM
+trap 'stage=interrupted; fail signal_hangup "The target qualification received SIGHUP." "Review automatic cleanup and rerun ${wrapper_label}." 129' HUP
+trap 'stage=interrupted; fail signal_interrupt "The target qualification was interrupted." "Review automatic cleanup and rerun ${wrapper_label}." 130' INT
+trap 'stage=interrupted; fail signal_termination "The target qualification received SIGTERM." "Review automatic cleanup and rerun ${wrapper_label}." 143' TERM
 
 validate_loopback_url() {
   python3 -B - "$1" <<'PY'
@@ -225,7 +268,7 @@ read_secret() {
   [[ -r /dev/tty && -w /dev/tty ]] \
     || fail interactive_terminal_unavailable \
       'A controlling terminal is required for hidden credential entry.' \
-      'Run Script 09 from an interactive terminal.'
+      "Run ${wrapper_label} from an interactive terminal."
   printf '\n[INPUT REQUIRED] %s\n' "$label" >/dev/tty
   printf '[INPUT MODE] Hidden input is active. Paste or type the value, then press Enter.\n' >/dev/tty
   IFS= read -r -s value </dev/tty || fail credential_input_failed \
@@ -248,7 +291,7 @@ if [[ "$mode" == --validate-only ]]; then
   validate_loopback_url "$nomic_base_url"
   [[ "$ui_port" -ne "$retrieval_port" && "$retrieval_port" -ne "$postgresql_port" ]]
   printf '%s\n' \
-    'v1_3_1_requalification_helper=ready' \
+    "$helper_ready_marker" \
     'qualification_ports=3385,8385;accepted_ports=3384,8384;database_mode=read_only_reuse' \
     'model_forward_ports=18000,18001;forward_origin=emceedanko' \
     'web_runtime=exact_image,read_only_source,bounded_tmpfs,next_build_then_next_start'
@@ -266,30 +309,30 @@ while (( $# > 0 )); do
     --gemma-base-url) gemma_base_url="$2"; shift 2 ;;
     --nomic-base-url) nomic_base_url="$2"; shift 2 ;;
     --expected-helper-sha256) expected_helper_sha256="$2"; shift 2 ;;
-    *) fail argument_invalid "Unsupported target argument: $1" 'Correct Script 09.' 2 ;;
+    *) fail argument_invalid "Unsupported target argument: $1" "Correct ${wrapper_label}." 2 ;;
   esac
 done
 [[ "$payload_root" == /tmp/ishikawa-requalification-*'/payload' \
     && -d "$payload_root" && ! -L "$payload_root" \
     && "$result_path" == "$payload_root/"* && ! -e "$result_path" \
     && "$expected_helper_sha256" =~ ^[0-9a-f]{64}$ ]] \
-  || fail target_paths_invalid 'The private payload or result path is outside the target contract.' 'Rerun through Script 09.'
-validate_loopback_url "$gemma_base_url" || fail gemma_url_invalid 'The Gemma base URL is not bounded loopback HTTP.' 'Correct the Script 09 model URL.'
-validate_loopback_url "$nomic_base_url" || fail nomic_url_invalid 'The Nomic base URL is not bounded loopback HTTP.' 'Correct the Script 09 model URL.'
+  || fail target_paths_invalid 'The private payload or result path is outside the target contract.' "Rerun through ${wrapper_label}."
+validate_loopback_url "$gemma_base_url" || fail gemma_url_invalid 'The Gemma base URL is not bounded loopback HTTP.' "Correct the ${wrapper_label} model URL."
+validate_loopback_url "$nomic_base_url" || fail nomic_url_invalid 'The Nomic base URL is not bounded loopback HTTP.' "Correct the ${wrapper_label} model URL."
 
 stage='target_preflight'
 for command_name in awk bash chmod cp curl date df docker dpkg find grep hostname id jq kill mkdir mktemp mv pg_isready psql python3 readlink rm sed setsid sha256sum sleep ss stat sudo systemctl tar timeout tr; do
   command -v "$command_name" >/dev/null 2>&1 \
-    || fail "command_missing_${command_name}" "Required target command unavailable: ${command_name}." 'Restore the named prerequisite and rerun Script 09.'
+    || fail "command_missing_${command_name}" "Required target command unavailable: ${command_name}." "Restore the named prerequisite and rerun ${wrapper_label}."
 done
 [[ "$(sha256sum -- "$0" | awk '{print $1}')" == "$expected_helper_sha256" ]] \
-  || fail helper_identity_mismatch 'The transferred target helper does not match the wrapper-bound identity.' 'Rerun Script 09 from the reviewed repository.'
+  || fail helper_identity_mismatch 'The transferred target helper does not match the wrapper-bound identity.' "Rerun ${wrapper_label} from the reviewed repository."
 [[ "$(hostname -s)" == "$expected_hostname" \
     && "$(. /etc/os-release; printf '%s' "$VERSION_ID")" == "$expected_os_version" \
     && "$(dpkg --print-architecture)" == "$expected_architecture" ]] \
   || fail target_identity_mismatch 'The target hostname, Ubuntu release, or architecture differs from the frozen EmceeDanko host.' 'Use the frozen EmceeDanko target.'
 (cd -- "$payload_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
-  || fail payload_checksum_failed 'The target qualification payload failed its complete checksum manifest.' 'Rerun Script 09 to replace the private transfer.'
+  || fail payload_checksum_failed 'The target qualification payload failed its complete checksum manifest.' "Rerun ${wrapper_label} to replace the private transfer."
 [[ "$(sha256sum -- "$payload_root/ishikawa-v1.3.1.tar.gz" | awk '{print $1}')" == "$expected_application_sha256" \
     && "$(sha256sum -- "$payload_root/frontier-cases.json" | awk '{print $1}')" == "$expected_frontier_cases_sha256" \
     && "$(sha256sum -- "$payload_root/evaluate-frontier.py" | awk '{print $1}')" == "$expected_evaluator_sha256" ]] \
@@ -302,7 +345,7 @@ jq -e --arg archive "$expected_runtime_archive_sha256" --arg image "$expected_im
   and .react == "19.2.9" and .react_dom == "19.2.9"' \
   "$payload_root/image-identity.json" >/dev/null \
   || fail runtime_identity_record_invalid 'The transferred runtime identity record is not the exact Script 07 result.' 'Restore the exact Script 07 handoff.'
-prepare_docker || fail container_runtime_unavailable 'Docker is unavailable through the operator or attended sudo path.' 'Restore Docker access and rerun Script 09.'
+prepare_docker || fail container_runtime_unavailable 'Docker is unavailable through the operator or attended sudo path.' "Restore Docker access and rerun ${wrapper_label}."
 
 accepted_ready() {
   [[ -d "$accepted_root" && ! -L "$accepted_root" ]] \
@@ -330,12 +373,12 @@ check_boot_posture() {
 if [[ "$mode" == --accept ]]; then
   stage='acceptance_preflight'
   receipt="$candidate_root/state/reports/qualification/emceedanko-v1.3.1-qualification.txt"
-  pid_file="$candidate_root/state/run/v1.3.1-qualification.pid"
+  pid_file="$candidate_root/state/run/${qualification_slug}.pid"
   [[ -f "$receipt" && ! -L "$receipt" && -f "$pid_file" && ! -L "$pid_file" ]] \
-    || fail qualification_runtime_missing 'The exact qualification runtime or receipt is absent.' 'Run Script 09 --run first.'
+    || fail qualification_runtime_missing 'The exact qualification runtime or receipt is absent.' "Run ${wrapper_label} --run first."
   grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt" \
     && grep -Fxq "image_id=$expected_image_id" "$receipt" \
-    || fail qualification_receipt_identity_mismatch 'The running qualification receipt is not bound to the exact candidate.' 'Clean up the stale qualification and rerun Script 09.'
+    || fail qualification_receipt_identity_mismatch 'The running qualification receipt is not bound to the exact candidate.' "Clean up the stale qualification and rerun ${wrapper_label}."
   IFS= read -r api_pid <"$pid_file" || api_pid=''
   pid_is_candidate_api "$api_pid" && container_running \
     && http_ready "http://127.0.0.1:${retrieval_port}/ready" \
@@ -343,15 +386,15 @@ if [[ "$mode" == --accept ]]; then
     && http_ready "http://127.0.0.1:${ui_port}/" \
     && http_ready "http://127.0.0.1:${ui_port}/theme-init.js" \
     && http_ready "http://127.0.0.1:${ui_port}/api/dependencies" \
-    || fail qualification_runtime_not_ready 'The exact candidate is no longer completely ready.' 'Do not accept; run Script 09 --cleanup and requalify.'
-  accepted_ready || fail accepted_v1_3_baseline_lost 'The accepted v1.3 baseline is not ready during candidate acceptance.' 'Do not accept until the untouched baseline is reconciled.'
+    || fail qualification_runtime_not_ready 'The exact candidate is no longer completely ready.' "Do not accept; run ${wrapper_label} --cleanup and requalify."
+  accepted_ready || fail "${baseline_label}_baseline_lost" 'The accepted baseline is not ready during candidate acceptance.' 'Do not accept until the untouched baseline is reconciled.'
   check_boot_posture || fail boot_posture_changed 'Boot autostart is enabled for an Ishikawa dependency.' 'Do not accept; restore the disabled boot posture.'
   acceptance="$candidate_root/state/reports/qualification/emceedanko-v1.3.1-acceptance.txt"
   [[ ! -e "$acceptance" && ! -L "$acceptance" ]] \
     || fail acceptance_already_recorded 'An acceptance receipt already exists for this qualification runtime.' 'Review the existing receipt; do not replace it.'
   accepted_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   {
-    printf 'schema=ishikawa.emceedanko-v1.3.1-acceptance.v1\n'
+    printf 'schema=%s\n' "$acceptance_schema"
     printf 'accepted_at_utc=%s\n' "$accepted_at"
     printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
     printf 'runtime_archive_sha256=%s\n' "$expected_runtime_archive_sha256"
@@ -359,13 +402,13 @@ if [[ "$mode" == --accept ]]; then
     printf 'human_ui_acceptance=accepted\n'
     printf 'production_build_start=pass\nfrontier_cases=60/60\n'
     printf 'ui_port=%s\nretrieval_api_port=%s\npostgresql_port=%s\n' "$ui_port" "$retrieval_port" "$postgresql_port"
-    printf 'accepted_v1_3_mutated=false\naccepted_database_mutated=false\nboot_autostart=false\n'
+    printf '%s=false\naccepted_database_mutated=false\nboot_autostart=false\n' "$baseline_invariant"
   } >"$acceptance"
   chmod 0600 "$acceptance"
   cp -- "$acceptance" "$result_path"
   complete=true
   emit SUMMARY 'state=pass;human_ui_acceptance=accepted;candidate_cleanup=pending'
-  printf '%s\n' 'v1_3_1_requalification_acceptance=pass'
+  printf '%s\n' "$accept_marker"
   exit 0
 fi
 
@@ -374,9 +417,8 @@ if [[ "$mode" == --cleanup ]]; then
   mutation_started=true
   stop_candidate
   if [[ -e "$candidate_root" || -L "$candidate_root" ]]; then
-    [[ -d "$candidate_root" && ! -L "$candidate_root" \
-        && "$candidate_root" == "$HOME/Documents/Ishikawa-v1.3.1-qualification" ]] \
-      || fail candidate_root_unsafe 'The qualification root is not the exact safe directory.' 'Inspect it manually; do not remove it through Script 09.'
+    [[ -d "$candidate_root" && ! -L "$candidate_root" ]] \
+      || fail candidate_root_unsafe 'The qualification root is not the exact safe directory.' "Inspect it manually; do not remove it through ${wrapper_label}."
     rm -rf -- "$candidate_root" || cleanup_failed=true
   fi
   if port_listening "$ui_port" || port_listening "$retrieval_port" || container_exists; then
@@ -384,23 +426,23 @@ if [[ "$mode" == --cleanup ]]; then
   fi
   [[ "$cleanup_failed" == false ]] \
     || fail cleanup_incomplete 'The exact candidate process, container, ports, or directory did not clean up.' 'Reconcile only the named v1.3.1 qualification objects.'
-  accepted_ready || fail accepted_v1_3_baseline_lost_after_cleanup 'The untouched accepted v1.3 baseline is not ready after cleanup.' 'Inspect the accepted runtime without recreating the candidate.'
+  accepted_ready || fail "${baseline_label}_baseline_lost_after_cleanup" 'The untouched accepted baseline is not ready after cleanup.' 'Inspect the accepted runtime without recreating the candidate.'
   check_boot_posture || fail boot_posture_changed 'Boot autostart changed during qualification cleanup.' 'Restore the disabled boot posture.'
   complete=true
   write_result pass none 'candidate_removed=true'
-  emit SUMMARY 'state=pass;candidate_removed=true;ports_3385_8385=free;accepted_v1_3=ready'
-  printf '%s\n' 'v1_3_1_requalification_cleanup=pass'
+  emit SUMMARY "state=pass;candidate_removed=true;ports_3385_8385=free;${baseline_label}=ready"
+  printf '%s\n' "$cleanup_marker"
   exit 0
 fi
 
 stage='run_preflight'
-accepted_ready || fail accepted_v1_3_baseline_not_ready \
-  "The accepted v1.3 baseline is not ready before side-by-side qualification;$(accepted_readiness_detail)." \
-  'Reconcile the accepted v1.3 baseline before running Script 09.'
+accepted_ready || fail "${baseline_label}_baseline_not_ready" \
+  "The accepted baseline is not ready before side-by-side qualification;$(accepted_readiness_detail)." \
+  "Reconcile the accepted baseline before running ${wrapper_label}."
 check_boot_posture || fail boot_posture_enabled 'Boot autostart is enabled for an Ishikawa dependency.' 'Restore the accepted disabled boot posture before qualification.'
 [[ ! -e "$candidate_root" && ! -L "$candidate_root" ]] \
-  || fail qualification_root_exists 'A prior v1.3.1 qualification root already exists.' 'Run Script 09 --cleanup, then rerun --run.'
-container_exists && fail qualification_container_exists 'The fixed qualification container already exists.' 'Run Script 09 --cleanup, then rerun --run.'
+  || fail qualification_root_exists 'A prior v1.3.1 qualification root already exists.' "Run ${wrapper_label} --cleanup, then rerun --run."
+container_exists && fail qualification_container_exists 'The fixed qualification container already exists.' "Run ${wrapper_label} --cleanup, then rerun --run."
 for port in "$ui_port" "$retrieval_port"; do
   ! port_listening "$port" || fail qualification_port_in_use "Qualification port ${port} is already listening." 'Free the named private qualification port without changing the accepted v1.3 ports.'
 done
@@ -413,7 +455,7 @@ target_image_id="$("${docker_command[@]}" image inspect "$expected_image_referen
   --entrypoint sh "$expected_image_reference" -c \
   'test ! -e /opt/nextjs/app && test ! -e /opt/nextjs/components && test ! -e /opt/nextjs/lib && test ! -e /opt/nextjs/public && test ! -e /opt/nextjs/next.config.mjs && test ! -e /opt/nextjs/.next' \
   >/dev/null 2>&1 || fail runtime_image_application_boundary_failed 'The exact runtime image is not application-free.' 'Rebuild Script 07; do not qualify this image.'
-emit PREFLIGHT 'state=pass;accepted_v1_3=ready;accepted_database=read_only;ports_3385_8385=free;boot_autostart=false'
+emit PREFLIGHT "state=pass;${baseline_label}=ready;accepted_database=read_only;ports_3385_8385=free;boot_autostart=false"
 emit IMAGE "state=pass;reference=$expected_image_reference;image_id=$expected_image_id;application_in_image=false"
 
 read_secret 'Gemma API key' gemma_key 1 4096
@@ -450,7 +492,7 @@ bash "$extract_root/ishikawa-v1.3.1/verify-ishikawa-release" >/dev/null \
   || fail application_archive_verification_failed 'The exact candidate failed its bundled verifier on EmceeDanko.' 'Restore the Script 08 application handoff.'
 bash "$extract_root/ishikawa-v1.3.1/application/install-ishikawa" \
   --install-root "$candidate_root" >/dev/null \
-  || fail application_install_failed 'The exact application failed isolated installation.' 'Inspect the retained Script 09 detail and correct the package boundary.'
+  || fail application_install_failed 'The exact application failed isolated installation.' "Inspect the retained ${wrapper_label} detail and correct the package boundary."
 candidate_created=true
 mkdir -m 0700 -p -- "$candidate_root/state/reports/qualification"
 
@@ -485,15 +527,15 @@ config_marker="$(ISHIKAWA_GEMMA_API_KEY="$gemma_key" \
   ISHIKAWA_NOMIC_API_KEY="$nomic_key" \
   ISHIKAWA_POSTGRESQL_PASSWORD="$postgresql_password" \
   PYTHONDONTWRITEBYTECODE=1 "$candidate_root/scripts/ishikawa-retrieval-api" --check-readiness)" \
-  || fail candidate_readiness_preflight_failed 'The exact candidate rejected configuration, storage, database, Gemma, or Nomic readiness.' 'Correct the named external dependency and rerun Script 09.'
+  || fail candidate_readiness_preflight_failed 'The exact candidate rejected configuration, storage, database, Gemma, or Nomic readiness.' "Correct the named external dependency and rerun ${wrapper_label}."
 grep -Fxq 'ishikawa_retrieval_api_readiness=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass' <<<"$config_marker" \
   || fail candidate_readiness_marker_invalid 'The exact candidate omitted its complete readiness marker.' 'Treat the preflight as blocked.'
 emit READINESS 'state=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass'
 
 stage='retrieval_api_start'
-pid_file="$candidate_root/state/run/v1.3.1-qualification.pid"
-stdout_log="$candidate_root/state/logs/v1.3.1-qualification.stdout"
-stderr_log="$candidate_root/state/logs/v1.3.1-qualification.stderr"
+pid_file="$candidate_root/state/run/${qualification_slug}.pid"
+stdout_log="$candidate_root/state/logs/${qualification_slug}.stdout"
+stderr_log="$candidate_root/state/logs/${qualification_slug}.stderr"
 export ISHIKAWA_GEMMA_API_KEY="$gemma_key"
 export ISHIKAWA_NOMIC_API_KEY="$nomic_key"
 export ISHIKAWA_POSTGRESQL_PASSWORD="$postgresql_password"
@@ -513,11 +555,11 @@ for _attempt in {1..40}; do
   kill -0 "$api_pid" 2>/dev/null || break
   sleep 0.25
 done
-[[ -s "$pid_file" ]] || fail candidate_api_pid_missing "The API did not publish its PID;$(safe_log_detail "$stderr_log" api_stderr)." 'Correct the API startup boundary and rerun Script 09.'
+[[ -s "$pid_file" ]] || fail candidate_api_pid_missing "The API did not publish its PID;$(safe_log_detail "$stderr_log" api_stderr)." "Correct the API startup boundary and rerun ${wrapper_label}."
 IFS= read -r api_pid <"$pid_file"
 pid_is_candidate_api "$api_pid" || fail candidate_api_process_missing "The exact candidate API exited;$(safe_log_detail "$stderr_log" api_stderr)." 'Correct the reported API startup boundary.'
 wait_http "http://127.0.0.1:${retrieval_port}/ready" 180 API \
-  || fail candidate_api_not_ready "The exact candidate API did not become ready;$(safe_log_detail "$stderr_log" api_stderr)." 'Correct the database/model/API boundary and rerun Script 09.'
+  || fail candidate_api_not_ready "The exact candidate API did not become ready;$(safe_log_detail "$stderr_log" api_stderr)." "Correct the database/model/API boundary and rerun ${wrapper_label}."
 emit API "state=pass;bind=127.0.0.1:${retrieval_port};execution=package_local;autostart=false"
 
 web_values="$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$candidate_root/application/python" python3 -B - "$candidate_root/config/product.yaml" <<'PY'
@@ -538,7 +580,7 @@ web_build_bytes=''
 
 start_web() {
   local run_index="$1"
-  local log_path="$candidate_root/state/logs/v1.3.1-web-${run_index}.log"
+  local log_path="$candidate_root/state/logs/${qualification_slug}-web-${run_index}.log"
   local started elapsed=0 next_heartbeat=15 log_text='' build_bytes=''
   local runtime_command='
 set -eu
@@ -569,7 +611,7 @@ exec node_modules/.bin/next start --hostname "$1" --port "$2"
     --mount "type=bind,src=$candidate_root/application/web/package.json,dst=/opt/nextjs/package.json,readonly" \
     --mount "type=bind,src=$candidate_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly" \
     "$expected_image_reference" sh -c "$runtime_command" runtime 127.0.0.1 "$ui_port" >/dev/null \
-    || fail candidate_web_container_start_failed 'Docker could not create the exact production web container.' 'Correct the reported container boundary and rerun Script 09.'
+    || fail candidate_web_container_start_failed 'Docker could not create the exact production web container.' "Correct the reported container boundary and rerun ${wrapper_label}."
   started="$(date +%s)"
   emit WEB "state=building;run=$run_index;elapsed_seconds=0"
   while (( elapsed < 300 )); do
@@ -611,8 +653,8 @@ emit WEB "state=pass;run=1;next_build=pass;next_start=pass;build_seconds=$first_
 stage='frontier_qualification'
 emit FRONTIER 'state=start;cases=60;r001_first=true;priority_canaries=7'
 frontier_result="$payload_root/frontier-result.json"
-frontier_stdout="$candidate_root/state/logs/v1.3.1-frontier.stdout"
-frontier_stderr="$candidate_root/state/logs/v1.3.1-frontier.stderr"
+frontier_stdout="$candidate_root/state/logs/${qualification_slug}-frontier.stdout"
+frontier_stderr="$candidate_root/state/logs/${qualification_slug}-frontier.stderr"
 timeout --foreground --signal=TERM --kill-after=30s 7200s \
   python3 -B "$payload_root/evaluate-frontier.py" --run \
     --cases "$payload_root/frontier-cases.json" \
@@ -659,7 +701,7 @@ second_build_seconds="$web_build_seconds"; second_build_bytes="$web_build_bytes"
 emit WEB "state=pass;run=2;fresh_container=true;next_build=pass;next_start=pass;build_seconds=$second_build_seconds;build_bytes=$second_build_bytes;tmpfs_bytes=$web_tmpfs_bytes"
 
 stage='final_invariants'
-accepted_ready || fail accepted_v1_3_baseline_lost 'The accepted v1.3 baseline lost readiness during side-by-side qualification.' 'Stop and clean only the v1.3.1 qualification runtime, then reconcile v1.3.'
+accepted_ready || fail "${baseline_label}_baseline_lost" 'The accepted baseline lost readiness during side-by-side qualification.' 'Stop and clean only the isolated qualification runtime, then reconcile the accepted runtime.'
 check_boot_posture || fail boot_posture_changed 'Boot autostart changed during qualification.' 'Stop and restore the disabled boot posture.'
 pid_is_candidate_api "$api_pid" && container_running \
   && http_ready "http://127.0.0.1:${retrieval_port}/ready" \
@@ -669,7 +711,7 @@ pid_is_candidate_api "$api_pid" && container_running \
 qualification_receipt="$candidate_root/state/reports/qualification/emceedanko-v1.3.1-qualification.txt"
 qualified_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {
-  printf 'schema=ishikawa.emceedanko-v1.3.1-qualification.v1\n'
+  printf 'schema=%s\n' "$qualification_schema"
   printf 'qualified_at_utc=%s\n' "$qualified_at"
   printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
   printf 'runtime_archive_sha256=%s\n' "$expected_runtime_archive_sha256"
@@ -680,11 +722,11 @@ qualified_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'documents=30\npages=150\nauthoritative_chunks=786\nretrieval_candidates=943\nretrieval_scoring_only=157\nembeddings=943\nrelationship_records=240\nrelationship_pairs=90\n'
   printf 'gemma=pass\nnomic=pass\npostgresql=pass\nretrieval_api=pass\nweb=pass\n'
   printf 'ui_port=%s\nretrieval_api_port=%s\npostgresql_port=%s\n' "$ui_port" "$retrieval_port" "$postgresql_port"
-  printf 'accepted_v1_3_mutated=false\naccepted_database_mutated=false\nboot_autostart=false\n'
+  printf '%s=false\naccepted_database_mutated=false\nboot_autostart=false\n' "$baseline_invariant"
   printf 'human_ui_acceptance=pending\n'
 } >"$qualification_receipt"
 chmod 0600 "$qualification_receipt"
 cp -- "$qualification_receipt" "$result_path"
 complete=true
-emit SUMMARY "state=pass;candidate=ready;ui=http://127.0.0.1:${ui_port};accepted_v1_3=ready;database_mutated=false;next_gate=human_ui_acceptance"
-printf '%s\n' 'v1_3_1_requalification=pass'
+emit SUMMARY "state=pass;candidate=ready;ui=http://127.0.0.1:${ui_port};${baseline_label}=ready;database_mutated=false;next_gate=human_ui_acceptance"
+printf '%s\n' "$run_marker"

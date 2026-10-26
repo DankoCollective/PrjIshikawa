@@ -140,6 +140,25 @@
     mutation. Install through the consolidated `deploy-ishikawa` entrypoint,
     create the protected catalog and manifest inside org-lab, and derive every
     corpus metric from that exact protected run.
+21. V13-92 supersedes only the v1.3.1 runtime-image handoff. After corrected
+    Script 07 and unchanged-application Script 08 pass, run Script 12 `--run`.
+    Script 12 binds application archive
+    `2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69`
+    to corrected runtime archive
+    `b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1`
+    and image
+    `sha256:6c93bcb5ed22de92420c4de4892eecdd08f1badc8b19e4d6f4488711f8f7a31a`.
+    It leaves accepted v1.3.1 on `3384`/`8384`/`5432` untouched, installs the
+    isolated candidate at
+    `~/Documents/Ishikawa-v1.3.1-runtime-qualification`, reuses corpus v3
+    read-only, and proves all 60 frontier cases plus two fresh production
+    build/start containers on `3385`/`8385`. Record human acceptance with
+    Script 12 `--accept`, then remove only that candidate with `--cleanup`.
+22. Do not rerun the original Script 10 promotion or Script 11 assembly after
+    V13-92: both remain deliberately pinned to the superseded image and refuse
+    the corrected handoff. The next numbered promotion and assembly steps must
+    consume the complete Script 12 lifecycle evidence and corrected image
+    identity before replacing accepted v1.3.1 or publishing a new carry.
 
 ## Active commands
 
@@ -154,6 +173,7 @@
 - `deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh`
 - `deployment/scripts/10_promote-v1.3.1-on-emceedanko.sh`
 - `deployment/scripts/11_assemble-ishikawa-v1.3.1-deployment-package.sh`
+- `deployment/scripts/12_requalify-v1.3.1-corrected-runtime-on-emceedanko.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`
 
@@ -223,3 +243,11 @@ the exact v1.3.1 runtime on `5432`/`8384`/`3384`, and leaves v1.3 available as
 an automatic and explicit pre-acceptance rollback source. Script 10 `--accept`
 is non-secret and finalizes retirement; `--rollback` requires the same three
 runtime secrets. The direct EmceeDanko model tunnel remains operator-managed.
+
+Script 12 uses the same reviewed side-by-side lifecycle with a distinct
+corrected-runtime profile, candidate root, container name, receipt schemas,
+artifact lane, and standalone result. Its `--run` mode has the same three
+hidden inputs and requires the operator-managed Gemma/Nomic forwards on
+EmceeDanko ports `18000`/`18001`. A passing run leaves only the isolated
+corrected-runtime candidate on `3385`/`8385`; accepted v1.3.1 and its database
+remain unchanged until a later promotion step.

@@ -730,3 +730,32 @@ the accepted corpus-v3 state during the switch. Removing the old image before
 successful v1.3.1 acceptance would destroy the only immediate application
 rollback path; retaining it after acceptance would leave the superseded
 security posture unnecessarily available.
+
+### V13-92 — Package-manager-free corrected runtime
+
+Decision: Replace the carry runtime image with a smaller exact image that
+contains no npm, Yarn, Corepack, package-manager cache, or nested
+package-manager dependencies. Remove the base-bundled package managers before
+dependency installation, execute only checksum-pinned npm `11.21.1` by its
+absolute CLI path as a disposable build tool, update tzdata to
+`2026e-0+deb12u1`, remove the build tool, and flatten the final filesystem.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Keep the external application, Node/Next/React versions,
+Bookworm base, AMD64 target, ports, corpus-v3 state, and deployment architecture
+unchanged. Bind every downstream receipt to the corrected image, repeat exact
+production/frontier/human acceptance, then remove the superseded image and
+archive before stable carry publication. Do not execute the npm `11.19.1` or
+Yarn copies bundled in the base image and do not use a broad Docker prune.
+
+Reason/Evidence: The first complete Trivy scan found fourteen fixable records
+only in global npm's dependency tree plus stale timezone data. Corrected Script
+07 produced archive
+`b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1`
+and image
+`sha256:6c93bcb5ed22de92420c4de4892eecdd08f1badc8b19e4d6f4488711f8f7a31a`.
+The corrected exact-archive scan has zero Node/JavaScript findings and zero
+records with an available fixed version. The remaining Debian records retain
+the itemized non-reachable or distribution dispositions in
+`deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`.

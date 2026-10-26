@@ -31,11 +31,59 @@ readonly evaluator="$repo_root/qualification/frontier/evaluate-frontier.py"
 readonly frontier_cases="$repo_root/qualification/frontier/frontier-cases.json"
 readonly default_artifact_parent="$repo_root/local/artifacts"
 readonly artifact_parent="${ISHIKAWA_SCRIPT09_ARTIFACT_PARENT:-$default_artifact_parent}"
-readonly artifact_current="$artifact_parent/emceedanko-v1.3.1-requalification-current"
-readonly default_report_root="$repo_root/local/reports/emceedanko-v1.3.1-requalification"
 readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
-readonly expected_runtime_archive_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
-readonly expected_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
+
+profile="${ISHIKAWA_REQUALIFICATION_PROFILE:-legacy}"
+case "$profile" in
+  legacy)
+    artifact_basename='emceedanko-v1.3.1-requalification-current'
+    report_basename='emceedanko-v1.3.1-requalification'
+    expected_runtime_archive_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
+    expected_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
+    wrapper_command_name='09_requalify-v1.3.1-on-emceedanko.sh'
+    script_label='Script 09'
+    result_key='script_09_v1_3_1_requalification'
+    helper_ready_marker='v1_3_1_requalification_helper=ready'
+    qualification_schema='ishikawa.emceedanko-v1.3.1-qualification.v1'
+    acceptance_schema='ishikawa.emceedanko-v1.3.1-acceptance.v1'
+    action_schema='ishikawa.emceedanko-v1.3.1-action.v1'
+    baseline_invariant='accepted_v1_3_mutated'
+    baseline_boundary='accepted_v1_3_mutation'
+    run_marker='v1_3_1_requalification=pass'
+    accept_marker='v1_3_1_requalification_acceptance=pass'
+    cleanup_marker='v1_3_1_requalification_cleanup=pass'
+    candidate_relative='Documents/Ishikawa-v1.3.1-qualification'
+    ;;
+  runtime-refresh)
+    artifact_basename='emceedanko-v1.3.1-runtime-requalification-current'
+    report_basename='emceedanko-v1.3.1-runtime-requalification'
+    expected_runtime_archive_sha256='b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1'
+    expected_image_id='sha256:6c93bcb5ed22de92420c4de4892eecdd08f1badc8b19e4d6f4488711f8f7a31a'
+    wrapper_command_name='12_requalify-v1.3.1-corrected-runtime-on-emceedanko.sh'
+    script_label='Script 12'
+    result_key='script_12_v1_3_1_corrected_runtime_requalification'
+    helper_ready_marker='v1_3_1_runtime_requalification_helper=ready'
+    qualification_schema='ishikawa.emceedanko-v1.3.1-runtime-qualification.v1'
+    acceptance_schema='ishikawa.emceedanko-v1.3.1-runtime-acceptance.v1'
+    action_schema='ishikawa.emceedanko-v1.3.1-runtime-action.v1'
+    baseline_invariant='accepted_v1_3_1_mutated'
+    baseline_boundary='accepted_v1_3_1_mutation'
+    run_marker='v1_3_1_runtime_requalification=pass'
+    accept_marker='v1_3_1_runtime_requalification_acceptance=pass'
+    cleanup_marker='v1_3_1_runtime_requalification_cleanup=pass'
+    candidate_relative='Documents/Ishikawa-v1.3.1-runtime-qualification'
+    ;;
+  *)
+    printf 'Unsupported requalification profile: %s\n' "$profile" >&2
+    exit 2
+    ;;
+esac
+readonly profile artifact_basename report_basename expected_runtime_archive_sha256
+readonly expected_image_id wrapper_command_name script_label result_key helper_ready_marker
+readonly qualification_schema acceptance_schema action_schema baseline_invariant
+readonly baseline_boundary run_marker accept_marker cleanup_marker candidate_relative
+readonly artifact_current="$artifact_parent/$artifact_basename"
+readonly default_report_root="$repo_root/local/reports/$report_basename"
 
 target="${APPLICATION_HOST_TARGET:-DankoSurface_EmceeDanko}"
 expected_hostname="${APPLICATION_HOST_EXPECTED_HOSTNAME:-EmceeDanko}"
@@ -61,8 +109,8 @@ ssh_args=()
 
 usage() {
   printf '%s\n' \
-    'Usage: 09_requalify-v1.3.1-on-emceedanko.sh --validate-only' \
-    '       09_requalify-v1.3.1-on-emceedanko.sh {--run|--accept|--cleanup}' \
+    "Usage: ${wrapper_command_name} --validate-only" \
+    "       ${wrapper_command_name} {--run|--accept|--cleanup}" \
     '              [--target SSH_ALIAS] [--identity-file ABSOLUTE_PATH]' \
     '              [--report-root ABSOLUTE_PATH]' \
     '              [--gemma-base-url http://127.0.0.1:PORT]' \
@@ -70,7 +118,7 @@ usage() {
 }
 
 result() {
-  printf '\nSCRIPT RESULT\nscript_09_v1_3_1_requalification=%s\n' "$1"
+  printf '\nSCRIPT RESULT\n%s=%s\n' "$result_key" "$1"
 }
 
 block() {
@@ -120,17 +168,17 @@ cleanup() {
   if [[ "$master_started" == true ]]; then
     timeout --foreground 10 ssh "${ssh_args[@]}" -O exit "$target" >/dev/null 2>&1
   fi
-  if [[ -n "$work_root" && "$work_root" == /tmp/ishikawa-script-09.* \
+  if [[ -n "$work_root" && "$work_root" == /tmp/ishikawa-script-requalification.* \
       && -d "$work_root" && ! -L "$work_root" ]]; then
     rm -rf -- "$work_root"
   fi
   if [[ -n "$artifact_stage" \
-      && "$artifact_stage" == "$artifact_parent"/.emceedanko-v1.3.1-requalification-current.* \
+      && "$artifact_stage" == "$artifact_parent"/."$artifact_basename".* \
       && -d "$artifact_stage" && ! -L "$artifact_stage" ]]; then
     rm -rf -- "$artifact_stage"
   fi
   if [[ -n "$artifact_probe" \
-      && "$artifact_probe" == "$artifact_parent"/.emceedanko-v1.3.1-publication-probe.* \
+      && "$artifact_probe" == "$artifact_parent"/."${artifact_basename%-current}"-publication-probe.* \
       && -d "$artifact_probe" && ! -L "$artifact_probe" ]]; then
     rmdir -- "$artifact_probe" 2>/dev/null || true
   fi
@@ -140,15 +188,15 @@ cleanup() {
 unexpected_error() {
   local status="$1" line="$2"
   block unexpected_command_failure \
-    "An unhandled command failed at Script 09 line ${line} with exit code ${status}." \
+    "An unhandled command failed at ${script_label} line ${line} with exit code ${status}." \
     'Review the retained report and correct the complete failing stage.' "$status"
 }
 
 trap cleanup EXIT
 trap 'unexpected_error "$?" "$LINENO"' ERR
-trap 'stage=interrupted; block signal_hangup "Script 09 received SIGHUP." "Review target cleanup state and rerun the appropriate mode." 129' HUP
-trap 'stage=interrupted; block signal_interrupt "Script 09 was interrupted." "Review target cleanup state and rerun the appropriate mode." 130' INT
-trap 'stage=interrupted; block signal_termination "Script 09 received SIGTERM." "Review target cleanup state and rerun the appropriate mode." 143' TERM
+trap 'stage=interrupted; block signal_hangup "${script_label} received SIGHUP." "Review target cleanup state and rerun the appropriate mode." 129' HUP
+trap 'stage=interrupted; block signal_interrupt "${script_label} was interrupted." "Review target cleanup state and rerun the appropriate mode." 130' INT
+trap 'stage=interrupted; block signal_termination "${script_label} received SIGTERM." "Review target cleanup state and rerun the appropriate mode." 143' TERM
 
 validate_loopback_url() {
   python3 -B - "$1" <<'PY'
@@ -167,14 +215,14 @@ PY
 qualification_receipt_valid() {
   local receipt_path="$1"
   [[ -f "$receipt_path" && ! -L "$receipt_path" ]] \
-    && grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-qualification.v1' "$receipt_path" \
+    && grep -Fxq "schema=$qualification_schema" "$receipt_path" \
     && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt_path" \
     && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$receipt_path" \
     && grep -Fxq "image_id=$expected_image_id" "$receipt_path" \
     && grep -Fxq 'production_build_start=pass' "$receipt_path" \
     && grep -Fxq 'fresh_container_rebuild=pass' "$receipt_path" \
     && grep -Fxq 'frontier_cases=60/60' "$receipt_path" \
-    && grep -Fxq 'accepted_v1_3_mutated=false' "$receipt_path" \
+    && grep -Fxq "${baseline_invariant}=false" "$receipt_path" \
     && grep -Fxq 'accepted_database_mutated=false' "$receipt_path" \
     && grep -Fxq 'boot_autostart=false' "$receipt_path" \
     && grep -Fxq 'human_ui_acceptance=pending' "$receipt_path"
@@ -195,7 +243,7 @@ done
 case "$mode" in --validate-only|--run|--accept|--cleanup) ;; *) block mode_invalid 'Select exactly one supported mode.' 'Use --validate-only, --run, --accept, or --cleanup.' 2 ;; esac
 [[ "$target" =~ ^[A-Za-z0-9_@.:-]+$ ]] || block target_invalid 'The SSH target is not bounded.' 'Use a configured alias or USER@HOST.'
 [[ "$expected_hostname" == EmceeDanko && "$expected_os_version" == 24.04 ]] \
-  || block frozen_target_changed 'Script 09 is frozen to EmceeDanko Ubuntu 24.04 AMD64.' 'Restore the frozen target facts.'
+  || block frozen_target_changed "${script_label} is frozen to EmceeDanko Ubuntu 24.04 AMD64." 'Restore the frozen target facts.'
 [[ "$report_root" == /* && ! -L "$report_root" ]] || block report_root_unsafe 'The report root must be an absolute non-symlink path.' 'Correct the report root.'
 [[ "$artifact_parent" == /* && "$artifact_parent" != / && ! -L "$artifact_parent" ]] \
   || block artifact_parent_unsafe 'The evidence artifact parent must be an absolute non-symlink directory path.' 'Correct the artifact parent.'
@@ -226,10 +274,10 @@ for required_file in \
     || block required_input_unsafe "A required exact input is missing or unsafe: ${required_file}." 'Restore Script 07, Script 08, or the frozen frontier input.'
 done
 bash -n "${BASH_SOURCE[0]}" "$target_helper" \
-  || block shell_syntax_invalid 'Script 09 or its target helper failed shell parsing.' 'Correct the complete parse failure.'
-helper_validation="$(bash "$target_helper" --validate-only)" \
+  || block shell_syntax_invalid "${script_label} or its target helper failed shell parsing." 'Correct the complete parse failure.'
+helper_validation="$(ISHIKAWA_REQUALIFICATION_PROFILE="$profile" bash "$target_helper" --validate-only)" \
   || block helper_validation_failed 'The target helper rejected its local contract.' 'Correct the helper before target contact.'
-grep -Fxq 'v1_3_1_requalification_helper=ready' <<<"$helper_validation" \
+grep -Fxq "$helper_ready_marker" <<<"$helper_validation" \
   || block helper_ready_marker_missing 'The helper omitted its exact ready marker.' 'Treat the helper as unvalidated.'
 (
   cd -- "$application_root"
@@ -259,11 +307,11 @@ helper_sha256="$(sha256sum -- "$target_helper" | awk '{print $1}')"
 
 if [[ "$mode" == --validate-only ]]; then
   printf '%s\n' \
-    'purpose=validate_exact_v1_3_1_production_requalification' \
+    "purpose=validate_exact_v1_3_1_${profile//-/_}_production_requalification" \
     "application_archive_sha256=$application_sha256" \
     "runtime_archive_sha256=$runtime_archive_sha256" \
     "image_id=$runtime_image_id" \
-    'accepted_v1_3_mutation=false;accepted_database_mutation=false;target_contact=false'
+    "${baseline_boundary}=false;accepted_database_mutation=false;target_contact=false"
   result ready
   exit 0
 fi
@@ -273,14 +321,14 @@ mkdir -p -- "$report_root" "$artifact_parent" \
   || block local_output_parent_unwritable 'A local report or artifact parent could not be created.' 'Correct the local workspace permissions and rerun.'
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="$(mktemp "$report_root/requalification_${mode#--}_${timestamp}_XXXXXX.txt")" \
-  || block report_creation_failed 'The Script 09 report could not be created.' 'Correct local report permissions.'
-work_root="$(mktemp -d /tmp/ishikawa-script-09.XXXXXX)" \
+  || block report_creation_failed "The ${script_label} report could not be created." 'Correct local report permissions.'
+work_root="$(mktemp -d /tmp/ishikawa-script-requalification.XXXXXX)" \
   || block workspace_creation_failed 'The private local workspace could not be created.' 'Correct /tmp permissions or capacity.'
 emit() { printf '[%s] %s\n' "$2" "$1" | tee -a "$report_path"; }
 emit "report_path=$report_path;state=start;mode=${mode#--}" READINESS
 emit "application_archive_sha256=$application_sha256;runtime_archive_sha256=$runtime_archive_sha256;image_id=$runtime_image_id;helper_sha256=$helper_sha256" READINESS
-emit 'accepted_v1_3_mutation=false;accepted_database_mutation=false;boot_autostart_change=false' BOUNDARY
-artifact_probe="$artifact_parent/.emceedanko-v1.3.1-publication-probe.${timestamp}.$$"
+emit "${baseline_boundary}=false;accepted_database_mutation=false;boot_autostart_change=false" BOUNDARY
+artifact_probe="$artifact_parent/.${artifact_basename%-current}-publication-probe.${timestamp}.$$"
 mkdir -- "$artifact_probe" \
   || block artifact_parent_unwritable 'The local evidence lane cannot create a staging directory.' 'Correct the local artifact directory permissions before target work.'
 rmdir -- "$artifact_probe" \
@@ -314,7 +362,7 @@ chmod 0755 "$payload_root/requalify-v1.3.1-on-emceedanko" "$payload_root/evaluat
   ) >SHA256SUMS
   sha256sum --check --strict SHA256SUMS >/dev/null
 )
-payload_archive="$work_root/script-09-payload.tar.gz"
+payload_archive="$work_root/requalification-payload.tar.gz"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='UTC 1970-01-01' \
   -czf "$payload_archive" -C "$work_root" payload
 payload_sha256="$(sha256sum -- "$payload_archive" | awk '{print $1}')"
@@ -322,7 +370,7 @@ emit "state=pass;payload_sha256=$payload_sha256;transfer_bytes=$(stat -Lc %s -- 
 
 stage='authentication'
 emit 'state=waiting_for_ssh_private_key_passphrase_if_prompted' AUTHENTICATION
-control_path="/tmp/is09-${timestamp}-%C"
+control_path="/tmp/isrq-${timestamp}-%C"
 ssh_args=(-o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \
   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ControlMaster=auto \
   -o "ControlPath=$control_path" -o ControlPersist=300)
@@ -330,7 +378,7 @@ ssh_args=(-o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ConnectionAttempt
 ssh -G "${ssh_args[@]}" "$target" >/dev/null \
   || block ssh_configuration_invalid 'OpenSSH rejected the bounded target configuration.' 'Correct the SSH alias or identity.'
 timeout --foreground 120 ssh "${ssh_args[@]}" -Nf "$target" \
-  || block ssh_master_start_failed 'SSH authentication or connection failed.' 'Correct SSH access and rerun Script 09.'
+  || block ssh_master_start_failed 'SSH authentication or connection failed.' "Correct SSH access and rerun ${script_label}."
 master_started=true
 timeout --foreground 10 ssh "${ssh_args[@]}" -O check "$target" >/dev/null \
   || block ssh_master_check_failed 'The authenticated SSH control master was not ready.' 'Correct SSH access.'
@@ -343,9 +391,9 @@ timeout --foreground 30 ssh "${ssh_args[@]}" -o BatchMode=yes "$target" \
   || block remote_directory_failed 'The private target transfer directory could not be created.' 'Review EmceeDanko permissions.'
 remote_created=true
 timeout --foreground 300 scp "${ssh_args[@]}" "$payload_archive" "$target:$remote_root/" >/dev/null \
-  || block transfer_failed 'The checksum-bound Script 09 payload failed to transfer.' 'Correct SSH transport and rerun.'
+  || block transfer_failed "The checksum-bound ${script_label} payload failed to transfer." 'Correct SSH transport and rerun.'
 timeout --foreground 180 ssh "${ssh_args[@]}" -o BatchMode=yes "$target" \
-  "cd '$remote_root' && printf '%s  %s\n' '$payload_sha256' 'script-09-payload.tar.gz' | sha256sum --check --strict - >/dev/null && tar -xzf script-09-payload.tar.gz && cd payload && sha256sum --check --strict SHA256SUMS >/dev/null" \
+  "cd '$remote_root' && printf '%s  %s\n' '$payload_sha256' 'requalification-payload.tar.gz' | sha256sum --check --strict - >/dev/null && tar -xzf requalification-payload.tar.gz && cd payload && sha256sum --check --strict SHA256SUMS >/dev/null" \
   || block transferred_payload_invalid 'EmceeDanko rejected the payload archive or its internal checksums.' 'Correct the transfer; no candidate action was run.'
 emit 'state=pass;target_checksums=pass' TRANSFER
 
@@ -353,7 +401,7 @@ if [[ "$mode" != --run && ! -f "$artifact_current/qualification-receipt.txt" ]];
   stage='qualification_receipt_recovery'
   recovered_qualification_receipt="$work_root/recovered-qualification-receipt.txt"
   timeout --foreground 60 scp "${ssh_args[@]}" \
-    "$target:Documents/Ishikawa-v1.3.1-qualification/state/reports/qualification/emceedanko-v1.3.1-qualification.txt" \
+    "$target:${candidate_relative}/state/reports/qualification/emceedanko-v1.3.1-qualification.txt" \
     "$recovered_qualification_receipt" >/dev/null \
     || block qualification_receipt_recovery_failed 'The durable target qualification receipt could not be recovered before the requested lifecycle action.' 'Keep the candidate unchanged and inspect its qualification state.'
   qualification_receipt_valid "$recovered_qualification_receipt" \
@@ -372,7 +420,7 @@ tty_input=/dev/null
 remote_timeout=900
 [[ "$mode" == --run ]] && remote_timeout=9000
 timeout --foreground "$remote_timeout" ssh -tt "${ssh_args[@]}" -o BatchMode=yes "$target" \
-  "cd '$remote_root/payload' && bash ./requalify-v1.3.1-on-emceedanko '$mode' --payload-root '$remote_root/payload' --result-path '$remote_root/payload/target-result.txt' --expected-hostname '$expected_hostname' --expected-os-version '$expected_os_version' --expected-architecture amd64 --gemma-base-url '$gemma_base_url' --nomic-base-url '$nomic_base_url' --expected-helper-sha256 '$helper_sha256'" \
+  "cd '$remote_root/payload' && ISHIKAWA_REQUALIFICATION_PROFILE='$profile' bash ./requalify-v1.3.1-on-emceedanko '$mode' --payload-root '$remote_root/payload' --result-path '$remote_root/payload/target-result.txt' --expected-hostname '$expected_hostname' --expected-os-version '$expected_os_version' --expected-architecture amd64 --gemma-base-url '$gemma_base_url' --nomic-base-url '$nomic_base_url' --expected-helper-sha256 '$helper_sha256'" \
   <"$tty_input" >"$stream_path" 2>&1 &
 remote_pid="$!"
 if wait "$remote_pid"; then remote_status=0; else remote_status="$?"; fi
@@ -380,16 +428,16 @@ remote_pid=''
 if wait "$stream_pid"; then tee_status=0; else tee_status="$?"; fi
 stream_pid=''
 rm -f -- "$stream_path"
-(( tee_status == 0 )) || block report_stream_failed 'The live Script 09 report stream failed.' 'Restore the local report lane.'
+(( tee_status == 0 )) || block report_stream_failed "The live ${script_label} report stream failed." 'Restore the local report lane.'
 if (( remote_status != 0 )); then
   [[ "$remote_status" != 124 ]] || block target_action_timeout "The ${mode#--} action exceeded its bounded timeout." 'Review the retained target milestones and cleanup state.'
   nested_reason="$(tr -d '\r' <"$report_path" | sed -n 's/^reason=\([a-z0-9_]*\)$/\1/p' | tail -n 1)"
   block "${nested_reason:-target_action_failed}" "The target ${mode#--} action exited with status ${remote_status}." 'Correct all retained failure details before retrying.' "$remote_status"
 fi
 case "$mode" in
-  --run) marker='v1_3_1_requalification=pass'; receipt_name='qualification-receipt.txt' ;;
-  --accept) marker='v1_3_1_requalification_acceptance=pass'; receipt_name='acceptance-receipt.txt' ;;
-  --cleanup) marker='v1_3_1_requalification_cleanup=pass'; receipt_name='cleanup-receipt.txt' ;;
+  --run) marker="$run_marker"; receipt_name='qualification-receipt.txt' ;;
+  --accept) marker="$accept_marker"; receipt_name='acceptance-receipt.txt' ;;
+  --cleanup) marker="$cleanup_marker"; receipt_name='cleanup-receipt.txt' ;;
 esac
 grep -Fqx "$marker" < <(tr -d '\r' <"$report_path") \
   || block target_pass_marker_missing 'The target action exited without its exact pass marker.' 'Treat the action as incomplete.'
@@ -400,7 +448,7 @@ timeout --foreground 60 scp "${ssh_args[@]}" "$target:$remote_root/payload/targe
 grep -Fxq "application_archive_sha256=$expected_application_sha256" "$work_root/$receipt_name" \
   && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$work_root/$receipt_name" \
   && grep -Fxq "image_id=$expected_image_id" "$work_root/$receipt_name" \
-  && grep -Fxq 'accepted_v1_3_mutated=false' "$work_root/$receipt_name" \
+  && grep -Fxq "${baseline_invariant}=false" "$work_root/$receipt_name" \
   && grep -Fxq 'accepted_database_mutated=false' "$work_root/$receipt_name" \
   && grep -Fxq 'boot_autostart=false' "$work_root/$receipt_name" \
   || block returned_receipt_invalid 'The returned target receipt omitted an exact identity or safety invariant.' 'Do not publish the receipt.'
@@ -410,14 +458,14 @@ case "$mode" in
       || block returned_qualification_receipt_invalid 'The returned qualification receipt omitted an exact production gate.' 'Do not publish the qualification evidence.'
     ;;
   --accept)
-    grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-acceptance.v1' "$work_root/$receipt_name" \
+    grep -Fxq "schema=$acceptance_schema" "$work_root/$receipt_name" \
       && grep -Fxq 'human_ui_acceptance=accepted' "$work_root/$receipt_name" \
       && grep -Fxq 'production_build_start=pass' "$work_root/$receipt_name" \
       && grep -Fxq 'frontier_cases=60/60' "$work_root/$receipt_name" \
       || block returned_acceptance_receipt_invalid 'The returned acceptance receipt omitted an exact human or production gate.' 'Do not publish acceptance.'
     ;;
   --cleanup)
-    grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-action.v1' "$work_root/$receipt_name" \
+    grep -Fxq "schema=$action_schema" "$work_root/$receipt_name" \
       && grep -Fxq 'mode=cleanup' "$work_root/$receipt_name" \
       && grep -Fxq 'state=pass' "$work_root/$receipt_name" \
       && grep -Fxq 'detail=candidate_removed=true' "$work_root/$receipt_name" \
@@ -426,7 +474,7 @@ case "$mode" in
 esac
 
 stage='local_evidence_publication'
-artifact_stage="$artifact_parent/.emceedanko-v1.3.1-requalification-current.${timestamp}.$$"
+artifact_stage="$artifact_parent/.${artifact_basename}.${timestamp}.$$"
 mkdir -- "$artifact_stage" \
   || block evidence_stage_creation_failed 'The local evidence staging directory could not be created.' 'Correct the local artifact lane; the target result remains durable.'
 if [[ -e "$artifact_current" || -L "$artifact_current" ]]; then
@@ -444,7 +492,7 @@ if [[ -n "$recovered_qualification_receipt" ]]; then
     || block recovered_qualification_publication_failed 'The recovered qualification receipt could not be staged locally.' 'Preserve the target candidate and inspect the local artifact lane.'
 fi
 if [[ "$mode" != --run && ! -f "$artifact_stage/qualification-receipt.txt" ]]; then
-  block qualification_receipt_missing 'Acceptance or cleanup cannot publish without the exact qualification receipt.' 'Run Script 09 --run and preserve its returned receipt first.'
+  block qualification_receipt_missing 'Acceptance or cleanup cannot publish without the exact qualification receipt.' "Run ${script_label} --run and preserve its returned receipt first."
 fi
 if [[ "$mode" == --accept && -e "$artifact_stage/acceptance-receipt.txt" ]]; then
   block acceptance_receipt_exists 'The current evidence already contains acceptance.' 'Review it rather than replacing it.'
@@ -460,7 +508,7 @@ cp -- "$work_root/$receipt_name" "$artifact_stage/$receipt_name" \
   sha256sum --check --strict SHA256SUMS >/dev/null
 )
 if [[ -e "$artifact_current" || -L "$artifact_current" ]]; then
-  evidence_backup="$artifact_parent/.emceedanko-v1.3.1-requalification-previous.${timestamp}.$$"
+  evidence_backup="$artifact_parent/.${artifact_basename%-current}-previous.${timestamp}.$$"
   mv -- "$artifact_current" "$evidence_backup"
   if ! mv -- "$artifact_stage" "$artifact_current"; then
     mv -- "$evidence_backup" "$artifact_current"
@@ -479,7 +527,7 @@ emit "state=pass;receipt=$receipt_name;evidence=$artifact_current" RETURN
 stage='remote_cleanup'
 timeout --foreground 120 ssh "${ssh_args[@]}" -o BatchMode=yes "$target" \
   "rm -rf -- '$remote_root' && test ! -e '$remote_root'" >/dev/null \
-  || block remote_cleanup_failed 'The private Script 09 transfer directory was not removed.' 'Remove only the reported private transfer directory.'
+  || block remote_cleanup_failed "The private ${script_label} transfer directory was not removed." 'Remove only the reported private transfer directory.'
 remote_created=false
 timeout --foreground 10 ssh "${ssh_args[@]}" -O exit "$target" >/dev/null 2>&1 || true
 master_started=false
@@ -493,9 +541,9 @@ case "$mode" in
       'UI address after forwarding: http://127.0.0.1:3385' \
       "Forward in a second terminal: ssh -N -T -L 127.0.0.1:3385:127.0.0.1:3385 $target" \
       'After human UI review, accept with:' \
-      '  bash ./deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh --accept' \
+      "  bash ./deployment/scripts/${wrapper_command_name} --accept" \
       'To remove the isolated candidate without acceptance, use:' \
-      '  bash ./deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh --cleanup' \
+      "  bash ./deployment/scripts/${wrapper_command_name} --cleanup" \
       | tee -a "$report_path"
     ;;
   --accept)
@@ -503,7 +551,7 @@ case "$mode" in
       '' \
       'OPERATOR ACTION' \
       'Remove the accepted isolated qualification runtime with:' \
-      '  bash ./deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh --cleanup' \
+      "  bash ./deployment/scripts/${wrapper_command_name} --cleanup" \
       | tee -a "$report_path"
     ;;
 esac

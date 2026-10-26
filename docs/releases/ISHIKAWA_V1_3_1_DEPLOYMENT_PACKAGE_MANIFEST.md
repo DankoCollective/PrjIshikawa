@@ -1,5 +1,11 @@
 # Ishikawa v1.3.1 Deployment Package Manifest
 
+> **Superseded carry identity — do not deploy.** This record describes the
+> pre-V13-92 candidate and is retained only as historical evidence. Its
+> package receipt remains non-installable. A new package manifest must be
+> generated after the corrected runtime passes Script 12 acceptance and the
+> corrected production promotion gate.
+
 ## Purpose
 
 Define the complete minimal file set assembled by Script 11. This is the
@@ -19,7 +25,7 @@ until exact-artifact security review, approved destination inventory, any
 required native-prerequisite capture, independent review, and stable-handoff
 publication are complete. The deployer refuses installation in that state.
 
-Script 11 assembled and independently verified the exact candidate on
+The superseded Script 11 run assembled and independently verified that exact candidate on
 2026-10-26. The directory contains 25 files and 173,989,414 bytes on its
 current transfer filesystem. Its controlling identities are:
 

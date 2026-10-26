@@ -317,17 +317,20 @@ are:
   `a5659c63339b82608b300e7c354dc60b777b5564a19eaf6b422f1d461f1b0d52`.
 
 The mandatory post-assembly exact-image scan subsequently opened an advisory
-decision. The candidate remains intact and non-installable while that decision
-is resolved. See
+decision. V13-92 resolved that decision by selecting a corrected,
+package-manager-free runtime. The prior candidate remains intact and
+non-installable as historical evidence; it is not a carry candidate. See
 `deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`.
 
 The remaining ordered gates are:
 
-1. complete the exact-image and exact-application advisory disposition from
-   their recorded SBOMs;
-2. accept the read-only Tech inventory and resolve any required offline native
+1. run and accept Script 12 against the exact corrected runtime, then clean up
+   only its isolated qualification candidate;
+2. promote the accepted corrected runtime on EmceeDanko and reassemble the
+   carry from its new exact lifecycle evidence;
+3. accept the read-only Tech inventory and resolve any required offline native
    prerequisite payload;
-3. complete independent review and atomically promote the exact carry bytes to
+4. complete independent review and atomically promote the exact carry bytes to
    the stable handoff.
 
 Current disposition:

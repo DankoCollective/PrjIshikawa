@@ -2,8 +2,9 @@
 set -Eeuo pipefail
 umask 077
 
-# Exercise the Script 09 target helper through run, acceptance, cleanup, and
-# post-mutation failure cleanup with deterministic command doubles.
+# Exercise the Script 12 corrected-runtime target profile through run,
+# acceptance, cleanup, and post-mutation failure cleanup with deterministic
+# command doubles.
 
 readonly test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$test_dir/../.." && pwd -P)"
@@ -12,6 +13,15 @@ readonly application="$repo_root/local/artifacts/ishikawa-v1.3.1-candidate-curre
 readonly identity="$repo_root/local/artifacts/node-next-runtime-current/image-identity.json"
 readonly evaluator="$repo_root/qualification/frontier/evaluate-frontier.py"
 readonly cases="$repo_root/qualification/frontier/frontier-cases.json"
+readonly profile='runtime-refresh'
+readonly expected_runtime_archive_sha256='b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1'
+readonly expected_image_id='sha256:6c93bcb5ed22de92420c4de4892eecdd08f1badc8b19e4d6f4488711f8f7a31a'
+readonly accepted_relative='Documents/Ishikawa-v1.3.1'
+readonly candidate_relative='Documents/Ishikawa-v1.3.1-runtime-qualification'
+readonly qualification_slug='v1.3.1-runtime-qualification'
+readonly run_marker='v1_3_1_runtime_requalification=pass'
+readonly accept_marker='v1_3_1_runtime_requalification_acceptance=pass'
+readonly cleanup_marker='v1_3_1_runtime_requalification_cleanup=pass'
 
 root="$(mktemp -d /tmp/ishikawa-requalification-target-test.XXXXXX)"
 cleanup() {
@@ -24,8 +34,8 @@ cleanup() {
       tail -n 80 "$output" >&2 || true
     done
   fi
-  if [[ -f "$root/home/Documents/Ishikawa-v1.3.1-qualification/state/run/v1.3.1-qualification.pid" ]]; then
-    pid="$(<"$root/home/Documents/Ishikawa-v1.3.1-qualification/state/run/v1.3.1-qualification.pid")"
+  if [[ -f "$root/home/$candidate_relative/state/run/$qualification_slug.pid" ]]; then
+    pid="$(<"$root/home/$candidate_relative/state/run/$qualification_slug.pid")"
     [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM "$pid" 2>/dev/null || true
   fi
   rm -rf -- "$root"
@@ -33,8 +43,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p -- "$root/bin" "$root/state" "$root/home/Documents/Ishikawa-v1.3-attended"
-printf '%s\n' accepted-v1.3-unchanged >"$root/home/Documents/Ishikawa-v1.3-attended/sentinel"
+mkdir -p -- "$root/bin" "$root/state" "$root/home/$accepted_relative"
+printf '%s\n' accepted-v1.3.1-unchanged >"$root/home/$accepted_relative/sentinel"
 
 make_mock() {
   local name="$1"
@@ -81,7 +91,7 @@ case "$command" in
   info) exit 0 ;;
   image)
     [[ "${1:-}" == inspect ]] || exit 1
-    if [[ "$*" == *Architecture* ]]; then printf "%s\n" amd64; else printf "%s\n" "sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298"; fi
+    if [[ "$*" == *Architecture* ]]; then printf "%s\n" amd64; else printf "%s\n" "${MOCK_IMAGE_ID:?}"; fi
     ;;
   inspect)
     if [[ "${1:-}" == --format ]]; then
@@ -165,7 +175,7 @@ run_helper() {
   local selected_mode="$1" result="$2" output="$3"
   shift 3
   printf '%s\n' gemma-test-key nomic-test-key-000000000000000000000000 v1.3-test-password-000000000000 \
-    | script -qefc "env HOME='$root/home' PATH='$root/bin:/usr/bin:/bin' MOCK_STATE='$root/state' $* bash '$payload/requalify-v1.3.1-on-emceedanko' '$selected_mode' --payload-root '$payload' --result-path '$result' --expected-hostname EmceeDanko --expected-os-version 24.04 --expected-architecture amd64 --expected-helper-sha256 '$helper_sha'" /dev/null \
+    | script -qefc "env HOME='$root/home' PATH='$root/bin:/usr/bin:/bin' MOCK_STATE='$root/state' MOCK_IMAGE_ID='$expected_image_id' ISHIKAWA_REQUALIFICATION_PROFILE='$profile' $* bash '$payload/requalify-v1.3.1-on-emceedanko' '$selected_mode' --payload-root '$payload' --result-path '$result' --expected-hostname EmceeDanko --expected-os-version 24.04 --expected-architecture amd64 --expected-helper-sha256 '$helper_sha'" /dev/null \
       >"$output" 2>&1
 }
 
@@ -181,19 +191,19 @@ reset_payload() {
 }
 
 run_helper --run "$payload/run-result.txt" "$root/run.out"
-grep -Fq 'v1_3_1_requalification=pass' "$root/run.out"
+grep -Fq "$run_marker" "$root/run.out"
 grep -Fxq 'human_ui_acceptance=pending' "$payload/run-result.txt"
-grep -Fxq 'accepted-v1.3-unchanged' "$root/home/Documents/Ishikawa-v1.3-attended/sentinel"
-[[ -d "$root/home/Documents/Ishikawa-v1.3.1-qualification" && -f "$root/state/container.running" ]]
+grep -Fxq 'accepted-v1.3.1-unchanged' "$root/home/$accepted_relative/sentinel"
+[[ -d "$root/home/$candidate_relative" && -f "$root/state/container.running" ]]
 
 run_helper --accept "$payload/accept-result.txt" "$root/accept.out"
-grep -Fq 'v1_3_1_requalification_acceptance=pass' "$root/accept.out"
+grep -Fq "$accept_marker" "$root/accept.out"
 grep -Fxq 'human_ui_acceptance=accepted' "$payload/accept-result.txt"
 
 run_helper --cleanup "$payload/cleanup-result.txt" "$root/cleanup.out"
-grep -Fq 'v1_3_1_requalification_cleanup=pass' "$root/cleanup.out"
-[[ ! -e "$root/home/Documents/Ishikawa-v1.3.1-qualification" && ! -e "$root/state/container.exists" ]]
-grep -Fxq 'accepted-v1.3-unchanged' "$root/home/Documents/Ishikawa-v1.3-attended/sentinel"
+grep -Fq "$cleanup_marker" "$root/cleanup.out"
+[[ ! -e "$root/home/$candidate_relative" && ! -e "$root/state/container.exists" ]]
+grep -Fxq 'accepted-v1.3.1-unchanged' "$root/home/$accepted_relative/sentinel"
 
 reset_payload
 set +e
@@ -201,9 +211,9 @@ run_helper --run "$payload/baseline-failure-result.txt" "$root/baseline-failure.
 baseline_failure_status="$?"
 set -e
 (( baseline_failure_status != 0 ))
-grep -Fq 'reason=accepted_v1_3_baseline_not_ready' "$root/baseline-failure.out"
+grep -Fq 'reason=accepted_v1_3_1_baseline_not_ready' "$root/baseline-failure.out"
 grep -Fq 'installation=pass;api_ready_http=503;ui_ready_http=200;postgresql=pass' "$root/baseline-failure.out"
-[[ ! -e "$root/home/Documents/Ishikawa-v1.3.1-qualification" && ! -e "$root/state/container.exists" ]]
+[[ ! -e "$root/home/$candidate_relative" && ! -e "$root/state/container.exists" ]]
 
 reset_payload
 set +e
@@ -214,8 +224,8 @@ set -e
 grep -Fq 'reason=candidate_web_build_failed' "$root/failure.out"
 grep -Fxq 'state=blocked' "$payload/failure-result.txt"
 grep -Fxq 'detail=cleanup_failed=false' "$payload/failure-result.txt"
-[[ ! -e "$root/home/Documents/Ishikawa-v1.3.1-qualification" && ! -e "$root/state/container.exists" ]]
-grep -Fxq 'accepted-v1.3-unchanged' "$root/home/Documents/Ishikawa-v1.3-attended/sentinel"
+[[ ! -e "$root/home/$candidate_relative" && ! -e "$root/state/container.exists" ]]
+grep -Fxq 'accepted-v1.3.1-unchanged' "$root/home/$accepted_relative/sentinel"
 
 reset_payload
 set +e
@@ -224,7 +234,7 @@ database_failure_status="$?"
 set -e
 (( database_failure_status != 0 ))
 grep -Fq 'reason=accepted_database_inventory_mismatch' "$root/database-failure.out"
-[[ ! -e "$root/home/Documents/Ishikawa-v1.3.1-qualification" && ! -e "$root/state/container.exists" ]]
+[[ ! -e "$root/home/$candidate_relative" && ! -e "$root/state/container.exists" ]]
 
 reset_payload
 set +e
@@ -234,7 +244,7 @@ set -e
 (( frontier_failure_status != 0 ))
 grep -Fq 'reason=frontier_gate_failed' "$root/frontier-failure.out"
 grep -Fxq 'detail=cleanup_failed=false' "$payload/frontier-failure-result.txt"
-[[ ! -e "$root/home/Documents/Ishikawa-v1.3.1-qualification" && ! -e "$root/state/container.exists" ]]
-grep -Fxq 'accepted-v1.3-unchanged' "$root/home/Documents/Ishikawa-v1.3-attended/sentinel"
+[[ ! -e "$root/home/$candidate_relative" && ! -e "$root/state/container.exists" ]]
+grep -Fxq 'accepted-v1.3.1-unchanged' "$root/home/$accepted_relative/sentinel"
 
-printf '%s\n' 'v1_3_1_requalification_target_harness=pass;run=pass;accept=pass;cleanup=pass;baseline_diagnostic=pass;web_failure_cleanup=pass;database_mismatch=pass;frontier_failure_cleanup=pass'
+printf '%s\n' 'v1_3_1_runtime_requalification_target_harness=pass;run=pass;accept=pass;cleanup=pass;baseline_diagnostic=pass;web_failure_cleanup=pass;database_mismatch=pass;frontier_failure_cleanup=pass'

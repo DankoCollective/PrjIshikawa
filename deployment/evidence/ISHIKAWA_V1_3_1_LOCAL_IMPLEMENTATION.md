@@ -153,11 +153,35 @@ After this correction, all 486 native tests and all 16 deployment harnesses
 passed together, including every Script 09 run, acceptance, cleanup,
 publication, receipt-recovery, failure-propagation, and checksum branch.
 
+The operator then completed human review and accepted the exact running
+v1.3.1 candidate. Script 09 `--accept` recovered and revalidated the durable
+qualification receipt before recording acceptance, published both receipts
+under one verified local checksum manifest, removed its private transfer, and
+left candidate cleanup pending. Exact evidence identities are:
+
+- acceptance report SHA-256:
+  `dbc518a584465fa922db52b3ebf43c4f148aad6bd6ffb40c340b1159dbd34b19`;
+- qualification receipt SHA-256:
+  `c8bd662c1ac3fe7c70f819609266e47aacc0d8b054ad8f65fd495c74fe4e5ed5`;
+- acceptance receipt SHA-256:
+  `afbbf3225e8eebe64be60f7a379abdc22794663f90ce4aceae06d2194c500d40`;
+- accepted application archive SHA-256:
+  `2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69`;
+- accepted runtime archive SHA-256:
+  `af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f`;
+  and
+- accepted image ID:
+  `sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298`.
+
+The acceptance receipt records production build/start pass, 60/60 frontier
+cases, explicit human acceptance, disabled boot autostart, and no mutation of
+accepted v1.3 or its database. The local `SHA256SUMS` verified both receipts.
+
 The remaining ordered gates are:
 
-1. review the already-qualified exact v1.3.1 UI, record human acceptance with
-   Script 09 `--accept`, and then remove the isolated candidate with
-   Script 09 `--cleanup`;
+1. remove only the accepted isolated v1.3.1 qualification candidate with
+   Script 09 `--cleanup` and preserve the verified qualification and
+   acceptance receipts;
 2. complete the exact-image and exact-application advisory disposition from
    their recorded SBOMs;
 3. accept the read-only Tech inventory and resolve any required offline native

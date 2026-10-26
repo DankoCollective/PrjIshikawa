@@ -51,7 +51,7 @@ The exact v1.3 archive and evidence remain immutable as the historical
 behavioral baseline. They are not silently overwritten or relabeled. The
 security dependency refresh and permanent `next build`/`next start` correction
 are a separate patch release, Ishikawa v1.3.1, governed by V13-79 through
-V13-89. v1.3.1 retains the v1.3 schema, corpus-agnostic product behavior,
+V13-90. v1.3.1 retains the v1.3 schema, corpus-agnostic product behavior,
 retrieval metrics, and qualification expectations, but its changed application
 and generic runtime-image bytes require fresh exact-byte qualification and
 human acceptance before org-lab promotion.

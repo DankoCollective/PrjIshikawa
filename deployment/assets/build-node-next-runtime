@@ -12,16 +12,18 @@ umask 077
 #   identity/SBOM/license records, verify the archive, and publish the handoff.
 #
 # Inputs or prerequisites:
-#   The tracked runtime-image directory, Docker with buildx, network access for
-#   the pinned base and npm lock objects, and attended sudo if Docker requires
-#   it. No application, target, model, database, credential, or corpus access.
+#   The tracked runtime-image directory, a native Linux AMD64 Docker host with
+#   buildx, network access for the pinned base and npm lock objects, and
+#   attended sudo if Docker requires it. No application, model, database,
+#   credential, or corpus access.
 #
 # Outputs or artifact lane:
 #   local/artifacts/node-next-runtime-current and an ignored local report.
 #
 # Usage:
-#   bash ./deployment/scripts/build-node-next-runtime.sh --validate-only
-#   bash ./deployment/scripts/build-node-next-runtime.sh --run
+#   bash ./build-node-next-runtime --validate-only
+#   bash ./build-node-next-runtime --run \
+#     --expected-hostname EmceeDanko --expected-os-version 24.04
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
@@ -37,6 +39,9 @@ readonly base_manifest_digest='sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50c
 readonly lock_sha256='9496ebf54d27c63794f5f1680197692ba0424bd323fb9f22f0fcacb2545aae5a'
 
 mode="${1:-}"
+shift || true
+expected_hostname=''
+expected_os_version=''
 current_stage='argument_validation'
 report_path=''
 work_root=''
@@ -85,15 +90,57 @@ trap cleanup EXIT
 trap 'current_stage=interrupted; block signal_interrupt "Runtime image build was interrupted." "Review the retained report and rerun the same command."' INT
 trap 'current_stage=interrupted; block signal_termination "Runtime image build received SIGTERM." "Review the retained report and rerun the same command."' TERM
 
-if [[ "$#" -ne 1 || ( "$mode" != '--validate-only' && "$mode" != '--run' ) ]]; then
+while (( $# > 0 )); do
+  case "$1" in
+    --expected-hostname)
+      [[ $# -ge 2 ]] || block expected_hostname_missing \
+        'The expected hostname value is missing.' \
+        'Supply the expected short hostname.'
+      expected_hostname="$2"
+      shift 2
+      ;;
+    --expected-os-version)
+      [[ $# -ge 2 ]] || block expected_os_version_missing \
+        'The expected operating-system version is missing.' \
+        'Supply the expected Ubuntu NN.NN version.'
+      expected_os_version="$2"
+      shift 2
+      ;;
+    --help|-h)
+      printf '%s\n' \
+        'Usage: build-node-next-runtime --validate-only' \
+        '       build-node-next-runtime --run --expected-hostname NAME --expected-os-version NN.NN'
+      exit 0
+      ;;
+    *)
+      block unsupported_argument \
+        "Unsupported argument: $1" \
+        'Use --help and rerun.'
+      ;;
+  esac
+done
+if [[ "$mode" != '--validate-only' && "$mode" != '--run' ]]; then
   block exactly_one_supported_mode_required \
     'Use exactly one mode: --validate-only or --run.' \
     'Rerun with one supported mode.'
 fi
+[[ -z "$expected_hostname" || "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] \
+  || block expected_hostname_invalid \
+    'The expected hostname is not a bounded short hostname.' \
+    'Correct the expected hostname and rerun.'
+[[ -z "$expected_os_version" || "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] \
+  || block expected_os_version_invalid \
+    'The expected Ubuntu version must use NN.NN.' \
+    'Correct the expected operating-system version and rerun.'
+if [[ "$mode" == --run && ( -z "$expected_hostname" || -z "$expected_os_version" ) ]]; then
+  block expected_target_identity_required \
+    'A native build requires the exact expected hostname and Ubuntu version.' \
+    'Supply both --expected-hostname and --expected-os-version.'
+fi
 
 current_stage='source_preflight'
-for command_name in awk bash cp date docker find grep jq kill mkdir mktemp mv \
-  python3 rm sha256sum sleep sort sudo tail tar tee; do
+for command_name in awk bash cp date df docker dpkg find grep hostname jq kill \
+  mkdir mktemp mv nproc python3 readlink rm sha256sum sleep sort sudo tail tar tee uname; do
   command -v "$command_name" >/dev/null 2>&1 \
     || block "command_missing_${command_name}" \
       "A required local command is unavailable: ${command_name}." \
@@ -132,7 +179,7 @@ grep -Fq 'FROM --platform=linux/amd64 ' "$source_root/Dockerfile" \
   || block image_platform_unpinned \
     'The Dockerfile is not pinned to Linux AMD64.' \
     'Restore the frozen target platform and rerun.'
-for decision in V13-79 V13-80 V13-81 V13-82 V13-83 V13-84 V13-85 V13-86 V13-87 V13-88 V13-89; do
+for decision in V13-79 V13-80 V13-81 V13-82 V13-83 V13-84 V13-85 V13-86 V13-87 V13-88 V13-89 V13-90; do
   decision_block="$(awk -v header="### ${decision} " '
     index($0, header) == 1 {capture=1}
     capture && /^### / && index($0, header) != 1 {exit}
@@ -168,6 +215,52 @@ emit() { printf '%s\n' "$1" | tee -a "$report_path"; }
 emit "[SOURCE] state=pass;platform=linux/amd64;image=${image_reference}"
 emit '[BOUNDARY] application=false;configuration=false;corpus=false;credentials=false;target_state=false;generated_next=false'
 
+current_stage='native_host_preflight'
+actual_hostname="$(hostname -s 2>/dev/null || true)"
+[[ "$actual_hostname" == "$expected_hostname" ]] \
+  || block build_host_mismatch \
+    'The selected build host does not match the frozen native build host.' \
+    'Run numbered Script 07 against the approved EmceeDanko SSH target.'
+os_release_path="$(readlink -f /etc/os-release 2>/dev/null || true)"
+[[ "$os_release_path" == /* && -f "$os_release_path" && ! -L "$os_release_path" \
+    && -r "$os_release_path" ]] \
+  || block build_host_os_release_unavailable \
+    'The native build host operating-system identity file is unavailable or unsafe.' \
+    'Restore the canonical host OS identity and rerun.'
+# shellcheck disable=SC1091
+source "$os_release_path"
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] \
+  || block build_host_os_mismatch \
+    'The selected build host is not the expected Ubuntu release.' \
+    'Correct the Script 07 target identity or stop for review.'
+kernel_machine="$(uname -m)"
+debian_architecture="$(dpkg --print-architecture)"
+[[ "$kernel_machine" == x86_64 && "$debian_architecture" == amd64 ]] \
+  || block native_amd64_build_host_required \
+    'The runtime image must be built on a native Linux AMD64 host; emulated execution is not accepted for this handoff.' \
+    'Run numbered Script 07 against EmceeDanko.'
+cpu_count="$(nproc)"
+memory_available_kib="$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo)"
+temporary_available_kib="$(df -Pk /tmp | awk 'NR == 2 {print $4}')"
+artifact_available_kib="$(df -Pk "$artifact_parent" | awk 'NR == 2 {print $4}')"
+[[ "$cpu_count" =~ ^[0-9]+$ && "$cpu_count" -ge 2 ]] \
+  || block build_cpu_capacity_insufficient \
+    'The native build host exposes fewer than two logical CPUs.' \
+    'Use a build host with at least two logical CPUs.'
+[[ "$memory_available_kib" =~ ^[0-9]+$ && "$memory_available_kib" -ge 4194304 ]] \
+  || block build_memory_capacity_insufficient \
+    'The native build host has less than 4 GiB of available memory.' \
+    'Free memory or use a build host with at least 4 GiB available.'
+[[ "$temporary_available_kib" =~ ^[0-9]+$ && "$temporary_available_kib" -ge 1048576 ]] \
+  || block build_temporary_capacity_insufficient \
+    'The native build host has less than 1 GiB available under /tmp.' \
+    'Free temporary capacity and rerun.'
+[[ "$artifact_available_kib" =~ ^[0-9]+$ && "$artifact_available_kib" -ge 2097152 ]] \
+  || block build_artifact_capacity_insufficient \
+    'The native build workspace has less than 2 GiB available.' \
+    'Free build-workspace capacity and rerun.'
+emit "[HOST] state=pass;os=ubuntu_${VERSION_ID};architecture=amd64;cpu_minimum=pass;memory_minimum=pass;temporary_capacity_minimum=pass;artifact_capacity_minimum=pass"
+
 current_stage='container_access'
 docker_command=(docker)
 if ! docker info >/dev/null 2>&1; then
@@ -185,6 +278,25 @@ fi
   || block docker_buildx_unavailable \
     'Docker buildx is unavailable.' \
     'Install or enable the Docker buildx plugin and rerun.'
+docker_server_architecture="$("${docker_command[@]}" info --format '{{.Architecture}}' 2>/dev/null || true)"
+[[ "$docker_server_architecture" == x86_64 || "$docker_server_architecture" == amd64 ]] \
+  || block docker_native_amd64_unavailable \
+    'The Docker daemon does not report a native AMD64 architecture.' \
+    'Use the approved native AMD64 EmceeDanko Docker daemon.'
+docker_root="$("${docker_command[@]}" info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+[[ "$docker_root" == /* ]] \
+  || block docker_storage_root_unavailable \
+    'The Docker storage root could not be validated.' \
+    'Restore Docker storage access and rerun.'
+if [[ "${docker_command[0]}" == sudo ]]; then
+  docker_available_kib="$(sudo df -Pk "$docker_root" | awk 'NR == 2 {print $4}')"
+else
+  docker_available_kib="$(df -Pk "$docker_root" | awk 'NR == 2 {print $4}')"
+fi
+[[ "$docker_available_kib" =~ ^[0-9]+$ && "$docker_available_kib" -ge 5242880 ]] \
+  || block docker_storage_capacity_insufficient \
+    'The Docker storage root has less than 5 GiB available.' \
+    'Free Docker storage capacity and rerun.'
 emit '[DOCKER] state=pass;buildx=true'
 
 current_stage='image_build'
@@ -271,7 +383,22 @@ artifact_stage="$artifact_parent/.node-next-runtime-current.${timestamp}.$$"
 mkdir -p -- "$artifact_stage" "$artifact_parent/superseded"
 archive="$artifact_stage/node-next-runtime-amd64.tar"
 emit '[ARCHIVE] state=exporting'
-"${docker_command[@]}" save --output "$archive" "$image_reference" \
+"${docker_command[@]}" save "$image_reference" >"$archive" &
+build_pid="$!"
+export_elapsed_seconds=0
+while kill -0 "$build_pid" 2>/dev/null; do
+  sleep 1
+  export_elapsed_seconds=$((export_elapsed_seconds + 1))
+  if kill -0 "$build_pid" 2>/dev/null && (( export_elapsed_seconds % 15 == 0 )); then
+    emit "[ARCHIVE] state=exporting;elapsed_seconds=${export_elapsed_seconds}"
+  fi
+done
+set +e
+wait "$build_pid"
+export_status="$?"
+set -e
+build_pid=''
+(( export_status == 0 )) \
   || block image_export_failed \
     'Docker could not export the verified runtime image.' \
     'Preserve the local image and rerun after correcting storage capacity.'

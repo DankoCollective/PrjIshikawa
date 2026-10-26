@@ -31,6 +31,12 @@ inaccessible Docker metadata are recorded as inventory facts; they do not
 authorize a repair or installation. Review package provenance and security
 advisories before any package payload is downloaded.
 
+The optional expected-hostname check is transient. Retained output contains
+no hostname, account, address, device serial, credential, document content, or
+environment dump. It is limited to OS/architecture, bounded capacity,
+runtime/package identity and health, Docker-image presence, planned-listener
+counts, and PostgreSQL service posture.
+
 The three port values are planned target inputs, not fixed lab assumptions.
 Set them to the ports selected for the target deployment before inventory.
 

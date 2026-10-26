@@ -132,7 +132,7 @@ find "$product_root" -type l -print -quit | grep -q . \
   || { current_stage='preflight'; block python_inventory_mismatch \
     'The canonical Python module inventory is not 52 files.' \
     'Review source drift before rebuilding the release.'; }
-for decision_number in {60..89}; do
+for decision_number in {60..90}; do
   decision="V13-${decision_number}"
   decision_block="$(awk -v header="### ${decision} " '
     index($0, header) == 1 {capture=1}

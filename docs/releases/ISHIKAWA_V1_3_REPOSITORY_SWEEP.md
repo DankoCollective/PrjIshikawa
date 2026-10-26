@@ -129,7 +129,7 @@ accepted the attended v1.3 UI; the tracked content-free receipt is
 
 The accepted v1.3 bytes remain the immutable behavioral baseline. Current
 org-lab work is the separately identified v1.3.1 security and production-web
-correction under frozen V13-79 through V13-89. Its architecture is the external
+correction under frozen V13-79 through V13-90. Its architecture is the external
 application plus a separate application-free generic Linux AMD64 runtime
 image. Every permanent start uses read-only source, a bounded ephemeral
 `.next`, `next build`, and `next start`; no application or generated `.next`

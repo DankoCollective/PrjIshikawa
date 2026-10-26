@@ -12,8 +12,9 @@ runtime. Writable build output belongs in an independently bounded tmpfs at
 
 The base image is pinned to the Linux AMD64 manifest digest for the official
 `node:24.22.1-bookworm-slim` image. The build entrypoint verifies all direct
-runtime versions, builds only Linux AMD64, exports one Docker archive, and
-records its checksum and image identity. The generated CycloneDX SBOM combines
+runtime versions, requires native Linux AMD64 execution, exports one Docker
+archive, and records its checksum and image identity. The generated CycloneDX
+SBOM combines
 the exact npm lock with the installed Debian package inventory from the built
 image; the license record binds npm declarations and each Debian package's
 in-image copyright-file path.

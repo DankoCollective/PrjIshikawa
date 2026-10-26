@@ -16,17 +16,22 @@ This file is a readiness ledger and structured decision record. On 2026-10-26
 the operator froze `CARRY-D01`, `CARRY-D02`, and `CARRY-D06` through
 `CARRY-D08`, `CARRY-D10`, and `CARRY-D11`. The operator also froze corrected
 D03, D04, D05, and D09 after operator clarification and two-agent review
-established their replacement text. All eleven carry decisions are now frozen.
+established their replacement text. `CARRY-D12` freezes the native AMD64 image
+build on EmceeDanko after the ARM64 build host proved unable to execute the
+pinned AMD64 base. All twelve carry decisions are now frozen.
 The matching authoritative decisions are in
 `docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`.
 
 ## Current review boundary
 
-The frozen carry design authorizes bounded local implementation. It does not
-itself authorize target contact, black-corpus access, service or database
-mutation, credential handling, or package promotion. Leave the accepted
-attended v1.3 runtime on EmceeDanko unchanged until an operator-facing
-qualification action is separately authorized.
+The frozen carry design authorizes bounded local implementation and the
+V13-90/CARRY-D12 Script 07 native image build on EmceeDanko. That exception
+authorizes only checksum-bound input transfer, Docker image construction and
+retention, verified artifact return, and private-transfer cleanup. It does not
+authorize Tech contact, black-corpus access, application/service/database/
+listener/boot mutation, credential handling, or package promotion. Leave the
+accepted attended v1.3 application runtime on EmceeDanko unchanged until an
+operator-facing qualification action is separately authorized.
 
 The desired carry time is a target, not a reason to waive a mandatory gate. If
 any blocking item below remains incomplete, the package does not travel.
@@ -344,6 +349,28 @@ operating-system packages, and the accepted EmceeDanko host already supplied
 them. That does not prove org-lab has compatible bytes or permit the target to
 download replacements during deployment.
 
+### CARRY-D12 — Native runtime-image build host
+
+Decision: Build the generic Linux AMD64 runtime image natively on the already
+qualified Ubuntu 24.04 AMD64 EmceeDanko Docker host through numbered Script
+07. Transfer only checksum-bound build inputs and return only the verified
+runtime handoff records and image archive.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Keep DankoSurface as the orchestration and final local
+publication host, but do not install or depend on AMD64 emulation there.
+Require Script 07 to validate native host and Docker architecture plus bounded
+capacity before building, clean its private remote transfer on all branches,
+leave application/database/service/port/boot state unchanged, and retain the
+built image on EmceeDanko for exact-byte v1.3.1 qualification.
+
+Reason/Evidence: The pinned build passed source, dependency-lock, Docker,
+Buildx, network, and base retrieval on DankoSurface, then failed with an AMD64
+`/bin/sh` execution-format error because DankoSurface is ARM64 without AMD64
+emulation. EmceeDanko is already qualified as AMD64 and must receive these
+exact bytes for the next gate.
+
 ## Two-agent review reconciliation
 
 - **RECON-01 — Frozen amendments.** Corrected D03, D04, D05, and D09 express
@@ -365,6 +392,15 @@ download replacements during deployment.
 - **RECON-04 — Later autostart choice.** D05 keeps first proof boot-disabled.
   Whether to enable startup after Tech acceptance is deliberately deferred and
   does not block assembling or carrying the package.
+- **RECON-05 — Native build host.** D12 selects EmceeDanko only as the native
+  AMD64 image-construction and next qualification host. It does not copy
+  EmceeDanko identity, configuration, or operating state into the image or
+  portable Tech package.
+- **RECON-06 — Tech platform and evidence privacy.** The operator reconfirmed
+  Tech as AMD64 with Ubuntu 26.04. The later read-only inventory confirms those
+  facts and required runtime/package/capacity/listener compatibility without
+  retaining hostname, account, address, device serial, credential, document,
+  or other identifying/private values.
 
 ## Implementation checkpoint — 2026-10-26
 
@@ -381,6 +417,9 @@ The bounded local implementation now includes:
 - the application-free runtime Dockerfile and exact npm lock;
 - a runtime-image builder with checksum, identity, archive-load, SBOM,
   license, image-boundary, terminology, failure, and atomic-publication gates;
+- numbered Script 07 for strict, checksum-bound native AMD64 construction on
+  EmceeDanko and verified artifact return without application/service/database
+  mutation;
 - the v1.3.1 external application builder, source manifest, deterministic
   archive, clean installer, application SBOM/license record, content-side
   protected-corpus configuration command, and local publication-language gate;
@@ -423,7 +462,7 @@ AMD64 Docker host. The package remains **NOT CARRY-READY**.
   receipt with the accepted UI state and selected release identity. Evidence:
   `ISHIKAWA_V1_3_RELEASE_FREEZE.md`,
   `ISHIKAWA_V1_3_REPOSITORY_SWEEP.md`, `PROJECT_RUNBOOK.md`,
-  `node_nextjs_runtime_image.md`, and V13-79 through V13-89; reviewer/date:
+  `node_nextjs_runtime_image.md`, and V13-79 through V13-90; reviewer/date:
   current-agent reconciliation, 2026-10-26.
 - [x] **REL-03 — MUST.** Preserve a tracked, content-free human-acceptance
   receipt bound to the exact accepted launch and acceptance report hashes.
@@ -566,9 +605,10 @@ disposition.
   every nondeterministic field before acceptance. Evidence: ___;
   reviewer/date: ___.
 - [ ] **BUILD-03 — MUST.** Build/export the final app-free generic Linux AMD64
-  runtime image, record its image ID/config digest/platform, and verify the
-  standalone archive and absence of Ishikawa source/build output after a clean
-  load. Evidence: ___; reviewer/date: ___.
+  runtime image natively on EmceeDanko through Script 07, record its image
+  ID/config digest/platform, and verify the standalone archive and absence of
+  Ishikawa source/build output after a clean load. Evidence: ___;
+  reviewer/date: ___.
 - [ ] **BUILD-04 — MUST.** Verify every sidecar against the artifact from the
   final directory and independently recompute every SHA-256. Evidence: ___;
   reviewer/date: ___.
@@ -616,10 +656,12 @@ disposition.
 - [ ] **LAB-01 — MUST.** Approve an operator-run, report-producing read-only
   inventory before any target mutation. Do not substitute ad hoc agent SSH.
   Evidence: ___; reviewer/date: ___.
-- [ ] **LAB-02 — MUST.** Verify target hostname/role, Linux/AMD64 identity,
-  capacity, container runtime, PostgreSQL 16, pgvector, native dependencies,
-  current services, canonical paths, users/groups, permissions, listeners,
-  firewall posture, and boot state. Evidence: ___; reviewer/date: ___.
+- [ ] **LAB-02 — MUST.** Transiently confirm the selected target, then retain
+  only Ubuntu 26.04/AMD64 identity, capacity, container/runtime/package
+  versions, PostgreSQL 16, pgvector, native-dependency availability, planned
+  listener collisions, package-manager health, and boot/service posture. Do
+  not retain hostname, account, address, serial, credential, document, or
+  other identifying/private values. Evidence: ___; reviewer/date: ___.
 - [ ] **LAB-03 — MUST.** Resolve UI, Retrieval API, PostgreSQL, Gemma, and Nomic
   ports from target facts. Do not carry EmceeDanko's port-forward assumptions
   as org-lab constants. Evidence: ___; reviewer/date: ___.

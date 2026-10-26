@@ -34,22 +34,35 @@ no Ishikawa source, application configuration, corpus, credentials, database
 state, target-host state, or generated `.next` output. It has no product
 entrypoint; its default command only displays Next.js help.
 
-Build and validate the source contract with:
+Validate the native-build source contract without target contact with:
 
 ```bash
-bash ./deployment/scripts/build-node-next-runtime.sh --validate-only
+bash ./deployment/scripts/07_build-node-next-runtime-on-emceedanko.sh --validate-only
 ```
 
-Build, verify, export, and publish the local handoff with:
+Build natively on EmceeDanko, verify both transfer directions, and publish the
+returned local handoff with:
 
 ```bash
-bash ./deployment/scripts/build-node-next-runtime.sh --run
+bash ./deployment/scripts/07_build-node-next-runtime-on-emceedanko.sh --run
 ```
 
-The run builds only Linux AMD64 and publishes
-`local/artifacts/node-next-runtime-current/`. It does not contact a deployment
-target or access application credentials, databases, model endpoints, or
-corpus content.
+Script 07 contacts only the frozen Ubuntu 24.04 AMD64 EmceeDanko build host,
+executes the unnumbered `deployment/assets/build-node-next-runtime` helper,
+and publishes `local/artifacts/node-next-runtime-current/`. It transfers no
+application and accesses no application credential, database, model endpoint,
+or corpus content. The exact image remains loaded on EmceeDanko for v1.3.1
+qualification; the private transfer directory is removed.
+
+Allow approximately 3-10 minutes. The operator may receive one SSH-key
+passphrase prompt and one EmceeDanko `sudo` password prompt. EmceeDanko must
+provide native AMD64 kernel, Debian-package, and Docker architecture; Ubuntu
+24.04; Docker with buildx; at least two logical CPUs, 4 GiB available memory,
+1 GiB available under `/tmp`, 2 GiB build-workspace capacity, and 5 GiB Docker
+storage capacity; and build-time HTTPS access to the pinned Docker Hub base
+and npm lock objects. The script does not need Gemma, Nomic, PostgreSQL,
+application ports, application credentials, application source, or corpus
+input.
 
 ## Runtime contract
 

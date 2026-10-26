@@ -21,12 +21,13 @@
 | `deployment/scripts/04_stage-v1.3-candidate-on-emceedanko.sh` | Script 04: side-by-side EmceeDanko candidate staging | Tracked |
 | `deployment/scripts/05_qualify-v1.3-on-emceedanko.sh` | Script 05: disposable EmceeDanko ingestion and 60-question frontier qualification | Tracked |
 | `deployment/scripts/06_attended-v1.3-on-emceedanko.sh` | Script 06: reversible attended EmceeDanko v1.3 deployment, acceptance, and rollback | Tracked |
-| `deployment/scripts/build-node-next-runtime.sh` | Build, verify, export, and atomically publish the generic Linux AMD64 runtime-image handoff | Tracked |
+| `deployment/scripts/07_build-node-next-runtime-on-emceedanko.sh` | Script 07: checksum-bound native AMD64 runtime build on EmceeDanko and verified local publication | Tracked |
 | `deployment/scripts/build-carry-candidate.sh` | Assemble and atomically publish the separate application/runtime portable deployment candidate | Tracked |
 | `deployment/runtime-image/` | Application-free runtime Dockerfile, exact lock, and portable security/license records | Tracked |
 | `deployment/carry/` | Portable verifier, consolidated deployment entrypoint, and operator command sheet | Tracked |
 | `deployment/assets/stage-v1.3-candidate` | Bounded target-side Script 04 helper | Tracked |
 | `deployment/assets/qualify-v1.3-candidate` | Bounded target-side Script 05 helper | Tracked |
+| `deployment/assets/build-node-next-runtime` | Unnumbered native-host runtime-image builder invoked by Script 07 | Tracked |
 | `deployment/tests/release-boundary.sh` | Application/corpus independence regression | Tracked |
 | `deployment/tests/stage-candidate-helper.sh` | Script 04 fresh/reuse/mismatch regression | Tracked |
 | `deployment/tests/stage-candidate-wrapper.sh` | Script 04 end-to-end wrapper regression | Tracked |
@@ -35,6 +36,7 @@
 | `deployment/tests/attended-v1.3-target.sh` | Script 06 isolated target lifecycle, failure restoration, acceptance, and rollback regression | Tracked |
 | `deployment/tests/attended-v1.3-wrapper.sh` | Script 06 transport, reporting, failure propagation, signal, and result-contract regression | Tracked |
 | `deployment/tests/runtime-image-builder.sh` | Runtime-image success, supersession, checksum, boundary, and failure regression | Tracked |
+| `deployment/tests/native-runtime-build-wrapper.sh` | Script 07 transfer, native-build, artifact-return, refusal, preservation, and cleanup regression | Tracked |
 | `deployment/tests/application-release-builder.sh` | Application build, deterministic publication, checksum, SBOM/license, and failure regression | Tracked |
 | `deployment/tests/stack-lifecycle.sh` | Production stack build/start/restart/timeout/failure/cleanup regression | Tracked |
 | `deployment/tests/carry-builder.sh` | Portable carry assembly, supersession, identity, checksum, and terminology regression | Tracked |

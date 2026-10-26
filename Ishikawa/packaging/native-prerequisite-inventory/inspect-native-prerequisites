@@ -15,7 +15,9 @@ set -Eeuo pipefail
 #
 # Outputs:
 #   A host summary, package inventory, report, and checksum manifest. No package
-#   is updated, downloaded, installed, removed, configured, or started.
+#   is updated, downloaded, installed, removed, configured, or started. The
+#   retained files contain no hostname, account, address, serial, document, or
+#   credential value.
 #
 # Usage:
 #   bash ./inspect-native-prerequisites --expected-os-version 26.04 \
@@ -85,6 +87,8 @@ architecture="$(dpkg --print-architecture)"
 [[ "$architecture" == "$expected_architecture" ]] || fail architecture_mismatch
 actual_hostname="$(hostname -s)"
 [[ -z "$expected_hostname" || "$actual_hostname" == "$expected_hostname" ]] || fail hostname_mismatch
+hostname_check=not_requested
+[[ -z "$expected_hostname" ]] || hostname_check=pass
 
 umask 077
 mkdir -m 0700 -- "$output_dir"
@@ -201,7 +205,7 @@ started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {
   printf 'inventory_schema_version=1\n'
   printf 'captured_utc=%s\n' "$started_utc"
-  printf 'hostname=%s\n' "$actual_hostname"
+  printf 'hostname_check=%s\n' "$hostname_check"
   printf 'os_id=ubuntu\n'
   printf 'os_version=%s\n' "$VERSION_ID"
   printf 'os_codename=%s\n' "${VERSION_CODENAME:-unknown}"
@@ -241,7 +245,7 @@ summary_sha256="$(sha256sum "$summary_path" | awk '{print $1}')"
 packages_sha256="$(sha256sum "$packages_path" | awk '{print $1}')"
 {
   printf 'purpose=capture_ishikawa_native_prerequisite_inventory\n'
-  printf 'host=%s;os_version=%s;architecture=%s\n' "$actual_hostname" "$VERSION_ID" "$architecture"
+  printf 'hostname_check=%s;os_version=%s;architecture=%s\n' "$hostname_check" "$VERSION_ID" "$architecture"
   printf 'summary_sha256=%s;package_inventory_sha256=%s\n' "$summary_sha256" "$packages_sha256"
   printf 'selected_packages=%s;installed_selected_packages=%s;missing_candidates=%s\n' "${#package_names[@]}" "$installed_selected_count" "$missing_candidate_count"
   printf 'dpkg_audit_clean=%s;apt_check_clean=%s\n' "$dpkg_audit_clean" "$apt_check_clean"

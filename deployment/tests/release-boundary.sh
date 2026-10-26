@@ -44,7 +44,7 @@ grep -Fxq 'script_01_build_ishikawa_release=ready' <<<"$release_validation" \
   || fail release_ready_marker_missing
 grep -Fq 'source_documents=0;corpus_dependency=false' <<<"$release_validation" \
   || fail release_independence_marker_missing
-grep -Fq 'for decision_number in {60..89}' "$release_builder" \
+grep -Fq 'for decision_number in {60..90}' "$release_builder" \
   || fail carry_decision_gate_missing
 
 corpus_validation="$(bash "$corpus_exporter" --validate-only 2>&1)" \

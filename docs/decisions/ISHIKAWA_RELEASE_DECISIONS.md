@@ -8,7 +8,7 @@ and the final org-lab carry posture.
 
 ## Current Status
 
-Items V13-60 through V13-80, V13-84 through V13-86, and V13-88 through V13-89
+Items V13-60 through V13-80, V13-84 through V13-86, and V13-88 through V13-90
 are frozen through the accepted v1.3 baseline and operator-selected org-lab
 posture. Operator clarification and a completed two-agent review established
 corrected replacement text for V13-81, V13-82, V13-83, and V13-87. The
@@ -22,9 +22,10 @@ separate primary payloads. All org-lab carry decisions are now frozen. Exact
 fixed dependency pins and target inventory
 values are implementation evidence, not additional architecture decisions
 unless they conflict with a frozen posture. Bounded local implementation may
-begin. No black-corpus access, target contact, service or database mutation,
+begin. No black-corpus access, Tech contact, service or database mutation,
 credential handling, or package promotion is authorized by these planning
-decisions alone.
+decisions alone. V13-90 separately authorizes the bounded EmceeDanko
+runtime-image build and artifact-return operation described there.
 
 ## Decisions
 
@@ -646,3 +647,33 @@ Reason/Evidence: The application archive intentionally excludes
 operating-system packages, and EmceeDanko already supplied its prerequisites.
 That does not prove Tech has compatible bytes or authorize live target package
 downloads.
+
+### V13-90 — Native AMD64 runtime-image build on EmceeDanko
+
+Decision: Run the generic Linux AMD64 runtime-image build natively on the
+already qualified Ubuntu 24.04 AMD64 EmceeDanko Docker host through numbered
+Script 07. DankoSurface validates and transfers only the checksum-bound build
+helper, runtime-image inputs, and frozen decision record; EmceeDanko returns
+only the verified image archive and its identity, checksum, SBOM, license, and
+build-receipt records.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Do not add QEMU/binfmt or accept an emulated final build on the
+ARM64 DankoSurface host. Script 07 must validate EmceeDanko's exact hostname,
+Ubuntu release, native AMD64 kernel/package/Docker architecture, minimum CPU,
+memory, temporary, artifact, and Docker-storage capacity before building. It
+must use strict SSH trust, verify both transfer directions, remove its private
+remote transfer directory on every branch, leave application, database,
+service, listener, and boot state untouched, and retain the exact built image
+on EmceeDanko for v1.3.1 qualification.
+
+Reason/Evidence: The first local build attempt passed source, lock, Docker,
+Buildx, network, and base-image retrieval, then failed when the ARM64 host
+attempted to execute the AMD64 base `/bin/sh` without registered emulation.
+The retained content-free report has SHA-256
+`fe2e535249b291bcfba8a287ce72c3d26e24e3d85b79fa55c54806c6393be342`.
+EmceeDanko is already evidenced as Ubuntu 24.04 AMD64 and is the next exact-byte
+qualification host. Native construction there avoids adding an unreviewed
+cross-architecture execution dependency while preserving the app-free image
+and separate-application design.

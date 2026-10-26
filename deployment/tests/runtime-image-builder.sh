@@ -40,12 +40,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 mkdir -p -- \
-  "$test_root/repo/deployment/scripts" \
+  "$test_root/repo/deployment/assets" \
   "$test_root/repo/deployment/runtime-image" \
   "$test_root/repo/docs/decisions" \
-  "$test_root/bin"
-cp -- "$repo_root/deployment/scripts/build-node-next-runtime.sh" \
-  "$test_root/repo/deployment/scripts/"
+  "$test_root/bin" \
+  "$test_root/docker-root"
+cp -- "$repo_root/deployment/assets/build-node-next-runtime" \
+  "$test_root/repo/deployment/assets/"
 cp -- "$repo_root/deployment/runtime-image/"* \
   "$test_root/repo/deployment/runtime-image/"
 cp -- "$repo_root/docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md" \
@@ -57,6 +58,10 @@ set -Eeuo pipefail
 
 case "${1:-}" in
   info)
+    case "$*" in
+      *'{{.Architecture}}'*) printf '%s\n' "${MOCK_DOCKER_ARCHITECTURE:-amd64}" ;;
+      *'{{.DockerRootDir}}'*) printf '%s\n' "$MOCK_DOCKER_ROOT" ;;
+    esac
     exit 0
     ;;
   buildx)
@@ -101,9 +106,8 @@ case "${1:-}" in
     fi
     ;;
   save)
-    shift
-    [[ "${1:-}" == --output && -n "${2:-}" ]] || exit 94
-    printf 'mock-docker-archive\n' >"$2"
+    [[ -n "${2:-}" ]] || exit 94
+    printf 'mock-docker-archive\n'
     ;;
   load)
     exit 0
@@ -115,9 +119,65 @@ esac
 MOCK
 chmod 0755 "$test_root/bin/docker"
 
-builder="$test_root/repo/deployment/scripts/build-node-next-runtime.sh"
+cat >"$test_root/bin/hostname" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ "${1:-}" == -s ]] || exit 2
+printf 'EmceeDanko\n'
+MOCK
+cat >"$test_root/bin/uname" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ "${1:-}" == -m ]] || exit 2
+if [[ "${MOCK_NATIVE_ARCH_FAIL:-false}" == true ]]; then
+  printf 'aarch64\n'
+else
+  printf 'x86_64\n'
+fi
+MOCK
+cat >"$test_root/bin/dpkg" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ "${1:-}" == --print-architecture ]] || exit 2
+if [[ "${MOCK_NATIVE_ARCH_FAIL:-false}" == true ]]; then
+  printf 'arm64\n'
+else
+  printf 'amd64\n'
+fi
+MOCK
+cat >"$test_root/bin/nproc" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${MOCK_CPU_FAIL:-false}" == true ]]; then
+  printf '1\n'
+else
+  printf '8\n'
+fi
+MOCK
+cat >"$test_root/bin/df" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+selected_path="${!#}"
+available=10485760
+if [[ "${MOCK_DOCKER_STORAGE_FAIL:-false}" == true \
+    && "$selected_path" == "$MOCK_DOCKER_ROOT" ]]; then
+  available=1024
+fi
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf 'mock 20971520 0 %s 0%% %s\n' "$available" "$selected_path"
+MOCK
+chmod 0755 "$test_root/bin/hostname" "$test_root/bin/uname" \
+  "$test_root/bin/dpkg" "$test_root/bin/nproc" "$test_root/bin/df"
+
+builder="$test_root/repo/deployment/assets/build-node-next-runtime"
 run_builder() {
-  PATH="$test_root/bin:$PATH" bash "$builder" "$@" 2>&1
+  local selected_mode="${1:-}"
+  shift || true
+  local target_arguments=()
+  if [[ "$selected_mode" == --run ]]; then
+    target_arguments=(--expected-hostname EmceeDanko --expected-os-version 24.04)
+  fi
+  PATH="$test_root/bin:$PATH" MOCK_DOCKER_ROOT="$test_root/docker-root" \
+    bash "$builder" "$selected_mode" "${target_arguments[@]}" "$@" 2>&1
 }
 
 validation_output="$(run_builder --validate-only)" || fail validate_only_failed
@@ -200,7 +260,41 @@ set -e
 grep -Fq 'reason=image_history_jargon_found' <<<"$history_failure_output" \
   || fail history_failure_reason_missing
 
+set +e
+native_architecture_output="$(MOCK_NATIVE_ARCH_FAIL=true run_builder --run)"
+native_architecture_status="$?"
+set -e
+(( native_architecture_status != 0 )) || fail native_architecture_failure_reported_success
+grep -Fq 'reason=native_amd64_build_host_required' <<<"$native_architecture_output" \
+  || fail native_architecture_failure_reason_missing
+
+set +e
+docker_architecture_output="$(MOCK_DOCKER_ARCHITECTURE=arm64 run_builder --run)"
+docker_architecture_status="$?"
+set -e
+(( docker_architecture_status != 0 )) || fail docker_architecture_failure_reported_success
+grep -Fq 'reason=docker_native_amd64_unavailable' <<<"$docker_architecture_output" \
+  || fail docker_architecture_failure_reason_missing
+
+set +e
+cpu_capacity_output="$(MOCK_CPU_FAIL=true run_builder --run)"
+cpu_capacity_status="$?"
+set -e
+(( cpu_capacity_status != 0 )) || fail cpu_capacity_failure_reported_success
+grep -Fq 'reason=build_cpu_capacity_insufficient' <<<"$cpu_capacity_output" \
+  || fail cpu_capacity_failure_reason_missing
+
+set +e
+docker_capacity_output="$(MOCK_DOCKER_STORAGE_FAIL=true run_builder --run)"
+docker_capacity_status="$?"
+set -e
+(( docker_capacity_status != 0 )) || fail docker_capacity_failure_reported_success
+grep -Fq 'reason=docker_storage_capacity_insufficient' <<<"$docker_capacity_output" \
+  || fail docker_capacity_failure_reason_missing
+
 printf '%s\n' \
   'success=pass;rerun=pass;supersession=pass;checksums=pass' \
-  'build_failure=pass;boundary_failure=pass;jargon_failure=pass'
+  'build_failure=pass;boundary_failure=pass;jargon_failure=pass' \
+  'native_architecture_failure=pass;docker_architecture_failure=pass' \
+  'cpu_capacity_failure=pass;docker_capacity_failure=pass'
 printf '\nSCRIPT RESULT\nruntime_image_builder_test=pass\n'

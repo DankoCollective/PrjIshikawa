@@ -84,10 +84,12 @@
     package, and prove the small-footprint, portable-name, advisory, license,
     reproducibility, installed-layout, target-inventory, and carry gates. Do
     not publish or carry while any mandatory checklist item remains open.
-15. Build the application-free Linux AMD64 runtime-image handoff with
-    `build-node-next-runtime.sh`, then build the deterministic external
-    Ishikawa v1.3.1 application candidate with the revised Script 01. Keep the
-    two handoffs separate.
+15. Run Script 07 to transfer the checksum-bound generic-image sources to the
+    native Ubuntu 24.04 AMD64 EmceeDanko Docker host, build and verify the
+    application-free Linux AMD64 runtime-image handoff there, and return it to
+    the local artifact lane. Then build the deterministic external Ishikawa
+    v1.3.1 application candidate with the revised Script 01. Keep the two
+    handoffs separate.
 16. Run the complete native suite plus the runtime-image, production-stack,
     application-boundary, carry-builder, and portable-deployment branch
     harnesses. A mocked branch test supports failure coverage but does not
@@ -113,7 +115,7 @@
 - `deployment/scripts/04_stage-v1.3-candidate-on-emceedanko.sh`
 - `deployment/scripts/05_qualify-v1.3-on-emceedanko.sh`
 - `deployment/scripts/06_attended-v1.3-on-emceedanko.sh`
-- `deployment/scripts/build-node-next-runtime.sh`
+- `deployment/scripts/07_build-node-next-runtime-on-emceedanko.sh`
 - `deployment/scripts/build-carry-candidate.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`

@@ -76,7 +76,7 @@ bash -n "$source_root/deploy-ishikawa" "$source_root/verify-deployment" \
   || block carry_source_syntax_invalid \
     'A portable deployment command failed shell parsing.' \
     'Correct the command before assembly.'
-for decision in {79..89}; do
+for decision in {79..90}; do
   decision_block="$(awk -v header="### V13-${decision} " '
     index($0, header) == 1 {capture=1}
     capture && /^### / && index($0, header) != 1 {exit}
@@ -90,7 +90,7 @@ done
 
 if [[ "$mode" == --validate-only ]]; then
   printf '%s\n' \
-    'carry_source=pass;decisions=V13-79_through_V13-89_frozen' \
+    'carry_source=pass;decisions=V13-79_through_V13-90_frozen' \
     'primary_payloads=external_application_and_application_free_amd64_runtime_image' \
     'publication=candidate_only;final_promotion=false'
   result ready

@@ -9,6 +9,7 @@
 | `docs/operations/ISHIKAWA_V1_3_OPERATING_SURFACE.md` | Accounts, roles, services, commands, paths, and permission inventory | Tracked |
 | `docs/operations/CORPUS_INGESTION_RUNBOOK.md` | Operator catalog, manifest, validation, publication, and verification guide | Tracked |
 | `docs/releases/ISHIKAWA_V1_3_REPOSITORY_SWEEP.md` | Reviewed repository-wide agreement and validation record | Tracked |
+| `docs/releases/ISHIKAWA_ORG_LAB_CARRY_READINESS_CHECKLIST.md` | Durable decision-review queue and checkable final deployment carry gates | Tracked |
 | `deployment/evidence/ISHIKAWA_V1_3_EMCEEDANKO_QUALIFICATION.md` | Content-free EmceeDanko disposable qualification receipt | Tracked |
 | `qualification/corpus-v3/` | Synthetic qualification fixture | Tracked |
 | `qualification/corpus-v3/document-keys.json` | Stable fixture document-key registry | Tracked |

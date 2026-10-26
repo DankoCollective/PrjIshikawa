@@ -78,6 +78,12 @@
     review or an exact retry. Assemble the org-lab
     carry package and begin org-lab planning only after the exact EmceeDanko
     application has passed attended human UI acceptance.
+14. After acceptance, use
+    `docs/releases/ISHIKAWA_ORG_LAB_CARRY_READINESS_CHECKLIST.md` to freeze the
+    remaining release/runtime decisions, consolidate the canonical final
+    package, and prove the small-footprint, portable-name, advisory, license,
+    reproducibility, installed-layout, target-inventory, and carry gates. Do
+    not publish or carry while any mandatory checklist item remains open.
 
 ## Active commands
 

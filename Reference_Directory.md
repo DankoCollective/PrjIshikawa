@@ -26,8 +26,25 @@
 - Frozen decisions: `docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`
 - v1.3 freeze: `docs/releases/ISHIKAWA_V1_3_RELEASE_FREEZE.md`
 - Repository sweep: `docs/releases/ISHIKAWA_V1_3_REPOSITORY_SWEEP.md`
+- Org-lab carry readiness checklist:
+  `docs/releases/ISHIKAWA_ORG_LAB_CARRY_READINESS_CHECKLIST.md`
 - EmceeDanko qualification receipt:
   `deployment/evidence/ISHIKAWA_V1_3_EMCEEDANKO_QUALIFICATION.md`
 - Import ledger: `docs/releases/ISHIKAWA_V1_3_IMPORT_PROVENANCE.md`
 - Future optimization backlog: `docs/roadmap/ISHIKAWA_POST_V1_3_OPTIMIZATION_BACKLOG.md`
 - Phase 28 provenance: `docs/history/PHASE_28_TO_V1_3.md`
+
+## Ishikawa security review sources
+
+- Node.js October 2026 security releases:
+  <https://nodejs.org/en/blog/vulnerability/october-2026-security-releases>
+- Node.js 24.22.1 security release:
+  <https://nodejs.org/en/blog/release/v24.22.1>
+- React Server Components advisory GHSA-xqc2-xf4c-x3h3:
+  <https://github.com/react/react/security/advisories/GHSA-xqc2-xf4c-x3h3>
+- Next.js development-server advisory GHSA-39w2-rjm5-chcv:
+  <https://github.com/vercel/next.js/security/advisories/GHSA-39w2-rjm5-chcv>
+
+These sources require a fresh affectedness review at package time. Listing a
+source here does not clear a dependency or substitute for a recorded advisory
+disposition.

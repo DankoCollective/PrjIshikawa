@@ -114,18 +114,25 @@ grep -Fxq 'manifest.json' "$temporary_root/image-files" \
 
 python3 -B - "$image_identity" "$carry_root/runtime-build-receipt.json" \
   "$carry_root/application-sbom.cdx.json" "$carry_root/application-license.json" \
+  "$carry_root/runtime-sbom.cdx.json" "$carry_root/runtime-licenses.json" \
   "$carry_receipt" "$application_archive" "$image_archive" <<'PY' \
   || fail identity_record_invalid
 import hashlib
 import json
+import re
 import sys
+import tarfile
 from pathlib import Path
 
-identity_path, build_receipt_path, application_sbom_path, application_license_path, receipt_path, application_path, image_path = map(Path, sys.argv[1:])
+(identity_path, build_receipt_path, application_sbom_path, application_license_path,
+ runtime_sbom_path, runtime_licenses_path, receipt_path, application_path,
+ image_path) = map(Path, sys.argv[1:])
 identity = json.loads(identity_path.read_text(encoding="utf-8"))
 build_receipt = json.loads(build_receipt_path.read_text(encoding="utf-8"))
 application_sbom = json.loads(application_sbom_path.read_text(encoding="utf-8"))
 application_license = json.loads(application_license_path.read_text(encoding="utf-8"))
+runtime_sbom = json.loads(runtime_sbom_path.read_text(encoding="utf-8"))
+runtime_licenses = json.loads(runtime_licenses_path.read_text(encoding="utf-8"))
 receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
 
 def digest(path: Path) -> str:
@@ -135,6 +142,12 @@ def digest(path: Path) -> str:
             value.update(block)
     return value.hexdigest()
 
+def stream_digest(stream) -> str:
+    value = hashlib.sha256()
+    for block in iter(lambda: stream.read(1024 * 1024), b""):
+        value.update(block)
+    return value.hexdigest()
+
 expected_identity = {
     "application_in_image": False,
     "architecture": "amd64",
@@ -142,20 +155,107 @@ expected_identity = {
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "next": "16.4.3",
     "node": "24.22.1",
+    "npm": "11.19.1",
     "platform": "linux/amd64",
     "react": "19.2.9",
     "react_dom": "19.2.9",
     "schema": "node-next-runtime-image.v1",
+    "yarn": "1.22.22",
 }
 if any(identity.get(key) != value for key, value in expected_identity.items()):
     raise SystemExit(1)
 if identity.get("archive_sha256") != digest(image_path):
     raise SystemExit(1)
+with tarfile.open(image_path, "r:") as archive:
+    manifest_member = archive.extractfile("manifest.json")
+    if manifest_member is None:
+        raise SystemExit(1)
+    manifest = json.load(manifest_member)
+    if not isinstance(manifest, list) or len(manifest) != 1:
+        raise SystemExit(1)
+    if manifest[0].get("RepoTags") != ["node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"]:
+        raise SystemExit(1)
+    layers = manifest[0].get("Layers")
+    if not isinstance(layers, list) or not layers:
+        raise SystemExit(1)
+    for layer_path in layers:
+        layer_match = re.fullmatch(r"blobs/sha256/([0-9a-f]{64})", layer_path or "")
+        if layer_match is None:
+            raise SystemExit(1)
+        layer_member = archive.extractfile(layer_path)
+        if layer_member is None or stream_digest(layer_member) != layer_match.group(1):
+            raise SystemExit(1)
+    config_path = manifest[0].get("Config")
+    if not isinstance(config_path, str):
+        raise SystemExit(1)
+    match = re.fullmatch(r"blobs/sha256/([0-9a-f]{64})|([0-9a-f]{64})\.json", config_path)
+    if match is None:
+        raise SystemExit(1)
+    config_hex = match.group(1) or match.group(2)
+    config_member = archive.extractfile(config_path)
+    if config_member is None:
+        raise SystemExit(1)
+    config_bytes = config_member.read()
+if hashlib.sha256(config_bytes).hexdigest() != config_hex:
+    raise SystemExit(1)
+if re.search(r"(?:api[_-]?key|password|secret|token)=", config_bytes.decode("utf-8"), re.IGNORECASE):
+    raise SystemExit(1)
+config = json.loads(config_bytes)
+history = config.get("history")
+if not isinstance(history, list) or not history:
+    raise SystemExit(1)
+history_bytes = (json.dumps(history, sort_keys=True, separators=(",", ":")) + "\n").encode()
+config_digest = f"sha256:{config_hex}"
+history_digest = hashlib.sha256(history_bytes).hexdigest()
+if config.get("architecture") != "amd64" or config.get("os") != "linux":
+    raise SystemExit(1)
+rootfs = config.get("rootfs", {})
+diff_ids = rootfs.get("diff_ids")
+if rootfs.get("type") != "layers" or not isinstance(diff_ids, list) or not diff_ids:
+    raise SystemExit(1)
+if any(re.fullmatch(r"sha256:[0-9a-f]{64}", item or "") is None for item in diff_ids):
+    raise SystemExit(1)
+if config.get("config", {}).get("WorkingDir") != "/opt/nextjs":
+    raise SystemExit(1)
+if config.get("config", {}).get("Cmd") != ["next", "--help"]:
+    raise SystemExit(1)
+if identity.get("config_digest") != config_digest:
+    raise SystemExit(1)
+if identity.get("history_sha256") != history_digest:
+    raise SystemExit(1)
 if build_receipt.get("schema") != "node-next-runtime-build-receipt.v1":
     raise SystemExit(1)
-for field in ("image_id", "image_reference", "archive_sha256", "architecture", "platform"):
+for field in ("image_id", "image_reference", "archive_sha256", "architecture", "platform", "config_digest", "history_sha256"):
     if build_receipt.get(field) != identity.get(field):
         raise SystemExit(1)
+if build_receipt.get("sbom_sha256") != digest(runtime_sbom_path):
+    raise SystemExit(1)
+if build_receipt.get("licenses_sha256") != digest(runtime_licenses_path):
+    raise SystemExit(1)
+if runtime_sbom.get("bomFormat") != "CycloneDX" or runtime_sbom.get("specVersion") != "1.5":
+    raise SystemExit(1)
+properties = runtime_sbom.get("metadata", {}).get("component", {}).get("properties", [])
+if not any(item.get("name") == "oci:image:config-digest" and item.get("value") == config_digest for item in properties):
+    raise SystemExit(1)
+components = runtime_sbom.get("components", [])
+expected_components = {("node", "24.22.1", "MIT"), ("npm", "11.19.1", "Artistic-2.0"), ("yarn", "1.22.22", "BSD-2-Clause")}
+observed_components = set()
+for item in components:
+    for license_entry in item.get("licenses", []):
+        observed_components.add((item.get("name"), item.get("version"), license_entry.get("license", {}).get("id")))
+if not expected_components.issubset(observed_components):
+    raise SystemExit(1)
+runtime_tools = runtime_licenses.get("runtime_tools")
+if runtime_licenses.get("schema") != "node-runtime-license-inventory.v1":
+    raise SystemExit(1)
+if not isinstance(runtime_tools, list) or len(runtime_tools) != 3:
+    raise SystemExit(1)
+expected_tools = {("node", "24.22.1", "MIT"), ("npm", "11.19.1", "Artistic-2.0"), ("yarn", "1.22.22", "BSD-2-Clause")}
+observed_tools = {(item.get("name"), item.get("version"), item.get("license")) for item in runtime_tools}
+if observed_tools != expected_tools:
+    raise SystemExit(1)
+if any(re.fullmatch(r"[0-9a-f]{64}", item.get("license_sha256", "")) is None for item in runtime_tools):
+    raise SystemExit(1)
 if application_sbom.get("bomFormat") != "CycloneDX":
     raise SystemExit(1)
 component = application_sbom.get("metadata", {}).get("component", {})
@@ -171,6 +271,8 @@ expected_receipt = {
     "architecture": "amd64",
     "boot_autostart": False,
     "image_archive_sha256": digest(image_path),
+    "image_config_digest": config_digest,
+    "image_history_sha256": history_digest,
     "image_reference": expected_identity["image_reference"],
     "platform": "linux/amd64",
     "schema": "ishikawa.carry-receipt.v1",

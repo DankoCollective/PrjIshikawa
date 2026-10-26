@@ -116,11 +116,11 @@ case "${1:-}" in
     esac
     ;;
   run)
-    if [[ "$*" == *'--entrypoint node'* ]]; then
+    if [[ "$*" == *'--entrypoint sh '* && "$*" == *'runtime_identity=pass'* ]]; then
       printf 'runtime_identity=pass\n'
       exit 0
     fi
-    if [[ "$*" == *'--entrypoint sh'* ]]; then
+    if [[ "$*" == *'--entrypoint sh '* ]]; then
       exit 0
     fi
     if [[ "$*" == *'--entrypoint dpkg-query'* ]]; then
@@ -131,6 +131,12 @@ case "${1:-}" in
       printf '%s\n' '{"dependencies":{"next":{"version":"16.4.3"},"react":{"version":"19.2.9"},"react-dom":{"version":"19.2.9"}}}'
       exit 0
     fi
+    if [[ "$*" == *'--entrypoint sha256sum'* ]]; then
+      printf '%064d  %s\n' 1 /usr/local/LICENSE
+      printf '%064d  %s\n' 2 /usr/local/lib/node_modules/npm/LICENSE
+      printf '%064d  %s\n' 3 /opt/yarn-v1.22.22/LICENSE
+      exit 0
+    fi
     exit 93
     ;;
   history)
@@ -138,7 +144,19 @@ case "${1:-}" in
     ;;
   save)
     [[ -n "${2:-}" ]] || exit 94
-    printf 'mock-amd64-docker-archive\n'
+    archive_root="$(mktemp -d /tmp/mock-runtime-archive.XXXXXX)"
+    printf '{"architecture":"amd64","os":"linux","config":{"WorkingDir":"/opt/nextjs","Cmd":["next","--help"]},"rootfs":{"type":"layers","diff_ids":["sha256:%064d"]},"history":[{"created_by":"generic runtime layer"}]}\n' 4 \
+      >"$archive_root/config.json"
+    printf 'mock compressed layer\n' >"$archive_root/layer"
+    layer_hex="$(sha256sum "$archive_root/layer" | awk '{print $1}')"
+    config_hex="$(sha256sum "$archive_root/config.json" | awk '{print $1}')"
+    mkdir -p "$archive_root/blobs/sha256"
+    mv "$archive_root/config.json" "$archive_root/blobs/sha256/$config_hex"
+    mv "$archive_root/layer" "$archive_root/blobs/sha256/$layer_hex"
+    printf '[{"Config":"blobs/sha256/%s","RepoTags":["node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"],"Layers":["blobs/sha256/%s"]}]\n' \
+      "$config_hex" "$layer_hex" >"$archive_root/manifest.json"
+    tar -cf - -C "$archive_root" manifest.json blobs
+    rm -rf "$archive_root"
     ;;
   load)
     exit 0
@@ -202,6 +220,23 @@ if [[ "$first" == *:* ]]; then
   if [[ "${MOCK_RETURN_CORRUPT:-false}" == true ]]; then
     printf 'corrupt\n' >>"$last/node-next-runtime-amd64.tar"
   fi
+  if [[ "${MOCK_RETURN_IDENTITY_CORRUPT:-false}" == true ]]; then
+    python3 -B - "$last/image-identity.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+record = json.loads(path.read_text(encoding="utf-8"))
+record["config_digest"] = "sha256:" + "f" * 64
+path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+    (
+      cd -- "$last"
+      while IFS= read -r name; do sha256sum -- "$name"; done < <(
+        find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+      ) >SHA256SUMS
+    )
+  fi
 else
   destination="${last#*:}"
   for ((index=0; index < ${#positionals[@]} - 1; index++)); do
@@ -231,7 +266,8 @@ grep -Fxq 'script_07_node_next_runtime_build=ready' <<<"$validation_output" \
 grep -Fq 'target_contact=false;target_mutation=false' <<<"$validation_output" \
   || fail validate_only_contact_contract_missing
 
-run_wrapper "$test_root/first.txt" || fail first_native_build_failed
+run_wrapper "$test_root/first.txt" \
+  || { sed -n '1,240p' "$test_root/first.txt" >&2; fail first_native_build_failed; }
 grep -Fxq 'script_07_node_next_runtime_build=pass' "$test_root/first.txt" \
   || fail first_pass_marker_missing
 handoff="$test_root/repo/local/artifacts/node-next-runtime-current"
@@ -240,6 +276,22 @@ handoff="$test_root/repo/local/artifacts/node-next-runtime-current"
   cd -- "$handoff"
   sha256sum --check --strict SHA256SUMS >/dev/null
 ) || fail local_handoff_checksum_failed
+jq -e '
+  .npm == "11.19.1"
+  and .yarn == "1.22.22"
+  and (.config_digest | test("^sha256:[0-9a-f]{64}$"))
+  and (.history_sha256 | test("^[0-9a-f]{64}$"))' \
+  "$handoff/image-identity.json" >/dev/null || fail returned_identity_incomplete
+jq -e '
+  any(.components[]; .name == "npm" and .version == "11.19.1")
+  and any(.components[]; .name == "yarn" and .version == "1.22.22")' \
+  "$handoff/sbom.cdx.json" >/dev/null || fail returned_sbom_incomplete
+jq -e '
+  (.runtime_tools | length == 3)
+  and any(.runtime_tools[]; .name == "node" and .version == "24.22.1")
+  and any(.runtime_tools[]; .name == "npm" and .version == "11.19.1")
+  and any(.runtime_tools[]; .name == "yarn" and .version == "1.22.22")' \
+  "$handoff/licenses.json" >/dev/null || fail returned_license_inventory_incomplete
 [[ -f "$test_root/image-retained" ]] || fail remote_image_not_retained
 find /tmp -maxdepth 1 -type d -name 'ishikawa-runtime-build-*' -print -quit \
   | grep -q . && fail remote_transfer_not_cleaned_after_success
@@ -276,6 +328,18 @@ grep -Fq 'reason=fetched_handoff_checksum_failed' "$test_root/corrupt-return.txt
   || fail corrupt_return_changed_current
 find /tmp -maxdepth 1 -type d -name 'ishikawa-runtime-build-*' -print -quit \
   | grep -q . && fail remote_transfer_not_cleaned_after_corrupt_return
+
+set +e
+MOCK_RETURN_IDENTITY_CORRUPT=true run_wrapper "$test_root/corrupt-identity.txt"
+corrupt_identity_status="$?"
+set -e
+(( corrupt_identity_status != 0 )) || fail corrupt_identity_reported_success
+grep -Fq 'reason=fetched_identity_invalid' "$test_root/corrupt-identity.txt" \
+  || fail corrupt_identity_reason_missing
+[[ "$(sha256sum -- "$handoff/SHA256SUMS" | awk '{print $1}')" == "$current_manifest_sha256" ]] \
+  || fail corrupt_identity_changed_current
+find /tmp -maxdepth 1 -type d -name 'ishikawa-runtime-build-*' -print -quit \
+  | grep -q . && fail remote_transfer_not_cleaned_after_corrupt_identity
 
 set +e
 MOCK_REMOTE_HOST_FAIL=true run_wrapper "$test_root/host-failure.txt"
@@ -322,6 +386,6 @@ find /tmp -maxdepth 1 -type d -name 'ishikawa-runtime-build-*' -print -quit \
 
 printf '%s\n' \
   'validate_only=pass;native_build=pass;artifact_return=pass;publication=pass;rerun=pass;supersession=pass' \
-  'nested_build_failure=pass;return_checksum_refusal=pass;host_identity_refusal=pass;current_preservation=pass' \
+  'nested_build_failure=pass;return_checksum_refusal=pass;return_identity_refusal=pass;host_identity_refusal=pass;current_preservation=pass' \
   'signal_propagation=pass;remote_cleanup=pass'
 printf '\nSCRIPT RESULT\nnative_runtime_build_wrapper_test=pass\n'

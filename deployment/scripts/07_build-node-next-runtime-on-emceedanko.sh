@@ -423,29 +423,166 @@ expected_names="$(printf '%s\n' "${handoff_names[@]}" | sort)"
   sha256sum --check --strict node-next-runtime-amd64.tar.sha256 >/dev/null
 ) || block fetched_handoff_checksum_failed 'The returned handoff failed independent local checksum verification.' 'Do not publish it.'
 archive_sha256="$(sha256sum -- "$fetched_handoff/node-next-runtime-amd64.tar" | awk '{print $1}')"
+tar -xOf "$fetched_handoff/node-next-runtime-amd64.tar" manifest.json \
+  >"$work_root/returned-image-manifest.json" \
+  || block fetched_archive_manifest_missing \
+    'The returned image archive omits its image manifest.' \
+    'Do not publish the returned handoff.'
+returned_config_path="$(jq -er '
+      if length == 1
+         and (.[0].Config | type == "string")
+         and .[0].RepoTags == ["node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"]
+         and (.[0].Layers | type == "array" and length > 0)
+      then .[0].Config else error("invalid image manifest") end' \
+      "$work_root/returned-image-manifest.json")" \
+  || block fetched_archive_manifest_invalid \
+    'The returned image archive does not contain one bounded image config reference.' \
+    'Do not publish the returned handoff.'
+while IFS= read -r returned_layer_path; do
+  case "$returned_layer_path" in
+    blobs/sha256/[0-9a-f][0-9a-f]*) returned_layer_hex="${returned_layer_path##*/}" ;;
+    *) block fetched_archive_layer_path_invalid \
+         'The returned image archive contains a layer path that is not checksum-addressed.' \
+         'Do not publish the returned handoff.' ;;
+  esac
+  [[ "$returned_layer_hex" =~ ^[0-9a-f]{64}$ ]] \
+    || block fetched_archive_layer_digest_invalid \
+      'The returned image archive layer path lacks a SHA-256 identity.' \
+      'Do not publish the returned handoff.'
+  returned_layer_sha256="$(tar -xOf "$fetched_handoff/node-next-runtime-amd64.tar" \
+    "$returned_layer_path" | sha256sum | awk '{print $1}')" \
+    || block fetched_archive_layer_missing \
+      'The returned image archive omits a referenced layer.' \
+      'Do not publish the returned handoff.'
+  [[ "$returned_layer_sha256" == "$returned_layer_hex" ]] \
+    || block fetched_archive_layer_checksum_failed \
+      'A returned image layer does not match its checksum-addressed path.' \
+      'Do not publish the returned handoff.'
+done < <(jq -r '.[0].Layers[]' "$work_root/returned-image-manifest.json")
+case "$returned_config_path" in
+  blobs/sha256/[0-9a-f][0-9a-f]*) returned_config_hex="${returned_config_path##*/}" ;;
+  [0-9a-f][0-9a-f]*.json) returned_config_hex="${returned_config_path%.json}" ;;
+  *) block fetched_archive_config_path_invalid \
+       'The returned image-config path is not checksum-addressed.' \
+       'Do not publish the returned handoff.' ;;
+esac
+[[ "$returned_config_hex" =~ ^[0-9a-f]{64}$ ]] \
+  || block fetched_archive_config_digest_invalid \
+    'The returned image-config path lacks a SHA-256 identity.' \
+    'Do not publish the returned handoff.'
+tar -xOf "$fetched_handoff/node-next-runtime-amd64.tar" "$returned_config_path" \
+  >"$work_root/returned-image-config.json" \
+  || block fetched_archive_config_missing \
+    'The returned image archive omits its referenced config.' \
+    'Do not publish the returned handoff.'
+[[ "$(sha256sum -- "$work_root/returned-image-config.json" | awk '{print $1}')" == "$returned_config_hex" ]] \
+  || block fetched_archive_config_checksum_failed \
+    'The returned image config does not match its checksum-addressed path.' \
+    'Do not publish the returned handoff.'
+config_digest="sha256:${returned_config_hex}"
+jq -ceS '.history' "$work_root/returned-image-config.json" \
+  >"$work_root/returned-image-history.json" \
+  || block fetched_archive_history_invalid \
+    'The returned image config lacks a valid history array.' \
+    'Do not publish the returned handoff.'
+history_sha256="$(sha256sum -- "$work_root/returned-image-history.json" | awk '{print $1}')"
+jq -e '
+  .architecture == "amd64"
+  and .os == "linux"
+  and (.history | type == "array" and length > 0)
+  and .rootfs.type == "layers"
+  and (.rootfs.diff_ids | type == "array" and length > 0)
+  and all(.rootfs.diff_ids[]; test("^sha256:[0-9a-f]{64}$"))
+  and .config.WorkingDir == "/opt/nextjs"
+  and .config.Cmd == ["next", "--help"]' \
+  "$work_root/returned-image-config.json" >/dev/null \
+  || block fetched_archive_config_contract_invalid \
+    'The returned image config violates the frozen platform/runtime contract.' \
+    'Do not publish the returned handoff.'
+if grep -Eiq 'Ishikawa|Prj|phase-|Script[[:space:]]+[0-9]|Codex|EmceeDanko|DankoSurface|((api[_-]?key|password|secret|token)=)' \
+    "$work_root/returned-image-config.json"; then
+  block fetched_archive_config_private_term_found \
+    'The returned image config/history contains a prohibited local or secret-bearing term.' \
+    'Do not publish the returned handoff.'
+fi
 image_id="$(jq -r '.image_id' "$fetched_handoff/image-identity.json")"
 jq -e --arg archive_sha256 "$archive_sha256" --arg image_id "$image_id" \
+  --arg config_digest "$config_digest" --arg history_sha256 "$history_sha256" \
   '.schema == "node-next-runtime-image.v1"
    and .architecture == "amd64"
    and .platform == "linux/amd64"
    and .application_in_image == false
    and .generated_next_in_image == false
+   and .image_reference == "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"
    and .archive_sha256 == $archive_sha256
-   and .image_id == $image_id' \
+   and .image_id == $image_id
+   and ($image_id | test("^sha256:[0-9a-f]{64}$"))
+   and .config_digest == $config_digest
+   and .history_sha256 == $history_sha256
+   and .node == "24.22.1"
+   and .npm == "11.19.1"
+   and .yarn == "1.22.22"
+   and .next == "16.4.3"
+   and .react == "19.2.9"
+   and .react_dom == "19.2.9"' \
   "$fetched_handoff/image-identity.json" >/dev/null \
   || block fetched_identity_invalid 'The returned image-identity record is invalid.' 'Do not publish it.'
+sbom_sha256="$(sha256sum -- "$fetched_handoff/sbom.cdx.json" | awk '{print $1}')"
+licenses_sha256="$(sha256sum -- "$fetched_handoff/licenses.json" | awk '{print $1}')"
 jq -e --arg archive_sha256 "$archive_sha256" --arg image_id "$image_id" \
+  --arg config_digest "$config_digest" --arg history_sha256 "$history_sha256" \
+  --arg sbom_sha256 "$sbom_sha256" --arg licenses_sha256 "$licenses_sha256" \
   '.schema == "node-next-runtime-build-receipt.v1"
    and .architecture == "amd64"
    and .platform == "linux/amd64"
    and .application_in_image == false
    and .generated_next_in_image == false
+   and .image_reference == "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"
    and .archive_sha256 == $archive_sha256
-   and .image_id == $image_id' \
+   and .image_id == $image_id
+   and .config_digest == $config_digest
+   and .history_sha256 == $history_sha256
+   and .sbom_sha256 == $sbom_sha256
+   and .licenses_sha256 == $licenses_sha256' \
   "$fetched_handoff/build-receipt.json" >/dev/null \
   || block fetched_build_receipt_invalid 'The returned build receipt is invalid.' 'Do not publish it.'
+jq -e --arg config_digest "$config_digest" '
+  .bomFormat == "CycloneDX"
+  and .specVersion == "1.5"
+  and any(.metadata.component.properties[];
+    .name == "oci:image:config-digest" and .value == $config_digest)
+  and any(.components[];
+    .name == "node" and .version == "24.22.1"
+    and any(.licenses[]; .license.id == "MIT"))
+  and any(.components[];
+    .name == "npm" and .version == "11.19.1"
+    and any(.licenses[]; .license.id == "Artistic-2.0"))
+  and any(.components[];
+    .name == "yarn" and .version == "1.22.22"
+    and any(.licenses[]; .license.id == "BSD-2-Clause"))' \
+  "$fetched_handoff/sbom.cdx.json" >/dev/null \
+  || block fetched_sbom_invalid \
+    'The returned runtime SBOM omits an exact runtime identity or image-config binding.' \
+    'Do not publish the returned handoff.'
+jq -e '
+  .schema == "node-runtime-license-inventory.v1"
+  and (.runtime_tools | type == "array" and length == 3)
+  and all(.runtime_tools[]; .license_sha256 | test("^[0-9a-f]{64}$"))
+  and any(.runtime_tools[];
+    .name == "node" and .version == "24.22.1" and .license == "MIT"
+    and .license_file == "/usr/local/LICENSE")
+  and any(.runtime_tools[];
+    .name == "npm" and .version == "11.19.1" and .license == "Artistic-2.0"
+    and .license_file == "/usr/local/lib/node_modules/npm/LICENSE")
+  and any(.runtime_tools[];
+    .name == "yarn" and .version == "1.22.22" and .license == "BSD-2-Clause"
+    and .license_file == "/opt/yarn-v1.22.22/LICENSE")' \
+  "$fetched_handoff/licenses.json" >/dev/null \
+  || block fetched_license_inventory_invalid \
+    'The returned runtime license inventory omits an exact bundled runtime tool.' \
+    'Do not publish the returned handoff.'
 returned_bytes="$(stat -Lc %s -- "$fetched_handoff/node-next-runtime-amd64.tar")"
-emit "state=pass;archive_sha256=$archive_sha256;image_id=$image_id;transfer_bytes=$returned_bytes;reused_transfer_bytes=0" RETURN
+emit "state=pass;archive_sha256=$archive_sha256;image_id=$image_id;config_digest=$config_digest;history_sha256=$history_sha256;transfer_bytes=$returned_bytes;reused_transfer_bytes=0" RETURN
 
 stage='local_publication'
 mkdir -p -- "$artifact_parent" "$artifact_parent/superseded"

@@ -80,11 +80,11 @@ case "${1:-}" in
     esac
     ;;
   run)
-    if [[ "$*" == *'--entrypoint node'* ]]; then
+    if [[ "$*" == *'--entrypoint sh '* && "$*" == *'runtime_identity=pass'* ]]; then
       printf 'runtime_identity=pass\n'
       exit 0
     fi
-    if [[ "$*" == *'--entrypoint sh'* ]]; then
+    if [[ "$*" == *'--entrypoint sh '* ]]; then
       [[ "${MOCK_BOUNDARY_FAIL:-false}" != true ]] || exit 43
       exit 0
     fi
@@ -94,6 +94,13 @@ case "${1:-}" in
     fi
     if [[ "$*" == *'--entrypoint npm'* ]]; then
       printf '%s\n' '{"dependencies":{"next":{"version":"16.4.3"},"react":{"version":"19.2.9"},"react-dom":{"version":"19.2.9"}}}'
+      exit 0
+    fi
+    if [[ "$*" == *'--entrypoint sha256sum'* ]]; then
+      [[ "${MOCK_RUNTIME_LICENSE_FAIL:-false}" != true ]] || exit 44
+      printf '%064d  %s\n' 1 /usr/local/LICENSE
+      printf '%064d  %s\n' 2 /usr/local/lib/node_modules/npm/LICENSE
+      printf '%064d  %s\n' 3 /opt/yarn-v1.22.22/LICENSE
       exit 0
     fi
     exit 93
@@ -107,7 +114,22 @@ case "${1:-}" in
     ;;
   save)
     [[ -n "${2:-}" ]] || exit 94
-    printf 'mock-docker-archive\n'
+    archive_root="$(mktemp -d /tmp/mock-runtime-archive.XXXXXX)"
+    archive_architecture=amd64
+    [[ "${MOCK_ARCHIVE_CONFIG_FAIL:-false}" != true ]] || archive_architecture=arm64
+    printf '{"architecture":"%s","os":"linux","config":{"WorkingDir":"/opt/nextjs","Cmd":["next","--help"]},"rootfs":{"type":"layers","diff_ids":["sha256:%064d"]},"history":[{"created_by":"generic runtime layer"}]}\n' \
+      "$archive_architecture" 4 \
+      >"$archive_root/config.json"
+    printf 'mock compressed layer\n' >"$archive_root/layer"
+    layer_hex="$(sha256sum "$archive_root/layer" | awk '{print $1}')"
+    config_hex="$(sha256sum "$archive_root/config.json" | awk '{print $1}')"
+    mkdir -p "$archive_root/blobs/sha256"
+    mv "$archive_root/config.json" "$archive_root/blobs/sha256/$config_hex"
+    mv "$archive_root/layer" "$archive_root/blobs/sha256/$layer_hex"
+    printf '[{"Config":"blobs/sha256/%s","RepoTags":["node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"],"Layers":["blobs/sha256/%s"]}]\n' \
+      "$config_hex" "$layer_hex" >"$archive_root/manifest.json"
+    tar -cf - -C "$archive_root" manifest.json blobs
+    rm -rf "$archive_root"
     ;;
   load)
     exit 0
@@ -184,7 +206,8 @@ validation_output="$(run_builder --validate-only)" || fail validate_only_failed
 grep -Fxq 'node_next_runtime_build=ready' <<<"$validation_output" \
   || fail validate_ready_marker_missing
 
-run_output="$(run_builder --run)" || fail success_path_failed
+run_output="$(run_builder --run)" \
+  || { printf '%s\n' "$run_output" >&2; fail success_path_failed; }
 grep -Fxq 'node_next_runtime_build=pass' <<<"$run_output" \
   || fail success_marker_missing
 handoff="$test_root/repo/local/artifacts/node-next-runtime-current"
@@ -204,16 +227,29 @@ jq -e \
   '.architecture == "amd64"
    and .application_in_image == false
    and .generated_next_in_image == false
+   and (.config_digest | test("^sha256:[0-9a-f]{64}$"))
+   and (.history_sha256 | test("^[0-9a-f]{64}$"))
+   and .node == "24.22.1"
+   and .npm == "11.19.1"
+   and .yarn == "1.22.22"
    and .next == "16.4.3"
    and .react == "19.2.9"' \
   "$handoff/image-identity.json" >/dev/null || fail identity_record_invalid
 jq -e \
   '.bomFormat == "CycloneDX"
+   and any(.components[]; .name == "node" and .version == "24.22.1")
+   and any(.components[]; .name == "npm" and .version == "11.19.1")
+   and any(.components[]; .name == "yarn" and .version == "1.22.22")
    and any(.components[]; .name == "next" and .version == "16.4.3")
-   and any(.components[]; .name == "libc6" and .version == "2.36-9+deb12u13")' \
+   and any(.components[]; .name == "libc6" and .version == "2.36-9+deb12u13")
+   and any(.metadata.component.properties[]; .name == "oci:image:config-digest")' \
   "$handoff/sbom.cdx.json" >/dev/null || fail combined_sbom_invalid
 jq -e \
   '.schema == "node-runtime-license-inventory.v1"
+   and (.runtime_tools | length == 3)
+   and any(.runtime_tools[]; .name == "node" and .version == "24.22.1" and .license == "MIT")
+   and any(.runtime_tools[]; .name == "npm" and .version == "11.19.1" and .license == "Artistic-2.0")
+   and any(.runtime_tools[]; .name == "yarn" and .version == "1.22.22" and .license == "BSD-2-Clause")
    and any(.javascript_packages[]; .name == "next" and .version == "16.4.3")
    and any(.operating_system_packages[]; .name == "libc6")' \
   "$handoff/licenses.json" >/dev/null || fail combined_license_inventory_invalid
@@ -221,7 +257,9 @@ jq -e \
   '.schema == "node-next-runtime-build-receipt.v1"
    and .architecture == "amd64"
    and .application_in_image == false
-   and .generated_next_in_image == false' \
+   and .generated_next_in_image == false
+   and (.config_digest | test("^sha256:[0-9a-f]{64}$"))
+   and (.history_sha256 | test("^[0-9a-f]{64}$"))' \
   "$handoff/build-receipt.json" >/dev/null || fail build_receipt_invalid
 
 second_output="$(run_builder --run)" || fail rerun_failed
@@ -251,6 +289,22 @@ set -e
 (( boundary_failure_status != 0 )) || fail boundary_failure_reported_success
 grep -Fq 'reason=image_boundary_failed' <<<"$boundary_failure_output" \
   || fail boundary_failure_reason_missing
+
+set +e
+archive_config_failure_output="$(MOCK_ARCHIVE_CONFIG_FAIL=true run_builder --run)"
+archive_config_failure_status="$?"
+set -e
+(( archive_config_failure_status != 0 )) || fail archive_config_failure_reported_success
+grep -Fq 'reason=image_config_contract_invalid' <<<"$archive_config_failure_output" \
+  || fail archive_config_failure_reason_missing
+
+set +e
+runtime_license_failure_output="$(MOCK_RUNTIME_LICENSE_FAIL=true run_builder --run)"
+runtime_license_failure_status="$?"
+set -e
+(( runtime_license_failure_status != 0 )) || fail runtime_license_failure_reported_success
+grep -Fq 'reason=runtime_tool_license_inventory_failed' <<<"$runtime_license_failure_output" \
+  || fail runtime_license_failure_reason_missing
 
 set +e
 history_failure_output="$(MOCK_HISTORY_JARGON=true run_builder --run)"
@@ -294,7 +348,7 @@ grep -Fq 'reason=docker_storage_capacity_insufficient' <<<"$docker_capacity_outp
 
 printf '%s\n' \
   'success=pass;rerun=pass;supersession=pass;checksums=pass' \
-  'build_failure=pass;boundary_failure=pass;jargon_failure=pass' \
+  'build_failure=pass;boundary_failure=pass;archive_config_failure=pass;runtime_license_failure=pass;jargon_failure=pass' \
   'native_architecture_failure=pass;docker_architecture_failure=pass' \
   'cpu_capacity_failure=pass;docker_capacity_failure=pass'
 printf '\nSCRIPT RESULT\nruntime_image_builder_test=pass\n'

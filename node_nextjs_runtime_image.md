@@ -15,6 +15,7 @@ is never copied into the image.
 | Platform | `linux/amd64` |
 | Node.js | `24.22.1` |
 | npm | `11.19.1` |
+| Yarn | `1.22.22` |
 | Next.js | `16.4.3` |
 | React | `19.2.9` |
 | React DOM | `19.2.9` |

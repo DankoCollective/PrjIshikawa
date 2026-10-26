@@ -5,6 +5,8 @@ Review date: 2026-10-26
 | Component | Selected identity | Disposition | Primary source |
 | --- | --- | --- | --- |
 | Node.js | 24.22.1 | Fixed security release on the supported Node 24 line | <https://nodejs.org/en/blog/release/v24.22.1> |
+| npm | 11.19.1 | Exact package manager inherited from the pinned Node.js base | Node.js base image identity and in-image version probe |
+| Yarn | 1.22.22 | Exact package manager inherited from the pinned Node.js base | Node.js base image identity and in-image version probe |
 | Next.js | 16.4.3 | Current stable 16.4 patch; includes the 16.4.1 upstream-security fixes | <https://nextjs.org/blog/nextjs-security-update-october-14-2026> and <https://github.com/vercel/next.js/releases/tag/v16.4.3> |
 | React | 19.2.9 | Fixed 19.2 release for GHSA-xqc2-xf4c-x3h3 | <https://github.com/react/react/security/advisories/GHSA-xqc2-xf4c-x3h3> |
 | React DOM | 19.2.9 | Kept exactly aligned with React | <https://github.com/facebook/react/releases/tag/v19.2.9> |

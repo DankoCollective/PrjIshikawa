@@ -63,12 +63,22 @@ printf '%s\n' \
 )
 
 runtime="$fixture/local/artifacts/node-next-runtime-current"
-mkdir -p -- "$test_root/image"
-printf '[]\n' >"$test_root/image/manifest.json"
-tar -cf "$runtime/node-next-runtime-amd64.tar" -C "$test_root/image" manifest.json
+mkdir -p -- "$test_root/image/blobs/sha256"
+printf '%s\n' \
+  '{"architecture":"amd64","os":"linux","config":{"WorkingDir":"/opt/nextjs","Cmd":["next","--help"]},"rootfs":{"type":"layers","diff_ids":["sha256:0000000000000000000000000000000000000000000000000000000000000004"]},"history":[{"created_by":"generic runtime layer"}]}' \
+  >"$test_root/image/config.json"
+config_hex="$(sha256sum "$test_root/image/config.json" | awk '{print $1}')"
+history_sha="$(jq -cS .history "$test_root/image/config.json" | sha256sum | awk '{print $1}')"
+printf 'mock compressed layer\n' >"$test_root/image/layer"
+layer_hex="$(sha256sum "$test_root/image/layer" | awk '{print $1}')"
+mv -- "$test_root/image/config.json" "$test_root/image/blobs/sha256/$config_hex"
+mv -- "$test_root/image/layer" "$test_root/image/blobs/sha256/$layer_hex"
+printf '[{"Config":"blobs/sha256/%s","RepoTags":["node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"],"Layers":["blobs/sha256/%s"]}]\n' \
+  "$config_hex" "$layer_hex" >"$test_root/image/manifest.json"
+tar -cf "$runtime/node-next-runtime-amd64.tar" -C "$test_root/image" manifest.json blobs
 image_sha="$(sha256sum "$runtime/node-next-runtime-amd64.tar" | awk '{print $1}')"
 (cd -- "$runtime" && sha256sum node-next-runtime-amd64.tar >node-next-runtime-amd64.tar.sha256)
-python3 -B - "$runtime/image-identity.json" "$image_sha" <<'PY'
+python3 -B - "$runtime/image-identity.json" "$image_sha" "$config_hex" "$history_sha" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -77,32 +87,47 @@ Path(sys.argv[1]).write_text(json.dumps({
     "application_in_image": False,
     "archive_sha256": sys.argv[2],
     "architecture": "amd64",
+    "config_digest": "sha256:" + sys.argv[3],
     "generated_next_in_image": False,
+    "history_sha256": sys.argv[4],
     "image_id": "sha256:" + "0" * 64,
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "next": "16.4.3",
     "node": "24.22.1",
+    "npm": "11.19.1",
     "platform": "linux/amd64",
     "react": "19.2.9",
     "react_dom": "19.2.9",
     "schema": "node-next-runtime-image.v1",
+    "yarn": "1.22.22",
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
-python3 -B - "$runtime/build-receipt.json" "$image_sha" <<'PY'
+printf '%s\n' \
+  '{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"component":{"properties":[{"name":"oci:image:config-digest","value":"sha256:'"$config_hex"'"}]}},"components":[{"name":"node","version":"24.22.1","licenses":[{"license":{"id":"MIT"}}]},{"name":"npm","version":"11.19.1","licenses":[{"license":{"id":"Artistic-2.0"}}]},{"name":"yarn","version":"1.22.22","licenses":[{"license":{"id":"BSD-2-Clause"}}]}]}' \
+  >"$runtime/sbom.cdx.json"
+printf '%s\n' \
+  '{"schema":"node-runtime-license-inventory.v1","runtime_tools":[{"name":"node","version":"24.22.1","license":"MIT","license_file":"/usr/local/LICENSE","license_sha256":"'"$(printf '%064d' 1)"'"},{"name":"npm","version":"11.19.1","license":"Artistic-2.0","license_file":"/usr/local/lib/node_modules/npm/LICENSE","license_sha256":"'"$(printf '%064d' 2)"'"},{"name":"yarn","version":"1.22.22","license":"BSD-2-Clause","license_file":"/opt/yarn-v1.22.22/LICENSE","license_sha256":"'"$(printf '%064d' 3)"'"}]}' \
+  >"$runtime/licenses.json"
+sbom_sha="$(sha256sum "$runtime/sbom.cdx.json" | awk '{print $1}')"
+licenses_sha="$(sha256sum "$runtime/licenses.json" | awk '{print $1}')"
+python3 -B - "$runtime/build-receipt.json" "$image_sha" "$config_hex" \
+  "$history_sha" "$sbom_sha" "$licenses_sha" <<'PY'
 import json
 import sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
     "archive_sha256": sys.argv[2],
     "architecture": "amd64",
+    "config_digest": "sha256:" + sys.argv[3],
+    "history_sha256": sys.argv[4],
     "image_id": "sha256:" + "0" * 64,
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "platform": "linux/amd64",
+    "sbom_sha256": sys.argv[5],
+    "licenses_sha256": sys.argv[6],
     "schema": "node-next-runtime-build-receipt.v1",
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
-printf '{"bomFormat":"CycloneDX"}\n' >"$runtime/sbom.cdx.json"
-printf '{"schema":"node-runtime-license-inventory.v1"}\n' >"$runtime/licenses.json"
 printf 'FROM scratch\n' >"$runtime/Dockerfile"
 printf '{"name":"node-next-runtime"}\n' >"$runtime/package.json"
 printf '{"lockfileVersion":3}\n' >"$runtime/package-lock.json"
@@ -121,7 +146,8 @@ validation_output="$(bash "$builder" --validate-only 2>&1)" || fail validate_onl
 grep -Fxq 'ishikawa_carry_candidate_build=ready' <<<"$validation_output" \
   || fail validate_ready_marker_missing
 
-run_output="$(bash "$builder" --run 2>&1)" || fail success_path_failed
+run_output="$(bash "$builder" --run 2>&1)" \
+  || { printf '%s\n' "$run_output" >&2; fail success_path_failed; }
 grep -Fxq 'ishikawa_carry_candidate_build=pass' <<<"$run_output" \
   || fail success_marker_missing
 handoff="$fixture/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current"
@@ -145,6 +171,40 @@ grep -Fq 'reason=application_handoff_checksum_failed' <<<"$checksum_output" \
 mv -- "$test_root/application.sha256" "$application/ishikawa-v1.3.1.tar.gz.sha256"
 (
   cd -- "$application"
+  while IFS= read -r name; do sha256sum -- "$name"; done < <(
+    find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+  ) >SHA256SUMS
+)
+
+cp -- "$runtime/image-identity.json" "$test_root/provenance-image-identity.json"
+cp -- "$runtime/build-receipt.json" "$test_root/provenance-build-receipt.json"
+python3 -B - "$runtime/image-identity.json" "$runtime/build-receipt.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+for name in sys.argv[1:]:
+    path = Path(name)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["history_sha256"] = "f" * 64
+    path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+(
+  cd -- "$runtime"
+  while IFS= read -r name; do sha256sum -- "$name"; done < <(
+    find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+  ) >SHA256SUMS
+)
+set +e
+provenance_output="$(bash "$builder" --run 2>&1)"
+provenance_status="$?"
+set -e
+(( provenance_status != 0 )) || fail provenance_failure_reported_success
+grep -Fq 'reason=runtime_provenance_invalid' <<<"$provenance_output" \
+  || fail provenance_failure_reason_missing
+mv -- "$test_root/provenance-image-identity.json" "$runtime/image-identity.json"
+mv -- "$test_root/provenance-build-receipt.json" "$runtime/build-receipt.json"
+(
+  cd -- "$runtime"
   while IFS= read -r name; do sha256sum -- "$name"; done < <(
     find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
   ) >SHA256SUMS
@@ -192,5 +252,5 @@ grep -Fq 'reason=publication_language_invalid' <<<"$language_output" \
 
 printf '%s\n' \
   'success=pass;rerun=pass;supersession=pass;published_verification=pass' \
-  'checksum_refusal=pass;identity_refusal=pass;terminology_refusal=pass'
+  'checksum_refusal=pass;provenance_refusal=pass;identity_refusal=pass;terminology_refusal=pass'
 printf '\nSCRIPT RESULT\nishikawa_carry_builder_test=pass\n'

@@ -69,6 +69,14 @@ block() {
   exit 1
 }
 
+unexpected_error() {
+  local status="$1" line="$2"
+  trap - ERR
+  block unexpected_command_failure \
+    "An unhandled command failed at runtime-image builder line ${line} with exit code ${status}." \
+    'Review the retained report and correct the complete failing stage.'
+}
+
 cleanup() {
   local status="$?"
   trap - EXIT INT TERM
@@ -87,6 +95,7 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+trap 'unexpected_error "$?" "$LINENO"' ERR
 trap 'current_stage=interrupted; block signal_interrupt "Runtime image build was interrupted." "Review the retained report and rerun the same command."' INT
 trap 'current_stage=interrupted; block signal_termination "Runtime image build received SIGTERM." "Review the retained report and rerun the same command."' TERM
 
@@ -319,10 +328,12 @@ while kill -0 "$build_pid" 2>/dev/null; do
     emit "[IMAGE] state=building;elapsed_seconds=${elapsed_seconds}"
   fi
 done
+trap - ERR
 set +e
 wait "$build_pid"
 build_status="$?"
 set -e
+trap 'unexpected_error "$?" "$LINENO"' ERR
 build_pid=''
 if (( build_status != 0 )); then
   tail -n 120 "$build_log" | tee -a "$report_path" >&2
@@ -346,9 +357,13 @@ image_id="$("${docker_command[@]}" image inspect "$image_reference" --format '{{
   || block image_id_invalid \
     'The built image omitted a canonical SHA-256 image ID.' \
     'Inspect the Docker build result and rerun.'
-"${docker_command[@]}" run --rm --network none --entrypoint node "$image_reference" \
-  --input-type=module -e \
-  'import next from "next/package.json" with {type:"json"}; import react from "react/package.json" with {type:"json"}; import reactDom from "react-dom/package.json" with {type:"json"}; const expected={node:"v24.22.1",next:"16.4.3",react:"19.2.9",reactDom:"19.2.9"}; const actual={node:process.version,next:next.version,react:react.version,reactDom:reactDom.version}; if(JSON.stringify(actual)!==JSON.stringify(expected)){process.exit(1)}; console.log("runtime_identity=pass")' \
+"${docker_command[@]}" run --rm --network none --entrypoint sh "$image_reference" -eu -c '
+  test "$(node --version)" = "v24.22.1"
+  test "$(npm --version)" = "11.19.1"
+  test "$(yarn --version)" = "1.22.22"
+  node --input-type=module -e '\''import next from "next/package.json" with {type:"json"}; import react from "react/package.json" with {type:"json"}; import reactDom from "react-dom/package.json" with {type:"json"}; const expected={next:"16.4.3",react:"19.2.9",reactDom:"19.2.9"}; const actual={next:next.version,react:react.version,reactDom:reactDom.version}; if(JSON.stringify(actual)!==JSON.stringify(expected)){process.exit(1)}'\''
+  printf "runtime_identity=pass\n"
+' \
   >"$work_root/runtime-identity.txt" 2>&1 \
   || block runtime_identity_mismatch \
     'The built image does not expose the exact reviewed runtime versions.' \
@@ -365,6 +380,9 @@ grep -Fxq 'runtime_identity=pass' "$work_root/runtime-identity.txt" \
   test ! -e /opt/nextjs/corpus
   test -d /opt/nextjs/node_modules
   test -f /opt/nextjs/package-lock.json
+  test -f /usr/local/LICENSE
+  test -f /usr/local/lib/node_modules/npm/LICENSE
+  test -f /opt/yarn-v1.22.22/LICENSE
   ! find /opt/nextjs -path /opt/nextjs/node_modules -prune -o -iname "*ishikawa*" -print | grep -q .
 ' >/dev/null 2>&1 \
   || block image_boundary_failed \
@@ -393,10 +411,12 @@ while kill -0 "$build_pid" 2>/dev/null; do
     emit "[ARCHIVE] state=exporting;elapsed_seconds=${export_elapsed_seconds}"
   fi
 done
+trap - ERR
 set +e
 wait "$build_pid"
 export_status="$?"
 set -e
+trap 'unexpected_error "$?" "$LINENO"' ERR
 build_pid=''
 (( export_status == 0 )) \
   || block image_export_failed \
@@ -405,6 +425,60 @@ build_pid=''
 archive_sha256="$(sha256sum -- "$archive" | awk '{print $1}')"
 printf '%s  %s\n' "$archive_sha256" "$(basename -- "$archive")" \
   >"$archive.sha256"
+archive_config_path="$(tar -xOf "$archive" manifest.json \
+  | jq -er --arg image_reference "$image_reference" \
+      'if length == 1
+          and (.[0].Config | type == "string")
+          and .[0].RepoTags == [$image_reference]
+          and (.[0].Layers | type == "array" and length > 0)
+       then .[0].Config else error("invalid image manifest") end')" \
+  || block archive_manifest_invalid \
+    'The exported archive does not contain one bounded image config reference.' \
+    'Do not publish the archive.'
+case "$archive_config_path" in
+  blobs/sha256/[0-9a-f][0-9a-f]*) config_hex="${archive_config_path##*/}" ;;
+  [0-9a-f][0-9a-f]*.json) config_hex="${archive_config_path%.json}" ;;
+  *) block archive_config_path_invalid \
+       'The exported archive image-config path is not checksum-addressed.' \
+       'Do not publish the archive.' ;;
+esac
+[[ "$config_hex" =~ ^[0-9a-f]{64}$ ]] \
+  || block archive_config_digest_invalid \
+    'The exported archive image-config path lacks a SHA-256 identity.' \
+    'Do not publish the archive.'
+tar -xOf "$archive" "$archive_config_path" >"$work_root/image-config.json" \
+  || block archive_config_missing \
+    'The exported archive omits its referenced image config.' \
+    'Do not publish the archive.'
+[[ "$(sha256sum -- "$work_root/image-config.json" | awk '{print $1}')" == "$config_hex" ]] \
+  || block archive_config_checksum_failed \
+    'The exported image config does not match its checksum-addressed path.' \
+    'Do not publish the archive.'
+config_digest="sha256:${config_hex}"
+jq -ceS '.history' "$work_root/image-config.json" >"$work_root/image-history.json" \
+  || block image_history_invalid \
+    'The exported image config lacks a valid history array.' \
+    'Do not publish the archive.'
+history_sha256="$(sha256sum -- "$work_root/image-history.json" | awk '{print $1}')"
+jq -e '
+  .architecture == "amd64"
+  and .os == "linux"
+  and (.history | type == "array" and length > 0)
+  and .rootfs.type == "layers"
+  and (.rootfs.diff_ids | type == "array" and length > 0)
+  and all(.rootfs.diff_ids[]; test("^sha256:[0-9a-f]{64}$"))
+  and .config.WorkingDir == "/opt/nextjs"
+  and .config.Cmd == ["next", "--help"]' \
+  "$work_root/image-config.json" >/dev/null \
+  || block image_config_contract_invalid \
+    'The exported image config violates the frozen platform/runtime contract.' \
+    'Do not publish the archive.'
+if grep -Eiq 'Ishikawa|Prj|phase-|Script[[:space:]]+[0-9]|Codex|EmceeDanko|DankoSurface|((api[_-]?key|password|secret|token)=)' \
+    "$work_root/image-config.json"; then
+  block image_config_private_term_found \
+    'The exported image config/history contains a prohibited local or secret-bearing term.' \
+    'Remove the leaking build input and rebuild.'
+fi
 "${docker_command[@]}" load --input "$archive" >"$work_root/load.txt" 2>&1 \
   || block exported_archive_load_failed \
     'The exported Docker archive could not be loaded.' \
@@ -426,9 +500,16 @@ printf '%s  %s\n' "$archive_sha256" "$(basename -- "$archive")" \
   || { tail -n 80 "$work_root/npm-installed.stderr" | tee -a "$report_path" >&2; block npm_inventory_failed \
     'The exact installed npm dependency inventory could not be read.' \
     'Correct the image dependency state before publication.'; }
+"${docker_command[@]}" run --rm --network none --entrypoint sha256sum "$image_reference" \
+  /usr/local/LICENSE /usr/local/lib/node_modules/npm/LICENSE \
+  /opt/yarn-v1.22.22/LICENSE >"$work_root/runtime-tool-licenses.tsv" \
+  2>"$work_root/runtime-tool-licenses.stderr" \
+  || { tail -n 80 "$work_root/runtime-tool-licenses.stderr" | tee -a "$report_path" >&2; block runtime_tool_license_inventory_failed \
+    'The exact Node.js, npm, and Yarn license identities could not be read.' \
+    'Correct the image license state before publication.'; }
 python3 -B - "$source_root/package-lock.json" "$work_root/npm-installed.json" \
   "$work_root/os-packages.tsv" \
-  "$artifact_stage/sbom.cdx.json" "$image_reference" "$image_id" <<'PY'
+  "$artifact_stage/sbom.cdx.json" "$image_reference" "$image_id" "$config_digest" <<'PY'
 import base64
 import json
 import sys
@@ -436,7 +517,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-lock_path, npm_path, os_path, output_path, image_reference, image_id = sys.argv[1:]
+lock_path, npm_path, os_path, output_path, image_reference, image_id, config_digest = sys.argv[1:]
 lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
 npm_tree = json.loads(Path(npm_path).read_text(encoding="utf-8"))
 installed_npm = set()
@@ -447,13 +528,32 @@ def collect(dependencies):
             installed_npm.add((name, version))
         collect(record.get("dependencies", {}))
 collect(npm_tree.get("dependencies", {}))
-components = [{
-    "bom-ref": "pkg:generic/node@24.22.1",
-    "name": "node",
-    "purl": "pkg:generic/node@24.22.1",
-    "type": "framework",
-    "version": "24.22.1",
-}]
+components = [
+    {
+        "bom-ref": "pkg:generic/node@24.22.1",
+        "licenses": [{"license": {"id": "MIT"}}],
+        "name": "node",
+        "purl": "pkg:generic/node@24.22.1",
+        "type": "framework",
+        "version": "24.22.1",
+    },
+    {
+        "bom-ref": "pkg:npm/npm@11.19.1",
+        "licenses": [{"license": {"id": "Artistic-2.0"}}],
+        "name": "npm",
+        "purl": "pkg:npm/npm@11.19.1",
+        "type": "application",
+        "version": "11.19.1",
+    },
+    {
+        "bom-ref": "pkg:npm/yarn@1.22.22",
+        "licenses": [{"license": {"id": "BSD-2-Clause"}}],
+        "name": "yarn",
+        "purl": "pkg:npm/yarn@1.22.22",
+        "type": "application",
+        "version": "1.22.22",
+    },
+]
 seen = set()
 for package_path, record in sorted(lock["packages"].items()):
     if not package_path:
@@ -506,6 +606,7 @@ bom = {
             "name": image_reference.split(":", 1)[0],
             "properties": [
                 {"name": "oci:image:id", "value": image_id},
+                {"name": "oci:image:config-digest", "value": config_digest},
                 {"name": "oci:image:platform", "value": "linux/amd64"},
             ],
             "type": "container",
@@ -523,7 +624,7 @@ Path(output_path).write_text(
 PY
 python3 -B - "$source_root/package-lock.json" "$work_root/npm-installed.json" \
   "$work_root/os-packages.tsv" \
-  "$artifact_stage/licenses.json" <<'PY'
+  "$work_root/runtime-tool-licenses.tsv" "$artifact_stage/licenses.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -566,13 +667,35 @@ for line in Path(sys.argv[3]).read_text(encoding="utf-8").splitlines():
         "name": name,
         "version": version,
     })
+license_hashes = {}
+for line in Path(sys.argv[4]).read_text(encoding="utf-8").splitlines():
+    fields = line.split()
+    if len(fields) != 2 or len(fields[0]) != 64 or not fields[1].startswith("/"):
+        raise SystemExit(1)
+    license_hashes[fields[1]] = fields[0]
+runtime_tools = []
+for name, version, license_id, license_file in (
+    ("node", "24.22.1", "MIT", "/usr/local/LICENSE"),
+    ("npm", "11.19.1", "Artistic-2.0", "/usr/local/lib/node_modules/npm/LICENSE"),
+    ("yarn", "1.22.22", "BSD-2-Clause", "/opt/yarn-v1.22.22/LICENSE"),
+):
+    license_sha256 = license_hashes.get(license_file)
+    if license_sha256 is None:
+        raise SystemExit(1)
+    runtime_tools.append({
+        "license": license_id,
+        "license_file": license_file,
+        "license_sha256": license_sha256,
+        "name": name,
+        "version": version,
+    })
 output = {
     "javascript_packages": javascript_packages,
-    "node_license_path": "/usr/local/LICENSE",
     "operating_system_packages": operating_system_packages,
+    "runtime_tools": runtime_tools,
     "schema": "node-runtime-license-inventory.v1",
 }
-Path(sys.argv[4]).write_text(
+Path(sys.argv[5]).write_text(
     json.dumps(output, sort_keys=True, separators=(",", ":")) + "\n",
     encoding="utf-8",
 )
@@ -581,18 +704,22 @@ cp -- "$source_root/Dockerfile" "$source_root/package.json" \
   "$source_root/package-lock.json" "$source_root/README.md" \
   "$source_root/SECURITY.md" "$source_root/LICENSES.md" "$artifact_stage/"
 python3 -B - "$artifact_stage/image-identity.json" "$image_reference" "$image_id" \
-  "$base_manifest_digest" "$archive_sha256" "$lock_sha256" <<'PY'
+  "$config_digest" "$history_sha256" "$base_manifest_digest" "$archive_sha256" \
+  "$lock_sha256" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-output, reference, image_id, base_digest, archive_digest, lock_digest = sys.argv[1:]
+(output, reference, image_id, config_digest, history_digest, base_digest,
+ archive_digest, lock_digest) = sys.argv[1:]
 record = {
     "application_in_image": False,
     "archive_sha256": archive_digest,
     "architecture": "amd64",
     "base_manifest_digest": base_digest,
+    "config_digest": config_digest,
     "generated_next_in_image": False,
+    "history_sha256": history_digest,
     "image_id": image_id,
     "image_reference": reference,
     "lock_sha256": lock_digest,
@@ -603,6 +730,7 @@ record = {
     "react": "19.2.9",
     "react_dom": "19.2.9",
     "schema": "node-next-runtime-image.v1",
+    "yarn": "1.22.22",
 }
 Path(output).write_text(
     json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
@@ -612,20 +740,22 @@ PY
 sbom_sha256="$(sha256sum -- "$artifact_stage/sbom.cdx.json" | awk '{print $1}')"
 licenses_sha256="$(sha256sum -- "$artifact_stage/licenses.json" | awk '{print $1}')"
 python3 -B - "$artifact_stage/build-receipt.json" "$image_reference" "$image_id" \
-  "$base_manifest_digest" "$archive_sha256" "$lock_sha256" "$sbom_sha256" \
-  "$licenses_sha256" <<'PY'
+  "$config_digest" "$history_sha256" "$base_manifest_digest" "$archive_sha256" \
+  "$lock_sha256" "$sbom_sha256" "$licenses_sha256" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-(output, reference, image_id, base_digest, archive_digest, lock_digest,
- sbom_digest, licenses_digest) = sys.argv[1:]
+(output, reference, image_id, config_digest, history_digest, base_digest,
+ archive_digest, lock_digest, sbom_digest, licenses_digest) = sys.argv[1:]
 record = {
     "application_in_image": False,
     "archive_sha256": archive_digest,
     "architecture": "amd64",
     "base_manifest_digest": base_digest,
+    "config_digest": config_digest,
     "generated_next_in_image": False,
+    "history_sha256": history_digest,
     "image_id": image_id,
     "image_reference": reference,
     "licenses_sha256": licenses_digest,
@@ -651,7 +781,7 @@ PY
 ) || block artifact_checksum_failed \
   'The assembled runtime handoff failed its complete checksum manifest.' \
   'Do not publish the handoff.'
-emit "[ARCHIVE] state=pass;sha256=${archive_sha256}"
+emit "[ARCHIVE] state=pass;sha256=${archive_sha256};config_digest=${config_digest};history_sha256=${history_sha256}"
 
 current_stage='publication'
 artifact_backup=''

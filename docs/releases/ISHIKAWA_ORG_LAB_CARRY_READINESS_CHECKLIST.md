@@ -446,8 +446,13 @@ application build, exact-image advisory/license review, installed production
 UI, EmceeDanko requalification and human acceptance, Tech inventory, protected
 corpus execution, independent final review, or stable-handoff promotion.
 
-Current next gate: build the exact generic AMD64 runtime image on the approved
-AMD64 Docker host. The package remains **NOT CARRY-READY**.
+Script 07's first native execution passed build, transfer, publication, and
+cleanup, but post-run review found that its records did not yet bind the
+exported OCI config/history or enumerate npm and Yarn as runtime tools. The
+builder, wrapper, carry assembler, and portable verifier now enforce those
+bindings plus the exact archive tag and checksum-addressed layer graph. Current
+next gate: rerun corrected Script 07 on the approved AMD64 Docker host. The
+package remains **NOT CARRY-READY**.
 
 ## Mandatory package checklist
 

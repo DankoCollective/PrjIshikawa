@@ -13,6 +13,11 @@ WORKDIR /opt/nextjs
 COPY package.json package-lock.json ./
 
 RUN npm ci --omit=dev --no-audit --no-fund \
+    && test "$(npm --version)" = "11.19.1" \
+    && test "$(yarn --version)" = "1.22.22" \
+    && test -f /usr/local/LICENSE \
+    && test -f /usr/local/lib/node_modules/npm/LICENSE \
+    && test -f /opt/yarn-v1.22.22/LICENSE \
     && node --input-type=module -e \
       'import next from "next/package.json" with {type:"json"}; import react from "react/package.json" with {type:"json"}; import reactDom from "react-dom/package.json" with {type:"json"}; const expected={node:"v24.22.1",next:"16.4.3",react:"19.2.9",reactDom:"19.2.9"}; const actual={node:process.version,next:next.version,react:react.version,reactDom:reactDom.version}; if(JSON.stringify(actual)!==JSON.stringify(expected)){throw new Error(`runtime identity mismatch: ${JSON.stringify(actual)}`)}' \
     && npm cache clean --force \

@@ -23,8 +23,10 @@ The v1.3.1 source manifest contains 211 files and has SHA-256:
 - Generic runtime-image builder harness: success, repeat publication,
   supersession, checksum verification, build failure, image-boundary failure,
   terminology failure, combined installed-npm/Debian CycloneDX SBOM, combined
-  license inventory, build-receipt validation, native host/Docker architecture
-  refusal, and CPU/Docker-storage capacity refusal passed.
+  license inventory, exact Node/npm/Yarn identity and license evidence,
+  Docker manifest/tag/layer checks, OCI-config and canonical-history binding,
+  build-receipt validation, native host/Docker architecture refusal, and
+  CPU/Docker-storage capacity refusal passed.
 - Script 07 wrapper harness: validation-only, transfer, native-host execution,
   artifact return, atomic publication, repeat supersession, nested build
   failure, returned-checksum refusal, host-identity refusal, current-handoff
@@ -35,7 +37,8 @@ The v1.3.1 source manifest contains 211 files and has SHA-256:
   cleanup, and occupied-port refusal passed.
 - Carry-builder harness: separate-payload assembly, portable verification,
   repeat publication, supersession, application checksum refusal, runtime
-  identity refusal, carry inventory, and terminology refusal passed.
+  identity refusal, independent runtime archive/config/history/SBOM/license
+  binding, carry inventory, and terminology refusal passed.
 - Portable deployment-entrypoint harness: verification, read-only inventory,
   image/application/configuration/unit installation, custom-port
   configuration, clean role/database/pgvector/schema initialization,
@@ -57,14 +60,24 @@ The v1.3.1 source manifest contains 211 files and has SHA-256:
 ## Boundary and remaining gates
 
 The builder harnesses use deterministic command doubles to cover failure and
-publication branches. They do not qualify real image bytes. This record does
-not claim that the generic AMD64 image or v1.3.1 application candidate has
-been built, scanned, requalified, accepted, or promoted.
+publication branches. Script 07's first real EmceeDanko execution completed
+its native build, archive round trip, atomic publication, and cleanup paths.
+Its content-free report has SHA-256
+`ee1589f365adf61de9aa4d7a3d5c1ce70c163149c305619164ccb7e0fa329bd7`.
+Post-run review rejected that handoff as final evidence because the receipt did
+not yet bind the exported OCI config/history and omitted npm/Yarn from the
+explicit runtime-tool license evidence. The bounded correction now records and
+independently verifies those identities through the downstream portable carry
+verifier. The first image is preserved only as superseded build evidence; it
+is not a promotion input.
+
+This record does not claim that the corrected generic AMD64 image or v1.3.1
+application candidate has been scanned, requalified, accepted, or promoted.
 
 The remaining ordered gates are:
 
-1. run Script 07 to build and export the exact generic Linux AMD64 runtime
-   image natively on EmceeDanko;
+1. rerun corrected Script 07 to build and export the exact generic Linux AMD64
+   runtime image natively on EmceeDanko;
 2. inspect the exact combined SBOM, license inventory, build receipt, image
    identity, image history, and archive checksum and complete the fresh
    advisory scan;

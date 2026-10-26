@@ -132,33 +132,55 @@ printf '%s\n' \
   '{"application_license":"Apache-2.0","schema":"ishikawa.application-license.v1"}' \
   >"$carry/application-license.json"
 
-mkdir -p -- "$test_root/image"
-printf '[]\n' >"$test_root/image/manifest.json"
-tar -cf "$carry/node-next-runtime-amd64.tar" -C "$test_root/image" manifest.json
+mkdir -p -- "$test_root/image/blobs/sha256"
+printf '%s\n' \
+  '{"architecture":"amd64","os":"linux","config":{"WorkingDir":"/opt/nextjs","Cmd":["next","--help"]},"rootfs":{"type":"layers","diff_ids":["sha256:0000000000000000000000000000000000000000000000000000000000000004"]},"history":[{"created_by":"generic runtime layer"}]}' \
+  >"$test_root/image/config.json"
+config_hex="$(sha256sum "$test_root/image/config.json" | awk '{print $1}')"
+history_sha="$(jq -cS .history "$test_root/image/config.json" | sha256sum | awk '{print $1}')"
+printf 'mock compressed layer\n' >"$test_root/image/layer"
+layer_hex="$(sha256sum "$test_root/image/layer" | awk '{print $1}')"
+mv -- "$test_root/image/config.json" "$test_root/image/blobs/sha256/$config_hex"
+mv -- "$test_root/image/layer" "$test_root/image/blobs/sha256/$layer_hex"
+printf '[{"Config":"blobs/sha256/%s","RepoTags":["node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"],"Layers":["blobs/sha256/%s"]}]\n' \
+  "$config_hex" "$layer_hex" >"$test_root/image/manifest.json"
+tar -cf "$carry/node-next-runtime-amd64.tar" -C "$test_root/image" manifest.json blobs
 (cd -- "$carry" && sha256sum node-next-runtime-amd64.tar >node-next-runtime-amd64.tar.sha256)
 image_sha="$(sha256sum "$carry/node-next-runtime-amd64.tar" | awk '{print $1}')"
 application_sha="$(sha256sum "$carry/ishikawa-v1.3.1.tar.gz" | awk '{print $1}')"
+printf '%s\n' \
+  '{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"component":{"properties":[{"name":"oci:image:config-digest","value":"sha256:'"$config_hex"'"}]}},"components":[{"name":"node","version":"24.22.1","licenses":[{"license":{"id":"MIT"}}]},{"name":"npm","version":"11.19.1","licenses":[{"license":{"id":"Artistic-2.0"}}]},{"name":"yarn","version":"1.22.22","licenses":[{"license":{"id":"BSD-2-Clause"}}]}]}' \
+  >"$carry/runtime-sbom.cdx.json"
+printf '%s\n' \
+  '{"schema":"node-runtime-license-inventory.v1","runtime_tools":[{"name":"node","version":"24.22.1","license":"MIT","license_file":"/usr/local/LICENSE","license_sha256":"'"$(printf '%064d' 1)"'"},{"name":"npm","version":"11.19.1","license":"Artistic-2.0","license_file":"/usr/local/lib/node_modules/npm/LICENSE","license_sha256":"'"$(printf '%064d' 2)"'"},{"name":"yarn","version":"1.22.22","license":"BSD-2-Clause","license_file":"/opt/yarn-v1.22.22/LICENSE","license_sha256":"'"$(printf '%064d' 3)"'"}]}' \
+  >"$carry/runtime-licenses.json"
+runtime_sbom_sha="$(sha256sum "$carry/runtime-sbom.cdx.json" | awk '{print $1}')"
+runtime_licenses_sha="$(sha256sum "$carry/runtime-licenses.json" | awk '{print $1}')"
 python3 -B - "$carry/runtime-image-identity.json" "$carry/carry-receipt.json" \
-  "$image_sha" "$application_sha" <<'PY'
+  "$image_sha" "$application_sha" "$config_hex" "$history_sha" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-identity_path, receipt_path, image_sha, application_sha = sys.argv[1:]
+identity_path, receipt_path, image_sha, application_sha, config_hex, history_sha = sys.argv[1:]
 reference = "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"
 identity = {
     "application_in_image": False,
     "archive_sha256": image_sha,
     "architecture": "amd64",
+    "config_digest": "sha256:" + config_hex,
     "generated_next_in_image": False,
+    "history_sha256": history_sha,
     "image_id": "sha256:" + "0" * 64,
     "image_reference": reference,
     "next": "16.4.3",
     "node": "24.22.1",
+    "npm": "11.19.1",
     "platform": "linux/amd64",
     "react": "19.2.9",
     "react_dom": "19.2.9",
     "schema": "node-next-runtime-image.v1",
+    "yarn": "1.22.22",
 }
 receipt = {
     "application_archive_sha256": application_sha,
@@ -166,6 +188,8 @@ receipt = {
     "architecture": "amd64",
     "boot_autostart": False,
     "image_archive_sha256": image_sha,
+    "image_config_digest": "sha256:" + config_hex,
+    "image_history_sha256": history_sha,
     "image_reference": reference,
     "platform": "linux/amd64",
     "promotion_state": "final_exact_byte_requalified",
@@ -174,21 +198,24 @@ receipt = {
 for path, value in ((Path(identity_path), identity), (Path(receipt_path), receipt)):
     path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
-python3 -B - "$carry/runtime-build-receipt.json" "$image_sha" <<'PY'
+python3 -B - "$carry/runtime-build-receipt.json" "$image_sha" "$config_hex" \
+  "$history_sha" "$runtime_sbom_sha" "$runtime_licenses_sha" <<'PY'
 import json
 import sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
     "archive_sha256": sys.argv[2],
     "architecture": "amd64",
+    "config_digest": "sha256:" + sys.argv[3],
+    "history_sha256": sys.argv[4],
     "image_id": "sha256:" + "0" * 64,
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "platform": "linux/amd64",
+    "sbom_sha256": sys.argv[5],
+    "licenses_sha256": sys.argv[6],
     "schema": "node-next-runtime-build-receipt.v1",
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
-printf '{"bomFormat":"CycloneDX"}\n' >"$carry/runtime-sbom.cdx.json"
-printf '{"schema":"node-runtime-license-inventory.v1"}\n' >"$carry/runtime-licenses.json"
 printf 'FROM scratch\n' >"$carry/runtime-Dockerfile"
 printf '{"name":"node-next-runtime"}\n' >"$carry/runtime-package.json"
 printf '{"lockfileVersion":3}\n' >"$carry/runtime-package-lock.json"

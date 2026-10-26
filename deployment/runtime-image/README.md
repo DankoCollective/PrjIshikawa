@@ -1,8 +1,9 @@
 # Generic Node/Next runtime image
 
 This source builds one application-free Linux AMD64 runtime image containing
-Node.js 24.22.1, Next.js 16.4.3, React 19.2.9, React DOM 19.2.9, and the exact
-transitive dependency graph in `package-lock.json`.
+Node.js 24.22.1, npm 11.19.1, Yarn 1.22.22, Next.js 16.4.3, React 19.2.9,
+React DOM 19.2.9, and the exact transitive dependency graph in
+`package-lock.json`.
 
 The image deliberately contains no application source, application
 configuration, corpus, credential, database state, target-host state, or

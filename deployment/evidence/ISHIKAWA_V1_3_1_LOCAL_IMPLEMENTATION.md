@@ -91,6 +91,14 @@ inventory with Script 01 and preserves the complete inner failure detail.
 The full regression set passed after that correction. Script 08 must be rerun
 to resolve or identify the exact target-side prerequisite.
 
+The rerun identified `source_manifest_mismatch` even though the transferred
+payload and every source file passed their checksums. The application builder
+had left manifest ordering to the host collation locale. It now fixes
+`LC_ALL=C` before source-manifest generation and every subsequent deterministic
+assembly step. A command-double gate rejects any builder execution that does
+not carry that locale into `sort`; the complete regression set passed after
+the correction.
+
 The remaining ordered gates are:
 
 1. run Script 08 to build the exact v1.3.1 application candidate natively on

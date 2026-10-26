@@ -99,6 +99,11 @@ case "${1:-}" in
   *) exit 93 ;;
 esac
 MOCK
+cat >"$fixture/bin/sort" <<'MOCK'
+#!/usr/bin/env bash
+[[ "${LC_ALL:-}" == C ]] || exit 96
+exec /usr/bin/sort "$@"
+MOCK
 chmod 0755 "$fixture/bin/"*
 
 builder="$fixture/deployment/scripts/01_build-ishikawa-release.sh"
@@ -201,7 +206,7 @@ grep -Fq 'reason=repository_reference_found' <<<"$language_output" \
   || fail language_failure_reason_missing
 
 printf '%s\n' \
-  'success=pass;rerun=pass;supersession=pass;checksums=pass;license=pass;sbom=pass' \
+  'success=pass;rerun=pass;supersession=pass;checksums=pass;license=pass;sbom=pass;locale_independence=pass' \
   'manifest_refusal=pass;native_failure=pass;javascript_failure=pass' \
   'next_build_failure=pass;terminology_refusal=pass'
 printf '\nSCRIPT RESULT\nishikawa_application_builder_test=pass\n'

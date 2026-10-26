@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+# Artifact identity must not depend on the build host's collation locale.
+export LC_ALL=C
 
 # Purpose:
 #   Build, qualify, and atomically publish the corpus-agnostic Ishikawa v1.3.1
@@ -162,10 +164,15 @@ actual_manifest="$(mktemp /tmp/ishikawa-source-manifest.XXXXXX)"
     find Ishikawa -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.pyo' -printf '%p\n' | sort
   )
 ) >"$actual_manifest"
-cmp -s "$source_manifest" "$actual_manifest" \
-  || { rm -f -- "$actual_manifest"; current_stage='preflight'; block source_manifest_mismatch \
-    'Canonical Ishikawa source differs from the frozen v1.3 manifest.' \
-    'Review the complete source diff and deliberately re-freeze before packaging.'; }
+if ! cmp -s "$source_manifest" "$actual_manifest"; then
+  expected_manifest_sha256="$(sha256sum -- "$source_manifest" | awk '{print $1}')"
+  actual_manifest_sha256="$(sha256sum -- "$actual_manifest" | awk '{print $1}')"
+  rm -f -- "$actual_manifest"
+  current_stage='preflight'
+  block source_manifest_mismatch \
+    "Canonical Ishikawa source manifest mismatch: expected_sha256=${expected_manifest_sha256};actual_sha256=${actual_manifest_sha256}." \
+    'Review the complete source diff and deliberately re-freeze before packaging.'
+fi
 rm -f -- "$actual_manifest"
 
 bash -n "${BASH_SOURCE[0]}" "$test_runner" "$release_verifier" \

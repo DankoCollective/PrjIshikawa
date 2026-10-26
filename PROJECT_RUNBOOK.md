@@ -37,11 +37,24 @@
    Its corpus-v3 inventory gate distinguishes 240 stored relationship records
    from 90 distinct source-document/target-identity relationship pairs; neither
    metric may substitute for the other.
-10. Prove disposable cleanup, then install v1.3 without overwriting the accepted
-   prior installation.
-11. Keep boot autostart disabled and start Ishikawa only for attended human UI
-   verification.
-12. Record acceptance or execute the proved rollback. Assemble the org-lab
+10. Script 06 revalidates the exact application, candidate, corpus-v3 input,
+    and Script 05 evidence, then completes all host, model, PostgreSQL 16,
+    pgvector, capacity, image, configuration, layout, and port preflights while
+    v1.2 remains ready.
+11. For a fresh run, Script 06 creates the corpus-v3 catalog and manifest,
+    builds schema v5 and ingests corpus v3 in a dedicated durable PostgreSQL
+    cluster on private validation port `65438`, and revalidates the complete
+    corpus inventory. It never opens or modifies the accepted v1.2 database.
+12. Only at the immediate attended launch boundary, Script 06 stops the v1.2
+    UI, Retrieval API, and host PostgreSQL cluster. It then starts the isolated
+    v1.3 cluster on `5432`, the package-local Retrieval API on `8384`, and the
+    distinct UI container on `3384`. No v1.3 systemd unit is installed or
+    enabled, and all boot autostart remains disabled. Any failed launch stops
+    v1.3 and automatically restores the untouched v1.2 PostgreSQL cluster,
+    Retrieval API, and UI.
+13. Record acceptance with Script 06 `--accept` or restore v1.2 with Script 06
+    `--rollback`. Rollback preserves the isolated durable v1.3 cluster for
+    review or an exact retry. Assemble the org-lab
     carry package and begin org-lab planning only after the exact EmceeDanko
     application has passed attended human UI acceptance.
 
@@ -52,15 +65,20 @@
 - `deployment/scripts/03_export-qualification-corpus.sh`
 - `deployment/scripts/04_stage-v1.3-candidate-on-emceedanko.sh`
 - `deployment/scripts/05_qualify-v1.3-on-emceedanko.sh`
-- Later attended deployment, acceptance, and rollback commands
-  must use product/action names and must not require historical Phase 28 repair
-  scripts.
+- `deployment/scripts/06_attended-v1.3-on-emceedanko.sh`
 
 Script 05 prints a complete `[INPUT REQUIRED]` line before each hidden Gemma
 and Nomic API-key input. It does not log or retain either value. A clean Script
 05 result authorizes the
 attended production-port human UI gate; it does not itself promote v1.3 or stop
 v1.2.
+
+Script 06 `--run` prompts for the Gemma key, Nomic key, accepted v1.2 retrieval
+password, and separate v1.3 ingestion/retrieval passwords through hidden
+terminal input. It prints the local UI address, SSH forwarding command, and
+exact `--accept` and `--rollback` commands after a passing launch. Script 06
+does not promote v1.3 into the canonical v1.2 path and does not authorize
+org-lab packaging.
 
 ## Evidence rules
 

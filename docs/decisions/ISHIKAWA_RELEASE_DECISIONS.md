@@ -8,14 +8,14 @@ journey.
 
 ## Current Status
 
-Items V13-60 through V13-74 are frozen through the operator-approved release
+Items V13-60 through V13-75 are frozen through the operator-approved release
 journey and bounded corrections to that existing contract. Implementation must
 preserve the accepted product behavior and qualification thresholds unless a
-later numbered decision explicitly reopens them. Scripts 01-05 implement the
+later numbered decision explicitly reopens them. Scripts 01-06 implement the
 corpus-agnostic build, independent corpus export, read-only inventory,
-side-by-side staging, and disposable qualification sequence. Script 05 passed
-on EmceeDanko with 60/60 frontier cases and proved cleanup. The active gate is
-attended v1.3 human UI validation on EmceeDanko.
+side-by-side staging, disposable qualification, and attended deployment
+sequence. Script 05 passed on EmceeDanko with 60/60 frontier cases and proved
+cleanup. The active gate is attended v1.3 human UI validation on EmceeDanko.
 
 ## Decisions
 
@@ -277,3 +277,38 @@ relationship rows representing 90 distinct pairs. Script 05 initially labeled
 correction changes only the qualification metric definition; it does not alter
 corpus bytes, ingestion, retrieval, relationships, application behavior, or an
 accepted target installation.
+
+### V13-75 — Reversible attended v1.3 deployment boundary
+
+Decision: Perform EmceeDanko human UI validation from a package-local v1.3
+runtime and a dedicated durable PostgreSQL 16 data cluster without overwriting
+the accepted v1.2 installation, its database files, or its rollback tree.
+
+Status: Frozen.
+
+Recommendation: Script 06 must revalidate the exact Script 01 archive, staged
+candidate, corpus-v3 input, and checksum-bound Script 05 evidence before target
+mutation. Build and validate the dedicated cluster on private port `65438`
+while v1.2 remains ready. Because the frozen application requires database
+`rag_catalog` and roles `rag_owner`, `rag_ingest`, and `rag_retrieval`, isolate
+the whole cluster rather than renaming those objects. Only at the immediate
+launch boundary stop the v1.2 UI, Retrieval API, and host PostgreSQL cluster;
+then start the dedicated v1.3 cluster on `5432`, the package-local API on
+`8384`, and the distinct UI container on `3384`. Install or enable no v1.3
+systemd unit. Keep all autostart disabled, preserve the durable v1.3 cluster on
+rollback, and automatically stop v1.3 and restore the untouched v1.2 cluster,
+API, and UI after any failed launch. Human acceptance and rollback must remain
+explicit Script 06 actions; org-lab packaging remains a separate later action.
+
+Reason/Evidence: The exact v1.3 configuration validator rejects alternate
+database and role names, while sharing the accepted host cluster would weaken
+the database-isolation guarantee. Whole-cluster isolation preserves the frozen
+application and both durable database trees. Executable Script 06 regressions
+cover exact local evidence revalidation, fresh build cleanup, model preflight
+without mutation, partial-state rejection and preservation, unrelated-PID
+protection, unsafe-runtime-path rejection and preservation,
+schema/catalog/manifest validation, failed launch with automatic restoration,
+restoration-failure reporting, durable reuse, attended launch, human
+acceptance, explicit rollback, remote failure propagation, signal cleanup,
+single-result output, and unchanged v1.2 and candidate boundaries without
+contacting EmceeDanko.

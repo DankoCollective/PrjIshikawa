@@ -131,7 +131,7 @@ find "$product_root" -type l -print -quit | grep -q . \
     'The canonical Python module inventory is not 52 files.' \
     'Review source drift before rebuilding the release.'; }
 for decision in V13-60 V13-61 V13-62 V13-63 V13-64 V13-65 V13-66 V13-67 \
-  V13-68 V13-69 V13-70 V13-71 V13-72 V13-73 V13-74; do
+  V13-68 V13-69 V13-70 V13-71 V13-72 V13-73 V13-74 V13-75; do
   decision_block="$(awk -v header="### ${decision} " '
     index($0, header) == 1 {capture=1}
     capture && /^### / && index($0, header) != 1 {exit}

@@ -6,8 +6,8 @@ Date: 2026-10-25
 
 The active local Ishikawa v1.3 repository surface is internally consistent
 after the corrections recorded below. The frozen application source manifest,
-release archive, native suite, deployment wrapper tests, Python compilation,
-shell syntax, and Markdown links pass locally.
+release archive, native suite, deployment lifecycle and wrapper tests, Python
+compilation, shell syntax, and Markdown links pass locally.
 
 The latest retained EmceeDanko Script 05 report is complete and clean. It
 records 60/60 frontier cases, both standalone pass markers, v1.2 preservation,
@@ -28,6 +28,9 @@ checksum-bound synthetic-only result.
   boundaries;
 - local Markdown links and high-confidence credential patterns; and
 - retained local Script 05 reports, result artifacts, and process state.
+- the consolidated Script 06 preflight, isolated-cluster lifecycle, attended
+  service boundary, automatic restoration, acceptance, rollback, reporting,
+  and interruption behavior.
 
 Binary/PDF payload content was not interpreted as source code. Its applicable
 boundary remains manifest identity, checksum verification, and the qualified
@@ -37,7 +40,7 @@ ingestion path.
 
 1. Canonicalized V13-69 through V13-73 frozen-status spelling and restored the
    missing Recommendation fields for V13-71 and V13-72.
-2. Expanded Script 01's decision preflight through V13-74 and made it require
+2. Expanded Script 01's decision preflight through V13-75 and made it require
    exactly one Decision, Recommendation, Reason/Evidence, and canonical frozen
    Status in every release decision block.
 3. Added discoverable operator references for the complete YAML contracts,
@@ -48,6 +51,15 @@ ingestion path.
    not the current control authority.
 6. Made EmceeDanko attended human UI acceptance an explicit prerequisite to
    assembling the org-lab carry package.
+7. Added one consolidated Script 06 that revalidates the exact Script 01 and
+   Script 05 handoffs, creates or reuses an isolated durable v1.3 PostgreSQL
+   cluster, reserves UI/API ports `3384`/`8384`, stops v1.2 only at the launch
+   boundary, restores v1.2 after any failed launch, and exposes explicit human
+   acceptance and rollback actions without changing boot autostart.
+8. Reconciled the EmceeDanko `1384` contract after all-party review: Anderson
+   is absent from the host, accepted v1.2 owns the port before switchover, and
+   the port remains free afterward for automatic or explicit v1.2 rollback.
+   Script 06 reports that purpose without an Anderson ownership label.
 
 No frozen `Ishikawa/**` application byte was changed by these sweep
 corrections. The application modifications already present in the working tree
@@ -64,9 +76,21 @@ remain covered by the accepted source manifest and validation results below.
   disposable PostgreSQL lifecycle, schema, Nomic contract, ingestion,
   60-question frontier set, relationship evidence, cleanup, and v1.2
   preservation.
-- Shell syntax: 24 scripts, pass.
-- Python byte compilation: 106 files, pass.
-- Local Markdown links: 146 files, pass after the historical-link correction.
+- Attended Script 06 target lifecycle tests: pass, including preflight
+  no-mutation failure, fresh-build cleanup, exact durable reuse, real
+  configuration/catalog/manifest validators, failed-launch restoration,
+  restoration-failure reporting, partial-state preservation, unrelated-PID
+  protection, unsafe-runtime-path rejection and preservation, acceptance,
+  rollback, and candidate/v1.2 preservation.
+- Attended Script 06 wrapper tests: pass, including exact evidence and payload
+  validation, launch/accept/rollback modes, precise remote-failure propagation,
+  SIGTERM cleanup, one result marker, UI address, and operator commands.
+- Script 01 decision/release validation through V13-75: pass.
+- Script 06 local exact-evidence validation: pass with no target, database,
+  service, or credential contact.
+- Shell syntax: 27 active scripts, pass.
+- Python syntax compilation: 106 files, pass without writing bytecode.
+- Local Markdown links: 152 files, pass.
 - Current release artifact verification: pass with release `v1.3`, schema
   version `5`, 486 native tests, 17 JavaScript tests, 60 frontier cases, no
   bundled source documents, and boot autostart disabled.

@@ -168,12 +168,11 @@ operating them.
 
 ### Anderson
 
-- Anderson v1 is a package-local, on-demand application, not a managed
-  service and not a boot-autostart workload.
-- Default listener: `127.0.0.1:1384`.
-- Dalton is its only accepted model-transport boundary.
-- Its attended Anderson/Dalton/Gemma qualification remains a distinct product
-  gate; an installed or buildable package does not imply release acceptance.
+- Anderson is not installed or running on EmceeDanko at this snapshot.
+- Anderson has no active listener, service, or availability requirement on
+  EmceeDanko during the Ishikawa attended gate.
+- Any later Anderson installation, listener assignment, or qualification is a
+  separate product decision and must begin with fresh host and port inventory.
 
 ### Ishikawa
 
@@ -186,18 +185,25 @@ operating them.
   `127.0.0.1:3384` to avoid the operator-reported port `3000` collision.
 - The Retrieval API is a native user service. Its portable packaged default
   remains `127.0.0.1:1384`; the selected EmceeDanko deployment override is
-  `127.0.0.1:8384` so Anderson retains `1384`.
+  `127.0.0.1:8384`. Accepted v1.2 owns `1384` before switchover; after v1.2
+  stops, `1384` remains unoccupied for automatic or explicit v1.2 rollback.
 - PostgreSQL 16 with pgvector is the durable runtime source of truth at
   `127.0.0.1:5432`.
+- The attended v1.3 gate uses a dedicated durable PostgreSQL data cluster. It
+  is built and verified on `127.0.0.1:65438` while v1.2 remains ready, then
+  takes `127.0.0.1:5432` only after the accepted v1.2 application and host
+  PostgreSQL cluster stop at the immediate launch boundary. Both data trees
+  remain preserved; they are never merged.
 - Ingestion is a one-shot command, not a service.
 - Ishikawa creates no Linux user, group, service account, or sudo rule. Its
   user units and stack remain boot-disabled.
 
 For EmceeDanko human review, configure both Ishikawa YAML profiles for port
 `8384`: the deployment profile's Retrieval API port and web retrieval URL,
-and the Retrieval API service profile's default port. Keep Anderson on
-`127.0.0.1:1384`. Configure the deployment profile's Chat UI port as `3384`.
-Inventory all three ports before launch.
+and the Retrieval API service profile's default port. Configure the deployment
+profile's Chat UI port as `3384`. Inventory all three ports before launch. Do
+not assign `1384` to another workload after v1.2 stops; it remains the v1.2
+rollback port until a later promotion decision retires that recovery path.
 
 The earlier demo wrapper used `127.0.0.1:8080`. Treat that as historical
 unless a current inventory proves the service and listener are intentionally
@@ -224,7 +230,7 @@ applications. Do not repoint a client based only on the role label.
 | `ChiefDanko` | `9443` | WSO2 Identity Server | host HTTPS listener when active |
 | `ChiefDanko` | `9444` | WSO2 API Manager | host HTTPS listener when active |
 | `ChiefDanko` | `3389` | GNOME Remote Desktop | lab RDP listener in the accepted proof |
-| `EmceeDanko` | `1384` | Anderson | loopback; reserved for Anderson |
+| `EmceeDanko` | `1384` | Ishikawa v1.2 and its rollback path | loopback while v1.2 is active; free after switchover for rollback |
 | `EmceeDanko` | `8384` | Ishikawa Retrieval API | loopback; selected deployment override |
 | `EmceeDanko` | `3384` | Ishikawa Chat UI | loopback; selected deployment override |
 | `EmceeDanko` | `5432` | PostgreSQL | loopback for the accepted Ishikawa layout |

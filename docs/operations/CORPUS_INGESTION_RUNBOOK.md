@@ -13,7 +13,9 @@ The document catalog is the durable logical inventory and is not recreated for
 every ordinary run. A pending ingestion manifest is a per-run batch containing
 only additions, revisions, reprocessing requests, and retirements for that
 run. Script 05 generates both only because each synthetic qualification uses a
-new disposable database and private application copy.
+new disposable database and private application copy. Script 06 likewise
+generates both for the first isolated durable v1.3 cluster, then requires their
+exact installed bytes on every attended reuse.
 
 ## 1. Confirm the installation and dependencies
 

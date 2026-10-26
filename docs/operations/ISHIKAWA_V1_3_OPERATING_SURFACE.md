@@ -43,7 +43,10 @@ The schema installer requires three distinct roles that already exist. Their
 identifiers are operator-supplied through `--owner-role`, `--ingest-role`, and
 `--retrieval-role`; the package does not hard-code their names or create roles
 or credentials. Script 05 uses `rag_owner`, `rag_ingest`, and `rag_retrieval`
-for its disposable qualification database. The functional roles are:
+for its disposable qualification database. Script 06 creates the same exact
+role names inside a dedicated durable v1.3 PostgreSQL data cluster because the
+frozen installed configuration requires them; it never creates them in or
+connects to the accepted v1.2 cluster. The functional roles are:
 
 - The owner role owns the `rag`, `rag_private`, and `rag_search` schemas and
   all objects created in them. The application does not use this role during
@@ -78,6 +81,11 @@ the unit files contain no credential values or environment file.
 The web UI is not a systemd service. `scripts/ishikawa-stack` starts one
 ephemeral `ishikawa-web` container with the installed source mounted read-only.
 The ingestion workflow is a one-shot command, not a service.
+
+The Script 06 attended v1.3 gate does not use the packaged unit or stack
+command because both assume the canonical v1.2 path. It starts the API directly
+from the isolated attended runtime and uses a distinct ephemeral web container;
+it installs and enables no service.
 
 ## Installed commands
 

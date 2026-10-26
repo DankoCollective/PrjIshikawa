@@ -17,7 +17,9 @@ v1.3 onward.
 - Local frontier gate: 60/60
 - Local native regression: 486 tests
 - Local human UI review: accepted with minor smoke testing
-- EmceeDanko deployment: pending attended qualification and human verification
+- EmceeDanko disposable qualification: accepted with 486 native tests and
+  60/60 frontier cases
+- EmceeDanko deployment: attended v1.3 human UI launch and acceptance pending
 
 Start with `PROJECT_RUNBOOK.md`. Product implementation is under `Ishikawa/`.
 Historical Phase 28 materials are retained under `history/phase-28/` and are not

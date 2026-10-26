@@ -13,8 +13,10 @@ source text. Nomic provides query and document embeddings.
 - Synthetic corpus v3 is the accepted qualification fixture.
 - The clean local gate passed 486 native tests and 60/60 frontier cases.
 - Human UI validation and minor smoke testing are operator-accepted.
-- The active journey is final release assembly, EmceeDanko qualification,
-  attended deployment, and target-side human verification.
+- The exact v1.3 candidate passed EmceeDanko disposable qualification with all
+  486 native tests and 60/60 frontier cases; cleanup was proved.
+- The active gate is attended EmceeDanko deployment and target-side human UI
+  verification through Script 06.
 - Org-lab migration is deferred until EmceeDanko acceptance.
 
 ## Boundaries

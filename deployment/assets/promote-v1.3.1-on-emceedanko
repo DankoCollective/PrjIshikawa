@@ -1,0 +1,855 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Purpose:
+#   Promote the exact accepted Ishikawa v1.3.1 application and generic web
+#   image into the active EmceeDanko runtime without changing corpus-v3.
+# Mental model:
+#   Stage and validate immutable v1.3.1 bytes while v1.3 remains ready. At the
+#   switch boundary, stop v1.3, move its stopped state into the new versioned
+#   application root, and launch v1.3.1 on the accepted ports. Restore v1.3
+#   automatically on failed launch. Human acceptance later retires the old
+#   root and old image; explicit rollback remains available until acceptance.
+# Inputs or prerequisites:
+#   Script 07/08 handoffs, all three Script 09 receipts, accepted v1.3,
+#   externally managed model tunnels, and attended runtime credentials.
+# Outputs:
+#   A content-free action receipt. Run mode leaves v1.3.1 active and v1.3 as a
+#   rollback source; accept finalizes; rollback restores v1.3.
+
+readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
+readonly expected_old_application_sha256='53da57b745fb4c8be6335896d05bdb6f63f2de3494862b99acca09e156863f3c'
+readonly expected_runtime_archive_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
+readonly expected_new_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
+readonly expected_old_image_id='sha256:368f4381b61bf90ad27aa5a9dd4c10e1de0b4b4666006911e1b6cb4aafcfb8a6'
+readonly new_image_reference='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
+readonly old_image_reference='node-24-slim-nextjs-16-4-1:amd64'
+readonly old_root="$HOME/Documents/Ishikawa-v1.3-attended"
+readonly final_root="$HOME/Documents/Ishikawa-v1.3.1"
+readonly rollback_root="$HOME/Documents/Ishikawa-v1.3-retired-for-v1.3.1"
+readonly qualification_root="$HOME/Documents/Ishikawa-v1.3.1-qualification"
+readonly old_container='ishikawa-v1.3-web'
+readonly new_container='ishikawa-v1.3.1-web'
+readonly qualification_container='ishikawa-v1.3.1-qualification-web'
+readonly historical_v1_2_container='ishikawa-web'
+readonly ui_port=3384
+readonly retrieval_port=8384
+readonly postgresql_port=5432
+readonly gemma_base_url='http://127.0.0.1:18000'
+readonly nomic_base_url='http://127.0.0.1:18001'
+readonly web_tmpfs_bytes=536870912
+
+mode="${1:-}"
+shift || true
+payload_root=''
+result_path=''
+expected_hostname='EmceeDanko'
+expected_os_version='24.04'
+expected_architecture='amd64'
+expected_helper_sha256=''
+stage='argument_validation'
+complete=false
+mutation_started=false
+rollback_succeeded=false
+cleanup_failed=false
+application_stage=''
+api_pid=''
+docker_ready=false
+declare -a docker_command=(docker)
+gemma_key=''
+nomic_key=''
+postgresql_password=''
+
+usage() {
+  printf '%s\n' \
+    'Usage: promote-v1.3.1-on-emceedanko --validate-only' \
+    '       promote-v1.3.1-on-emceedanko {--run|--accept|--rollback}' \
+    '         --payload-root PATH --result-path PATH' \
+    '         --expected-hostname NAME --expected-os-version VERSION' \
+    '         --expected-architecture amd64 --expected-helper-sha256 SHA256'
+}
+
+emit() { printf '[%s] %s\n' "$1" "$2"; }
+
+write_action_result() {
+  local state="$1" reason="${2:-none}" detail="${3:-none}"
+  [[ -n "$result_path" ]] || return 0
+  {
+    printf 'schema=ishikawa.emceedanko-v1.3.1-promotion-action.v1\n'
+    printf 'mode=%s\nstate=%s\nreason=%s\ndetail=%s\n' "${mode#--}" "$state" "$reason" "$detail"
+    printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
+    printf 'runtime_archive_sha256=%s\n' "$expected_runtime_archive_sha256"
+    printf 'image_id=%s\n' "$expected_new_image_id"
+    printf 'database_mutated=false\nschema_mutated=false\ncorpus_mutated=false\nboot_autostart=false\n'
+  } >"$result_path"
+  chmod 0600 "$result_path"
+}
+
+http_status() {
+  curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --connect-timeout 2 --max-time 8 "$1" 2>/dev/null || printf 000
+}
+
+http_ready() { [[ "$(http_status "$1")" == 200 ]]; }
+
+wait_http() {
+  local url="$1" seconds="$2" label="$3" elapsed=0 next_heartbeat=15
+  while (( elapsed < seconds )); do
+    http_ready "$url" && return 0
+    sleep 1
+    elapsed=$((elapsed + 1))
+    if (( elapsed >= next_heartbeat )); then
+      emit "$label" "state=waiting;elapsed_seconds=$elapsed"
+      next_heartbeat=$((next_heartbeat + 15))
+    fi
+  done
+  return 1
+}
+
+port_listening() {
+  ss -H -ltn "( sport = :$1 )" 2>/dev/null | grep -q .
+}
+
+prepare_docker() {
+  [[ "$docker_ready" == true ]] && return 0
+  if ! docker info >/dev/null 2>&1; then
+    sudo -v >/dev/null || return 1
+    docker_command=(sudo docker)
+    "${docker_command[@]}" info >/dev/null 2>&1 || return 1
+  fi
+  docker_ready=true
+}
+
+container_exists() { "${docker_command[@]}" inspect "$1" >/dev/null 2>&1; }
+container_running() {
+  [[ "$("${docker_command[@]}" inspect --format '{{.State.Running}}' "$1" 2>/dev/null || true)" == true ]]
+}
+
+new_container_contract_valid() {
+  local operator_identity
+  operator_identity="$(id -u):$(id -g)"
+  [[ "$("${docker_command[@]}" inspect --format '{{.Image}}' "$new_container" 2>/dev/null || true)" == "$expected_new_image_id" \
+      && "$("${docker_command[@]}" inspect --format '{{.Config.User}}' "$new_container" 2>/dev/null || true)" == "$operator_identity" \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$new_container" 2>/dev/null || true)" == true \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.NetworkMode}}' "$new_container" 2>/dev/null || true)" == host \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$new_container" 2>/dev/null || true)" == no \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.PidsLimit}}' "$new_container" 2>/dev/null || true)" == 512 \
+      && "$("${docker_command[@]}" inspect --format '{{json .HostConfig.CapDrop}}' "$new_container" 2>/dev/null || true)" == '["ALL"]' \
+      && "$("${docker_command[@]}" inspect --format '{{json .HostConfig.SecurityOpt}}' "$new_container" 2>/dev/null || true)" == '["no-new-privileges"]' \
+      && "$("${docker_command[@]}" inspect --format '{{index .HostConfig.Tmpfs "/opt/nextjs/.next"}}' "$new_container" 2>/dev/null || true)" == *"size=${web_tmpfs_bytes}"* ]]
+}
+
+remove_container() {
+  local name="$1"
+  container_exists "$name" || return 0
+  container_running "$name" && "${docker_command[@]}" stop --time 20 "$name" >/dev/null 2>&1 || true
+  "${docker_command[@]}" rm --force "$name" >/dev/null 2>&1
+}
+
+pid_is_api() {
+  local pid="$1" root="$2" command_line=''
+  [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || return 1
+  command_line="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ "$command_line" == *"$root/scripts/ishikawa-retrieval-api --serve"* ]]
+}
+
+read_pid() {
+  local pid_file="$1" value=''
+  [[ -f "$pid_file" && ! -L "$pid_file" ]] || return 1
+  IFS= read -r value <"$pid_file" || return 1
+  printf '%s' "$value"
+}
+
+stop_api() {
+  local root="$1" pid_file="$2" pid=''
+  pid="$(read_pid "$pid_file" 2>/dev/null || true)"
+  if pid_is_api "$pid" "$root"; then
+    kill -TERM "$pid" >/dev/null 2>&1 || return 1
+    for _attempt in {1..100}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" >/dev/null 2>&1 || true
+  elif [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  rm -f -- "$pid_file"
+}
+
+start_api() {
+  local root="$1" pid_name="$2" pid_file stdout_log stderr_log
+  pid_file="$root/state/run/$pid_name"
+  stdout_log="$root/state/logs/${pid_name%.pid}.stdout"
+  stderr_log="$root/state/logs/${pid_name%.pid}.stderr"
+  mkdir -p -- "$root/state/run" "$root/state/logs"
+  export ISHIKAWA_GEMMA_API_KEY="$gemma_key"
+  export ISHIKAWA_NOMIC_API_KEY="$nomic_key"
+  export ISHIKAWA_POSTGRESQL_PASSWORD="$postgresql_password"
+  setsid bash -c '
+    set -Eeuo pipefail
+    umask 077
+    printf "%s\n" "$$" >"$1"
+    shift
+    exec "$@"
+  ' bash "$pid_file" env PYTHONDONTWRITEBYTECODE=1 \
+    "$root/scripts/ishikawa-retrieval-api" --serve \
+    </dev/null >>"$stdout_log" 2>>"$stderr_log" &
+  api_pid="$!"
+  unset ISHIKAWA_GEMMA_API_KEY ISHIKAWA_NOMIC_API_KEY ISHIKAWA_POSTGRESQL_PASSWORD
+  for _attempt in {1..40}; do
+    [[ -s "$pid_file" ]] && break
+    kill -0 "$api_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  [[ -s "$pid_file" ]] || return 1
+  api_pid="$(read_pid "$pid_file")"
+  pid_is_api "$api_pid" "$root"
+}
+
+postgresql_binary() {
+  local name="$1" selected=''
+  selected="$(command -v "$name" 2>/dev/null || true)"
+  if [[ -z "$selected" ]]; then
+    selected="$(find /usr/lib/postgresql -mindepth 3 -maxdepth 3 -type f -path "*/bin/$name" -print 2>/dev/null | sort -V | tail -n 1)"
+  fi
+  [[ -n "$selected" && -x "$selected" ]] || return 1
+  printf '%s' "$selected"
+}
+
+postgresql_status() {
+  local root="$1" pg_ctl
+  pg_ctl="$(postgresql_binary pg_ctl)" || return 1
+  "$pg_ctl" -D "$root/state/postgresql/data" status >/dev/null 2>&1
+}
+
+start_postgresql() {
+  local root="$1" pg_ctl
+  pg_ctl="$(postgresql_binary pg_ctl)" || return 1
+  mkdir -m 0700 -p -- "$root/state/postgresql/socket"
+  "$pg_ctl" -D "$root/state/postgresql/data" \
+    -o "-k $root/state/postgresql/socket -h 127.0.0.1 -p $postgresql_port" \
+    -l "$root/state/postgresql/postgresql.log" -w start >/dev/null
+}
+
+stop_postgresql() {
+  local root="$1" pg_ctl
+  pg_ctl="$(postgresql_binary pg_ctl)" || return 1
+  "$pg_ctl" -D "$root/state/postgresql/data" status >/dev/null 2>&1 || return 0
+  "$pg_ctl" -D "$root/state/postgresql/data" -m fast -w stop >/dev/null
+}
+
+database_counts() {
+  PGPASSWORD="$postgresql_password" PGOPTIONS='-c default_transaction_read_only=on' \
+    psql -X -A -t -q -h 127.0.0.1 -p "$postgresql_port" \
+      -U rag_retrieval -d rag_catalog -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  current_user::text || ';' || current_setting('transaction_read_only')::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_documents)::text || ';' ||
+  (SELECT sum(page_count) FROM rag_search.active_documents)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_chunks)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_retrieval_candidates)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_retrieval_candidates WHERE retrieval_scoring_only)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_retrieval_embeddings)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_relationships)::text || ';' ||
+  (SELECT count(*) FROM (SELECT DISTINCT source_document_id, target_identity FROM rag_search.active_relationships) AS pairs)::text;
+SQL
+}
+
+database_inventory_valid() {
+  [[ "$(database_counts)" == 'rag_retrieval;on;30;150;786;943;157;943;240;90' ]]
+}
+
+check_boot_posture() {
+  [[ "$(systemctl --user is-enabled ishikawa-retrieval-api.service 2>/dev/null || true)" != enabled \
+      && "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled \
+      && "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]]
+}
+
+configure_application() {
+  local root="$1"
+  python3 -B - "$root" "$gemma_base_url" "$nomic_base_url" "$ui_port" "$retrieval_port" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+root = Path(sys.argv[1]).resolve(strict=True)
+gemma, nomic = sys.argv[2:4]
+ui_port, retrieval_port = map(int, sys.argv[4:6])
+deployment_path = root / "config/deployment.yaml"
+runtime_path = root / "config/runtime_dependencies.yaml"
+service_path = root / "config/retrieval_service_profile.yaml"
+deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+deployment["web"]["port"] = ui_port
+deployment["web"]["retrieval_base_url"] = f"http://127.0.0.1:{retrieval_port}"
+deployment["retrieval"]["port"] = retrieval_port
+deployment["postgresql"]["port"] = 5432
+deployment_path.write_text(yaml.safe_dump(deployment, sort_keys=False), encoding="utf-8")
+runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+runtime["gemma"]["chat_endpoint_url"] = gemma + "/v1/chat/completions"
+runtime["gemma"]["tokenization_endpoint_url"] = gemma + "/tokenize"
+runtime["gemma"]["health_endpoint_url"] = gemma + "/health"
+runtime["nomic"]["embedding_endpoint_url"] = nomic + "/v1/embeddings"
+runtime["nomic"]["health_endpoint_url"] = nomic + "/health"
+runtime_path.write_text(yaml.safe_dump(runtime, sort_keys=False), encoding="utf-8")
+service = yaml.safe_load(service_path.read_text(encoding="utf-8"))
+service["network"]["default_port"] = retrieval_port
+service_path.write_text(yaml.safe_dump(service, sort_keys=False), encoding="utf-8")
+PY
+}
+
+application_readiness() {
+  local root="$1" marker=''
+  marker="$(
+    ISHIKAWA_GEMMA_API_KEY="$gemma_key" \
+    ISHIKAWA_NOMIC_API_KEY="$nomic_key" \
+    ISHIKAWA_POSTGRESQL_PASSWORD="$postgresql_password" \
+    PYTHONDONTWRITEBYTECODE=1 "$root/scripts/ishikawa-retrieval-api" --check-readiness
+  )" || return 1
+  grep -Fxq 'ishikawa_retrieval_api_readiness=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass' <<<"$marker"
+}
+
+web_configuration() {
+  local root="$1"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$root/application/python" \
+    python3 -B - "$root/config/product.yaml" <<'PY'
+import sys
+from pathlib import Path
+from ishikawa.product import validate_product_profile
+from ishikawa.yaml_loader import load_restricted_yaml
+
+profile = validate_product_profile(load_restricted_yaml(Path(sys.argv[1]), label="product profile"))
+print(profile.display_name)
+print(profile.browser_configuration_base64())
+PY
+}
+
+start_new_web() {
+  local values runtime_command started elapsed=0 next_heartbeat=15 logs=''
+  local -a config=()
+  values="$(web_configuration "$final_root")" || return 1
+  mapfile -t config <<<"$values"
+  (( ${#config[@]} == 2 )) || return 1
+  runtime_command='
+set -eu
+mkdir -p -- "$HOME" "$TMPDIR"
+printf "[RUNTIME] stage=build;state=start\n"
+node_modules/.bin/next build
+test -f .next/BUILD_ID
+test -d .next/server
+printf "[RUNTIME] stage=build;state=pass\n"
+printf "[RUNTIME] stage=server;state=start\n"
+exec node_modules/.bin/next start --hostname "$1" --port "$2"
+'
+  local operator_uid operator_gid
+  operator_uid="$(id -u)"; operator_gid="$(id -g)"
+  "${docker_command[@]}" run --detach --name "$new_container" --init \
+    --network host --read-only --restart no \
+    --security-opt no-new-privileges --cap-drop ALL --pids-limit 512 \
+    --user "$operator_uid:$operator_gid" \
+    --tmpfs "/opt/nextjs/.next:rw,nosuid,nodev,size=${web_tmpfs_bytes},mode=0700,uid=${operator_uid},gid=${operator_gid}" \
+    --env 'HOME=/opt/nextjs/.next/home' --env 'TMPDIR=/opt/nextjs/.next/tmp' \
+    --env 'TMP=/opt/nextjs/.next/tmp' --env 'TEMP=/opt/nextjs/.next/tmp' \
+    --env 'NEXT_TELEMETRY_DISABLED=1' --env 'NODE_ENV=production' \
+    --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=${config[0]}" \
+    --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=${config[1]}" \
+    --env "ISHIKAWA_RETRIEVAL_BASE_URL=http://127.0.0.1:${retrieval_port}" \
+    --mount "type=bind,src=$final_root/application/web/app,dst=/opt/nextjs/app,readonly" \
+    --mount "type=bind,src=$final_root/application/web/components,dst=/opt/nextjs/components,readonly" \
+    --mount "type=bind,src=$final_root/application/web/lib,dst=/opt/nextjs/lib,readonly" \
+    --mount "type=bind,src=$final_root/application/web/public,dst=/opt/nextjs/public,readonly" \
+    --mount "type=bind,src=$final_root/application/web/package.json,dst=/opt/nextjs/package.json,readonly" \
+    --mount "type=bind,src=$final_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly" \
+    "$new_image_reference" sh -c "$runtime_command" runtime 127.0.0.1 "$ui_port" >/dev/null || return 1
+  started="$(date +%s)"
+  emit WEB 'state=building;elapsed_seconds=0'
+  while (( elapsed < 300 )); do
+    logs="$("${docker_command[@]}" logs --tail 160 "$new_container" 2>&1 || true)"
+    grep -Fxq '[RUNTIME] stage=build;state=pass' <<<"$logs" && break
+    container_running "$new_container" || return 1
+    sleep 1
+    elapsed=$(( $(date +%s) - started ))
+    if (( elapsed >= next_heartbeat )); then
+      emit WEB "state=building;elapsed_seconds=$elapsed"
+      next_heartbeat=$((next_heartbeat + 15))
+    fi
+  done
+  grep -Fxq '[RUNTIME] stage=build;state=pass' <<<"$logs" || return 1
+  wait_http "http://127.0.0.1:${ui_port}/api/live" 160 WEB || return 1
+  wait_http "http://127.0.0.1:${ui_port}/api/ready" 120 WEB || return 1
+  [[ "$(http_status "http://127.0.0.1:${ui_port}/")" == 200 \
+      && "$(http_status "http://127.0.0.1:${ui_port}/theme-init.js")" == 200 \
+      && "$(http_status "http://127.0.0.1:${ui_port}/api/dependencies")" == 200 ]] || return 1
+  [[ "$("${docker_command[@]}" inspect --format '{{index .HostConfig.Tmpfs "/opt/nextjs/.next"}}' "$new_container" 2>/dev/null || true)" == *"size=${web_tmpfs_bytes}"* ]]
+}
+
+start_old_web() {
+  local values operator_uid operator_gid
+  local -a config=()
+  values="$(web_configuration "$old_root")" || return 1
+  mapfile -t config <<<"$values"
+  (( ${#config[@]} == 2 )) || return 1
+  operator_uid="$(id -u)"; operator_gid="$(id -g)"
+  "${docker_command[@]}" run --detach --name "$old_container" --network host --restart no \
+    --security-opt no-new-privileges --cap-drop ALL --user "$operator_uid:$operator_gid" \
+    --tmpfs "/opt/nextjs/.next:rw,nosuid,nodev,size=${web_tmpfs_bytes},mode=1777" \
+    --env HOME=/tmp --env NEXT_TELEMETRY_DISABLED=1 \
+    --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=${config[0]}" \
+    --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=${config[1]}" \
+    --env "ISHIKAWA_RETRIEVAL_BASE_URL=http://127.0.0.1:${retrieval_port}" \
+    --mount "type=bind,src=$old_root/application/web/app,dst=/opt/nextjs/app,readonly" \
+    --mount "type=bind,src=$old_root/application/web/components,dst=/opt/nextjs/components,readonly" \
+    --mount "type=bind,src=$old_root/application/web/lib,dst=/opt/nextjs/lib,readonly" \
+    --mount "type=bind,src=$old_root/application/web/public,dst=/opt/nextjs/public,readonly" \
+    --mount "type=bind,src=$old_root/application/web/package.json,dst=/opt/nextjs/package.json,readonly" \
+    --mount "type=bind,src=$old_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly" \
+    "$old_image_reference" next dev --hostname 127.0.0.1 --port "$ui_port" >/dev/null
+  wait_http "http://127.0.0.1:${ui_port}/api/ready" 160 WEB
+}
+
+old_runtime_ready() {
+  local pid
+  pid="$(read_pid "$old_root/state/run/attended-v1.3.pid" 2>/dev/null || true)"
+  [[ -d "$old_root" && ! -L "$old_root" ]] \
+    && pid_is_api "$pid" "$old_root" \
+    && container_running "$old_container" \
+    && postgresql_status "$old_root" \
+    && http_ready "http://127.0.0.1:${retrieval_port}/ready" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/ready" \
+    && http_ready "http://127.0.0.1:${ui_port}/" \
+    && http_ready "http://127.0.0.1:${ui_port}/theme-init.js" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/dependencies"
+}
+
+new_runtime_ready() {
+  local pid
+  pid="$(read_pid "$final_root/state/run/emceedanko-v1.3.1.pid" 2>/dev/null || true)"
+  [[ -d "$final_root" && ! -L "$final_root" ]] \
+    && pid_is_api "$pid" "$final_root" \
+    && container_running "$new_container" \
+    && new_container_contract_valid \
+    && postgresql_status "$final_root" \
+    && http_ready "http://127.0.0.1:${retrieval_port}/ready" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/ready" \
+    && http_ready "http://127.0.0.1:${ui_port}/" \
+    && http_ready "http://127.0.0.1:${ui_port}/theme-init.js" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/dependencies"
+}
+
+promotion_receipt_valid() {
+  local receipt="$1"
+  [[ -f "$receipt" && ! -L "$receipt" ]] \
+    && grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-promotion.v1' "$receipt" \
+    && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt" \
+    && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$receipt" \
+    && grep -Fxq "image_id=$expected_new_image_id" "$receipt" \
+    && grep -Fxq 'database_state=moved_unchanged' "$receipt" \
+    && grep -Fxq 'ui_port=3384' "$receipt" \
+    && grep -Fxq 'retrieval_api_port=8384' "$receipt" \
+    && grep -Fxq 'postgresql_port=5432' "$receipt" \
+    && grep -Fxq 'production_build_start=pass' "$receipt" \
+    && grep -Fxq 'human_ui_acceptance=pending' "$receipt" \
+    && grep -Fxq 'rollback_v1_3=available' "$receipt" \
+    && grep -Fxq 'database_mutated=false' "$receipt" \
+    && grep -Fxq 'schema_mutated=false' "$receipt" \
+    && grep -Fxq 'corpus_mutated=false' "$receipt" \
+    && grep -Fxq 'boot_autostart=false' "$receipt"
+}
+
+acceptance_receipt_valid() {
+  local receipt="$1"
+  [[ -f "$receipt" && ! -L "$receipt" ]] \
+    && grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-promotion-acceptance.v1' "$receipt" \
+    && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt" \
+    && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$receipt" \
+    && grep -Fxq "image_id=$expected_new_image_id" "$receipt" \
+    && grep -Fxq 'human_ui_acceptance=accepted' "$receipt" \
+    && grep -Fxq 'production_runtime=pass' "$receipt" \
+    && grep -Fxq 'frontier_cases=60/60' "$receipt" \
+    && grep -Fxq 'superseded_v1_3_removed=true' "$receipt" \
+    && grep -Fxq 'superseded_image_removed=true' "$receipt" \
+    && grep -Fxq 'database_mutated=false' "$receipt" \
+    && grep -Fxq 'schema_mutated=false' "$receipt" \
+    && grep -Fxq 'corpus_mutated=false' "$receipt" \
+    && grep -Fxq 'boot_autostart=false' "$receipt"
+}
+
+stop_old_runtime() {
+  local status=0
+  remove_container "$old_container" || status=1
+  stop_api "$old_root" "$old_root/state/run/attended-v1.3.pid" || status=1
+  stop_postgresql "$old_root" || status=1
+  return "$status"
+}
+
+stop_new_runtime() {
+  local status=0
+  remove_container "$new_container" || status=1
+  stop_api "$final_root" "$final_root/state/run/emceedanko-v1.3.1.pid" || status=1
+  stop_postgresql "$final_root" || status=1
+  return "$status"
+}
+
+start_old_runtime() {
+  local pid
+  postgresql_status "$old_root" || start_postgresql "$old_root" || return 1
+  application_readiness "$old_root" || return 1
+  pid="$(read_pid "$old_root/state/run/attended-v1.3.pid" 2>/dev/null || true)"
+  if ! pid_is_api "$pid" "$old_root"; then
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    rm -f -- "$old_root/state/run/attended-v1.3.pid"
+    start_api "$old_root" 'attended-v1.3.pid' || return 1
+  fi
+  wait_http "http://127.0.0.1:${retrieval_port}/ready" 180 API || return 1
+  if ! container_running "$old_container"; then
+    remove_container "$old_container" || return 1
+    start_old_web || return 1
+  fi
+  old_runtime_ready && database_inventory_valid
+}
+
+start_new_runtime() {
+  start_postgresql "$final_root" || return 1
+  application_readiness "$final_root" || return 1
+  start_api "$final_root" 'emceedanko-v1.3.1.pid' || return 1
+  wait_http "http://127.0.0.1:${retrieval_port}/ready" 180 API || return 1
+  start_new_web || return 1
+  new_runtime_ready && database_inventory_valid && check_boot_posture
+}
+
+restore_old_runtime() {
+  set +e
+  if [[ -d "$final_root" && ! -L "$final_root" ]]; then
+    stop_new_runtime >/dev/null 2>&1 || { set -e; return 1; }
+    if postgresql_status "$final_root" \
+        || container_exists "$new_container" \
+        || pid_is_api "$(read_pid "$final_root/state/run/emceedanko-v1.3.1.pid" 2>/dev/null || true)" "$final_root"; then
+      set -e
+      return 1
+    fi
+  fi
+  remove_container "$new_container" >/dev/null 2>&1 || { set -e; return 1; }
+  local state_source=''
+  if [[ -d "$final_root/state" && ! -L "$final_root/state" ]]; then
+    state_source="$final_root/state"
+  elif [[ -n "$application_stage" && -d "$application_stage/state" && ! -L "$application_stage/state" ]]; then
+    state_source="$application_stage/state"
+  fi
+  if [[ -d "$rollback_root" && ! -L "$rollback_root" ]]; then
+    if [[ -n "$state_source" ]]; then
+      rm -rf -- "$rollback_root/state"
+      mv -- "$state_source" "$rollback_root/state" || { set -e; return 1; }
+    fi
+    [[ ! -e "$final_root" && ! -L "$final_root" ]] || rm -rf -- "$final_root"
+    if [[ -n "$application_stage" && -d "$application_stage" && ! -L "$application_stage" ]]; then
+      rm -rf -- "$application_stage"
+      application_stage=''
+    fi
+    mv -- "$rollback_root" "$old_root" || { set -e; return 1; }
+  fi
+  start_old_runtime >/dev/null 2>&1
+  local status="$?"
+  set -e
+  (( status == 0 )) || return 1
+  rollback_succeeded=true
+}
+
+cleanup() {
+  local status="$?"
+  trap - ERR EXIT INT TERM
+  set +e
+  if [[ "$complete" == false && -n "$application_stage" \
+      && "$application_stage" == "$HOME/Documents/.Ishikawa-v1.3.1-promotion."* \
+      && -d "$application_stage" && ! -L "$application_stage" ]]; then
+    rm -rf -- "$application_stage"
+  fi
+  exit "$status"
+}
+
+fail() {
+  local reason="$1" detail="$2" action="$3" status="${4:-1}"
+  trap - ERR
+  if [[ "$mode" == --run && "$mutation_started" == true && "$rollback_succeeded" == false ]]; then
+    restore_old_runtime || cleanup_failed=true
+  fi
+  write_action_result blocked "$reason" "rollback_restored=$rollback_succeeded;cleanup_failed=$cleanup_failed"
+  printf '%s\n' 'FAILURE DETAIL' "stage=$stage" "reason=$reason" "detail=$detail" \
+    "rollback_restored=$rollback_succeeded" "cleanup_failed=$cleanup_failed" \
+    "operator_action=$action" >&2
+  printf '\nSCRIPT RESULT\nscript_10_v1_3_1_promotion=blocked\n' >&2
+  exit "$status"
+}
+
+unexpected_error() {
+  local status="$1" line="$2"
+  fail unexpected_command_failure "Unhandled failure at target helper line $line with status $status." \
+    'Review the complete retained target milestones before retrying.' "$status"
+}
+
+trap cleanup EXIT
+trap 'unexpected_error "$?" "$LINENO"' ERR
+trap 'stage=interrupted; fail signal_hangup "Promotion connection closed." "Review automatic restoration and retry only after the reported state is reconciled." 129' HUP
+trap 'stage=interrupted; fail signal_interrupt "Promotion interrupted." "Review automatic restoration and retry only after the reported state is reconciled." 130' INT
+trap 'stage=interrupted; fail signal_termination "Promotion terminated." "Review automatic restoration and retry only after the reported state is reconciled." 143' TERM
+
+read_secret() {
+  local label="$1" variable="$2" minimum="$3" maximum="$4" value=''
+  printf '\n[INPUT REQUIRED] %s\n[INPUT MODE] Hidden input is active. Paste or type the value, then press Enter.\n' "$label" >/dev/tty
+  IFS= read -r -s value </dev/tty || fail secret_input_failed "Could not read $label." 'Rerun interactively.'
+  printf '\n' >/dev/tty
+  (( ${#value} >= minimum && ${#value} <= maximum )) \
+    || fail secret_length_invalid "$label length is outside the accepted range." 'Rerun with the correct secret.'
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* && ! "$value" =~ [[:cntrl:]] ]] \
+    || fail secret_format_invalid "$label contains a prohibited control character." 'Rerun with the correct secret.'
+  printf -v "$variable" '%s' "$value"
+  printf '[INPUT] state=accepted;name=%s\n' "${label// /_}"
+}
+
+if [[ "$mode" == --validate-only ]]; then
+  [[ $# == 0 ]] || exit 2
+  printf '%s\n' \
+    'v1_3_1_promotion_helper=ready' \
+    'final_root=$HOME/Documents/Ishikawa-v1.3.1;ports=5432,8384,3384' \
+    'database=move_without_content_mutation;autostart=false;rollback=accepted_v1.3'
+  exit 0
+fi
+
+while (( $# > 0 )); do
+  case "$1" in
+    --payload-root) payload_root="${2:-}"; shift 2 ;;
+    --result-path) result_path="${2:-}"; shift 2 ;;
+    --expected-hostname) expected_hostname="${2:-}"; shift 2 ;;
+    --expected-os-version) expected_os_version="${2:-}"; shift 2 ;;
+    --expected-architecture) expected_architecture="${2:-}"; shift 2 ;;
+    --expected-helper-sha256) expected_helper_sha256="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) exit 2 ;;
+  esac
+done
+case "$mode" in --run|--accept|--rollback) ;; *) usage >&2; exit 2 ;; esac
+[[ "$payload_root" == /tmp/ishikawa-promotion-*'/payload' \
+    && -d "$payload_root" && ! -L "$payload_root" \
+    && "$result_path" == "$payload_root/"* && ! -e "$result_path" \
+    && "$expected_helper_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || fail target_paths_invalid 'The private payload or result path is outside the target contract.' 'Rerun through Script 10.'
+
+stage='target_preflight'
+for required in awk bash chmod cp curl date docker dpkg find grep hostname id jq kill mkdir mv pg_isready psql python3 readlink rm sed setsid sha256sum sleep sort ss stat sudo systemctl tar tr; do
+  command -v "$required" >/dev/null 2>&1 || fail "command_missing_${required}" "Required target command unavailable: $required." 'Restore the named prerequisite.'
+done
+[[ "$(sha256sum -- "$0" | awk '{print $1}')" == "$expected_helper_sha256" ]] \
+  || fail helper_identity_mismatch 'Transferred helper identity mismatch.' 'Rerun Script 10 from the reviewed repository.'
+[[ "$(hostname -s)" == "$expected_hostname" \
+    && "$(. /etc/os-release; printf '%s' "$VERSION_ID")" == "$expected_os_version" \
+    && "$(dpkg --print-architecture)" == "$expected_architecture" ]] \
+  || fail target_identity_mismatch 'Target hostname, OS, or architecture differs from frozen EmceeDanko.' 'Use the frozen target.'
+(cd -- "$payload_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail payload_checksum_failed 'Promotion payload checksum verification failed.' 'Rerun Script 10.'
+[[ "$(sha256sum -- "$payload_root/ishikawa-v1.3.1.tar.gz" | awk '{print $1}')" == "$expected_application_sha256" ]] \
+  || fail application_identity_mismatch 'Application archive identity mismatch.' 'Restore the exact Script 08 handoff.'
+jq -e --arg image "$expected_new_image_id" --arg archive "$expected_runtime_archive_sha256" \
+  '.image_id == $image and .archive_sha256 == $archive and .architecture == "amd64" and .application_in_image == false and .generated_next_in_image == false' \
+  "$payload_root/image-identity.json" >/dev/null \
+  || fail image_identity_record_invalid 'Runtime identity record mismatch.' 'Restore the exact Script 07 handoff.'
+grep -Fxq "application_archive_sha256=$expected_application_sha256" "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq "image_id=$expected_new_image_id" "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq 'frontier_cases=60/60' "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$payload_root/acceptance-receipt.txt" \
+  && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$payload_root/acceptance-receipt.txt" \
+  && grep -Fxq "image_id=$expected_new_image_id" "$payload_root/acceptance-receipt.txt" \
+  && grep -Fxq 'human_ui_acceptance=accepted' "$payload_root/acceptance-receipt.txt" \
+  && grep -Fxq 'mode=cleanup' "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq 'state=pass' "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq 'detail=candidate_removed=true' "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq "image_id=$expected_new_image_id" "$payload_root/cleanup-receipt.txt" \
+  || fail script09_receipts_invalid 'Script 09 qualification, acceptance, or cleanup receipt is incomplete.' 'Complete Script 09 before promotion.'
+prepare_docker || fail container_runtime_unavailable 'Docker is unavailable.' 'Restore Docker access.'
+check_boot_posture || fail boot_posture_enabled 'An Ishikawa dependency is boot-enabled.' 'Restore disabled boot posture.'
+
+if [[ "$mode" == --accept ]]; then
+  stage='acceptance_preflight'
+  [[ -d "$final_root" && ! -L "$final_root" ]] \
+    || fail promoted_runtime_missing 'The promoted v1.3.1 root is absent.' 'Run Script 10 --run first.'
+  run_receipt="$final_root/state/reports/promotion/emceedanko-v1.3.1-promotion.txt"
+  acceptance_receipt="$final_root/state/reports/promotion/emceedanko-v1.3.1-acceptance.txt"
+  promotion_receipt_valid "$run_receipt" \
+    || fail promotion_receipt_invalid 'The promotion receipt is absent or does not match the exact promoted runtime.' 'Do not accept an unbound runtime.'
+  if [[ -f "$acceptance_receipt" && ! -L "$acceptance_receipt" ]]; then
+    acceptance_receipt_valid "$acceptance_receipt" \
+      || fail acceptance_receipt_invalid 'The existing acceptance receipt is incomplete.' 'Inspect the promoted runtime before retrying.'
+    new_runtime_ready && check_boot_posture \
+      || fail accepted_runtime_not_ready 'The already-accepted v1.3.1 runtime is not completely ready.' 'Reconcile the accepted runtime.'
+    [[ ! -e "$old_root" && ! -L "$old_root" \
+        && ! -e "$rollback_root" && ! -L "$rollback_root" ]] \
+      || fail retirement_state_invalid 'Superseded v1.3 state remains after recorded acceptance.' 'Inspect the retirement state.'
+    ! "${docker_command[@]}" image inspect "$old_image_reference" >/dev/null 2>&1 \
+      && ! "${docker_command[@]}" image inspect "$expected_old_image_id" >/dev/null 2>&1 \
+      || fail superseded_image_still_present 'The superseded image remains after recorded acceptance.' 'Inspect Docker image references.'
+    cp -- "$acceptance_receipt" "$result_path"
+    complete=true
+    emit SUMMARY 'state=pass;human_ui_acceptance=already_recorded;retirement=already_complete'
+    printf '%s\n' 'v1_3_1_promotion_acceptance=pass'
+    exit 0
+  fi
+  new_runtime_ready || fail promoted_runtime_not_ready 'Promoted v1.3.1 is not completely ready.' 'Do not accept; use Script 10 --rollback if it cannot be reconciled.'
+  check_boot_posture || fail boot_posture_changed 'Boot posture changed after promotion.' 'Restore disabled boot posture before acceptance.'
+  consumers="$({
+    "${docker_command[@]}" ps -aq --filter "ancestor=$old_image_reference" 2>/dev/null || true
+    "${docker_command[@]}" ps -aq --filter "ancestor=$expected_old_image_id" 2>/dev/null || true
+  } | sort -u | sed '/^$/d')"
+  if [[ -n "$consumers" ]] \
+      && container_exists "$historical_v1_2_container" \
+      && ! container_running "$historical_v1_2_container" \
+      && [[ "$("${docker_command[@]}" inspect --format '{{.Image}}' "$historical_v1_2_container" 2>/dev/null || true)" == "$expected_old_image_id" ]]; then
+    "${docker_command[@]}" rm "$historical_v1_2_container" >/dev/null
+    consumers="$({
+      "${docker_command[@]}" ps -aq --filter "ancestor=$old_image_reference" 2>/dev/null || true
+      "${docker_command[@]}" ps -aq --filter "ancestor=$expected_old_image_id" 2>/dev/null || true
+    } | sort -u | sed '/^$/d')"
+  fi
+  [[ -z "$consumers" ]] || fail superseded_image_in_use 'A remaining container still references the superseded image.' 'Remove or reconcile every reported consumer before acceptance.'
+  mutation_started=true
+  if [[ -d "$rollback_root" && ! -L "$rollback_root" ]]; then
+    rm -rf -- "$rollback_root"
+  elif [[ -e "$rollback_root" || -L "$rollback_root" ]]; then
+    fail rollback_root_unsafe 'The rollback root is unsafe.' 'Inspect it manually.'
+  fi
+  if "${docker_command[@]}" image inspect "$old_image_reference" >/dev/null 2>&1; then
+    "${docker_command[@]}" image rm "$old_image_reference" >/dev/null \
+      || fail superseded_image_removal_failed 'The superseded image could not be removed.' 'Inspect its remaining references.'
+  fi
+  if "${docker_command[@]}" image inspect "$expected_old_image_id" >/dev/null 2>&1; then
+    "${docker_command[@]}" image rm "$expected_old_image_id" >/dev/null \
+      || fail superseded_image_removal_failed 'The superseded image ID still has a tag or consumer.' 'Inspect every remaining image reference.'
+  fi
+  ! "${docker_command[@]}" image inspect "$old_image_reference" >/dev/null 2>&1 \
+    && ! "${docker_command[@]}" image inspect "$expected_old_image_id" >/dev/null 2>&1 \
+    || fail superseded_image_still_present 'The superseded image reference remains.' 'Inspect Docker image references.'
+  mkdir -m 0700 -p -- "$final_root/state/reports/promotion"
+  {
+    printf 'schema=ishikawa.emceedanko-v1.3.1-promotion-acceptance.v1\n'
+    printf 'accepted_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'application_archive_sha256=%s\nruntime_archive_sha256=%s\nimage_id=%s\n' \
+      "$expected_application_sha256" "$expected_runtime_archive_sha256" "$expected_new_image_id"
+    printf 'human_ui_acceptance=accepted\nproduction_runtime=pass\nfrontier_cases=60/60\n'
+    printf 'superseded_v1_3_removed=true\nsuperseded_image_removed=true\n'
+    printf 'database_mutated=false\nschema_mutated=false\ncorpus_mutated=false\nboot_autostart=false\n'
+  } >"$acceptance_receipt"
+  chmod 0600 "$acceptance_receipt"
+  cp -- "$acceptance_receipt" "$result_path"
+  complete=true
+  emit SUMMARY 'state=pass;human_ui_acceptance=accepted;superseded_v1_3_removed=true;superseded_image_removed=true'
+  printf '%s\n' 'v1_3_1_promotion_acceptance=pass'
+  exit 0
+fi
+
+if [[ "$mode" == --rollback ]]; then
+  stage='rollback_preflight'
+  [[ -d "$final_root" && ! -L "$final_root" && -d "$rollback_root" && ! -L "$rollback_root" ]] \
+    || fail rollback_state_missing 'The exact pre-acceptance promotion state is absent.' 'Rollback is available only before promotion acceptance.'
+  promotion_receipt_valid "$final_root/state/reports/promotion/emceedanko-v1.3.1-promotion.txt" \
+    || fail promotion_receipt_invalid 'The promotion receipt does not match the rollback state.' 'Inspect the promotion before rollback.'
+  read_secret 'Gemma API key' gemma_key 1 4096
+  read_secret 'Nomic API key' nomic_key 32 1024
+  read_secret 'v1.3 PostgreSQL retrieval password' postgresql_password 16 4096
+  mutation_started=true
+  restore_old_runtime || fail rollback_failed 'Accepted v1.3 could not be restored.' 'Preserve all roots and inspect the reported lifecycle state.'
+  write_action_result pass none 'accepted_v1_3_restored=true'
+  complete=true
+  emit SUMMARY 'state=pass;accepted_v1_3_restored=true;ports_5432_8384_3384=ready'
+  printf '%s\n' 'v1_3_1_promotion_rollback=pass'
+  exit 0
+fi
+
+stage='run_preflight'
+[[ ! -e "$final_root" && ! -L "$final_root" \
+    && ! -e "$rollback_root" && ! -L "$rollback_root" ]] \
+  || fail prior_promotion_state_exists 'A final or rollback promotion root already exists.' 'Use --accept or --rollback after reviewing current state.'
+[[ ! -e "$qualification_root" && ! -L "$qualification_root" ]] \
+  || fail qualification_cleanup_incomplete 'The Script 09 qualification root still exists.' 'Run Script 09 --cleanup first.'
+container_exists "$qualification_container" \
+  && fail qualification_container_exists 'The Script 09 qualification container still exists.' 'Run Script 09 --cleanup first.'
+for port in 3385 8385; do
+  ! port_listening "$port" || fail qualification_port_in_use "Qualification port $port remains occupied." 'Run Script 09 --cleanup first.'
+done
+old_runtime_ready || fail accepted_v1_3_not_ready 'Accepted v1.3 is not completely ready before promotion.' 'Reconcile the accepted runtime before switching.'
+[[ -z "$(find "$old_root" -type l -print -quit 2>/dev/null)" ]] \
+  || fail accepted_v1_3_symlink_found 'Accepted v1.3 contains a symbolic link.' 'Inspect the accepted runtime before moving state.'
+jq -e --arg archive "$expected_old_application_sha256" \
+  '.application_archive_sha256 == $archive and .schema_version == 5 and .documents == 30 and .ui_port == 3384 and .retrieval_api_port == 8384 and .postgresql_runtime_port == 5432' \
+  "$old_root/state/deployment/emceedanko-v1.3-attended.json" >/dev/null \
+  || fail accepted_v1_3_receipt_invalid 'Accepted v1.3 deployment receipt does not match the frozen database/runtime contract.' 'Do not move the database.'
+[[ "$("${docker_command[@]}" image inspect "$new_image_reference" --format '{{.Id}}' 2>/dev/null || true)" == "$expected_new_image_id" \
+    && "$("${docker_command[@]}" image inspect "$old_image_reference" --format '{{.Id}}' 2>/dev/null || true)" == "$expected_old_image_id" ]] \
+  || fail required_image_identity_mismatch 'The exact new or rollback image is absent.' 'Restore both exact images before promotion.'
+emit PREFLIGHT 'state=pass;accepted_v1_3=ready;script09_cleanup=pass;required_images=exact;boot_autostart=false'
+
+read_secret 'Gemma API key' gemma_key 1 4096
+read_secret 'Nomic API key' nomic_key 32 1024
+read_secret 'v1.3 PostgreSQL retrieval password' postgresql_password 16 4096
+database_counts_value="$(database_counts)" \
+  || fail accepted_database_query_failed 'The read-only corpus-v3 inventory query failed.' 'Correct only the retrieval credential or database readiness and rerun.'
+[[ "$database_counts_value" == 'rag_retrieval;on;30;150;786;943;157;943;240;90' ]] \
+  || fail accepted_database_inventory_mismatch "The accepted corpus-v3 inventory is not exact: ${database_counts_value:-none}." 'Do not move or modify the database.'
+emit DATABASE 'state=pass;access=read_only;corpus_v3=exact;documents=30;pages=150;schema_mutation=false;corpus_mutation=false'
+
+stage='application_staging'
+extract_root="$payload_root/extracted"
+mkdir -m 0700 -- "$extract_root"
+tar -xzf "$payload_root/ishikawa-v1.3.1.tar.gz" -C "$extract_root"
+bash "$extract_root/ishikawa-v1.3.1/verify-ishikawa-release" >/dev/null \
+  || fail application_archive_verification_failed 'The exact v1.3.1 archive failed its verifier.' 'Restore the Script 08 handoff.'
+application_stage="$HOME/Documents/.Ishikawa-v1.3.1-promotion.$(date -u +%Y%m%dT%H%M%SZ).$$"
+[[ ! -e "$application_stage" && ! -L "$application_stage" ]] \
+  || fail application_stage_exists 'The selected application stage already exists.' 'Inspect the exact stage path.'
+bash "$extract_root/ishikawa-v1.3.1/application/install-ishikawa" --install-root "$application_stage" >/dev/null \
+  || fail application_install_failed 'The exact v1.3.1 application failed staged installation.' 'Correct the package boundary.'
+configure_application "$application_stage" \
+  || fail application_configuration_failed 'The staged application could not be configured for accepted ports.' 'Correct only the frozen configuration mapping.'
+application_readiness "$application_stage" \
+  || fail staged_application_readiness_failed 'The staged v1.3.1 application failed database/model readiness.' 'Correct the named external dependency before switching.'
+emit STAGE 'state=pass;application=exact;configuration=3384_8384_5432;database_read_only=pass;models=pass'
+
+stage='promotion_switch'
+mutation_started=true
+emit SWITCH 'state=start;next=stop_v1_3;rollback=automatic'
+stop_old_runtime || fail accepted_v1_3_stop_failed 'Accepted v1.3 did not stop cleanly.' 'Review automatic restoration before retrying.'
+for port in "$ui_port" "$retrieval_port" "$postgresql_port"; do
+  ! port_listening "$port" || fail switch_port_still_in_use "Port $port remained occupied after stopping v1.3." 'Review automatic restoration and the exact port owner.'
+done
+mv -- "$old_root" "$rollback_root" \
+  || fail accepted_v1_3_retirement_failed 'Accepted v1.3 could not be moved to its rollback root.' 'Review automatic restoration.'
+rm -rf -- "$application_stage/state"
+mv -- "$rollback_root/state" "$application_stage/state" \
+  || fail database_state_move_failed 'The stopped durable state could not move into v1.3.1.' 'Review automatic restoration; do not copy or recreate the database.'
+rm -f -- "$application_stage/state/run/attended-v1.3.pid"
+mv -- "$application_stage" "$final_root" \
+  || fail final_root_publication_failed 'The staged v1.3.1 root could not be published.' 'Review automatic restoration.'
+application_stage=''
+emit SWITCH 'state=pass;v1_3_stopped=true;durable_state_moved=true;next=start_v1_3_1'
+
+stage='v1_3_1_launch'
+start_new_runtime \
+  || fail v1_3_1_launch_failed 'The promoted v1.3.1 database, API, or production UI did not become completely ready.' 'Automatic v1.3 restoration is required.'
+mkdir -m 0700 -p -- "$final_root/state/reports/promotion"
+promotion_receipt="$final_root/state/reports/promotion/emceedanko-v1.3.1-promotion.txt"
+{
+  printf 'schema=ishikawa.emceedanko-v1.3.1-promotion.v1\n'
+  printf 'promoted_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'application_archive_sha256=%s\nruntime_archive_sha256=%s\nimage_id=%s\n' \
+    "$expected_application_sha256" "$expected_runtime_archive_sha256" "$expected_new_image_id"
+  printf 'database_state=moved_unchanged\ndocuments=30\npages=150\nauthoritative_chunks=786\nretrieval_candidates=943\nretrieval_scoring_only=157\nembeddings=943\nrelationship_records=240\nrelationship_pairs=90\n'
+  printf 'ui_port=3384\nretrieval_api_port=8384\npostgresql_port=5432\n'
+  printf 'production_build_start=pass\nhuman_ui_acceptance=pending\nrollback_v1_3=available\n'
+  printf 'database_mutated=false\nschema_mutated=false\ncorpus_mutated=false\nboot_autostart=false\n'
+} >"$promotion_receipt"
+chmod 0600 "$promotion_receipt"
+cp -- "$promotion_receipt" "$result_path"
+complete=true
+emit SUMMARY 'state=pass;v1_3_1=ready;ui=http://127.0.0.1:3384;database=corpus_v3_unchanged;rollback_v1_3=available;next=human_accept_or_rollback'
+printf '%s\n' 'v1_3_1_promotion=pass'

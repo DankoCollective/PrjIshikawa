@@ -26,13 +26,13 @@ begin. No black-corpus access, Tech contact, service or database mutation,
 credential handling, or package promotion is authorized by these planning
 decisions alone. V13-90 separately authorizes the bounded EmceeDanko
 runtime-image build and artifact-return operation described there.
-V13-91 is a new EmceeDanko-only promotion decision and is ready to freeze.
-It does not change the frozen org-lab carry design: it would replace the
+V13-91 is a frozen EmceeDanko-only promotion decision. It does not change the
+frozen org-lab carry design: it replaces the
 active attended v1.3 application/runtime with the exact already-qualified and
 human-accepted v1.3.1 bytes while preserving the existing corpus-v3 database.
-No promotion implementation or live switch is authorized until V13-91 is
-frozen. The already-approved Script 09 cleanup remains the immediate safe
-action before that promotion.
+Bounded Script 10 implementation is authorized. The already-approved Script
+09 cleanup remains the immediate operator action before promotion; target
+execution remains operator-attended through the reviewed command.
 
 ## Decisions
 
@@ -691,7 +691,7 @@ Decision: Decide whether to replace the active accepted EmceeDanko v1.3
 application/runtime with the exact Script 09-qualified and human-accepted
 v1.3.1 application and generic runtime image before carry assembly.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Implement numbered Script 10 as one attended promotion
 lifecycle. First complete the already-approved Script 09 cleanup. Script 10

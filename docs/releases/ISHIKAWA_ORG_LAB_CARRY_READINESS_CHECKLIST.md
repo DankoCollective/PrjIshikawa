@@ -462,9 +462,13 @@ Node/npm/Yarn license records. Script 08 then passed all 486 native tests, all
 17 JavaScript tests, the exact-image production build, two clean deterministic
 assemblies, fresh installation, application SBOM/license, verified return,
 atomic candidate publication, and cleanup. Evidence:
-`deployment/evidence/ISHIKAWA_V1_3_1_APPLICATION_BUILD.md`. Current next gate:
-run Script 09 for exact-byte side-by-side production requalification and human
-acceptance on EmceeDanko. The package remains **NOT CARRY-READY**.
+`deployment/evidence/ISHIKAWA_V1_3_1_APPLICATION_BUILD.md`. Script 09 then
+passed exact-byte side-by-side production requalification and the operator
+accepted the v1.3.1 UI; candidate cleanup remains the immediate gate. Frozen
+V13-91 and numbered Script 10 define the subsequent attended promotion on
+EmceeDanko without changing the org-lab carry design. The package remains
+**NOT CARRY-READY** until cleanup, promotion acceptance, and every remaining
+mandatory package gate pass.
 
 ## Mandatory package checklist
 

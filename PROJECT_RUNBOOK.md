@@ -109,12 +109,23 @@
     `--accept`, then remove only the isolated candidate with Script 09
     `--cleanup`. Do not alter the accepted v1.3 evidence or treat it as
     acceptance of v1.3.1.
-18. Assemble only the candidate carry directory with
+18. After Script 09 cleanup, run Script 10 `--run` to promote the exact
+    accepted v1.3.1 application and generic image on EmceeDanko. Script 10
+    stages and proves v1.3.1 while v1.3 stays ready, stops v1.3 only at the
+    switch boundary, moves the stopped corpus-v3 PostgreSQL state unchanged
+    into `~/Documents/Ishikawa-v1.3.1`, and starts the package-local Retrieval
+    API and production UI on `8384`/`3384`. A failed launch automatically
+    restores v1.3. Record the promoted UI decision with Script 10 `--accept`,
+    or use Script 10 `--rollback` before acceptance. Acceptance retires the
+    superseded v1.3 application root and old runtime image only after proving
+    that no container still uses that image. Boot autostart stays disabled;
+    v1.2 files and database remain historical and non-operational.
+19. Assemble only the candidate carry directory with
     `build-carry-candidate.sh`. Promote to the stable
     `local/artifacts/ishikawa-deployment-current/` handoff only after exact-byte
     requalification, target-independent security and license review, complete
     checklist closure, and independent final review.
-19. On Tech, run the portable verifier and read-only inventory before any
+20. On Tech, run the portable verifier and read-only inventory before any
     mutation. Install through the consolidated `deploy-ishikawa` entrypoint,
     create the protected catalog and manifest inside org-lab, and derive every
     corpus metric from that exact protected run.
@@ -130,6 +141,7 @@
 - `deployment/scripts/07_build-node-next-runtime-on-emceedanko.sh`
 - `deployment/scripts/08_build-v1.3.1-application-on-emceedanko.sh`
 - `deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh`
+- `deployment/scripts/10_promote-v1.3.1-on-emceedanko.sh`
 - `deployment/scripts/build-carry-candidate.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`
@@ -190,3 +202,13 @@ target work. Acceptance or cleanup may recover the exact content-free
 qualification receipt from the still-durable target candidate when a prior
 local publication failed; target runtime state and protected output are not
 recovered through that path.
+
+Script 10 requires the complete checksum-bound Script 09 qualification,
+acceptance, and cleanup evidence before target contact. Its `--run` mode
+prompts at the target for the Gemma key, Nomic key, and existing v1.3
+retrieval-role password. It performs no schema, corpus, or role mutation. It
+moves the stopped durable state rather than copying or rebuilding it, launches
+the exact v1.3.1 runtime on `5432`/`8384`/`3384`, and leaves v1.3 available as
+an automatic and explicit pre-acceptance rollback source. Script 10 `--accept`
+is non-secret and finalizes retirement; `--rollback` requires the same three
+runtime secrets. The direct EmceeDanko model tunnel remains operator-managed.

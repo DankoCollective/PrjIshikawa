@@ -149,7 +149,7 @@ application, image, database, listener, service, credential, or boot posture
 changed. Executable wrapper coverage now includes WSL-mode refusal and both
 acceptance and cleanup receipt-recovery paths.
 
-After this correction, all 486 native tests and all 16 deployment harnesses
+After this correction, all 486 native tests and all 16 then-current deployment harnesses
 passed together, including every Script 09 run, acceptance, cleanup,
 publication, receipt-recovery, failure-propagation, and checksum branch.
 
@@ -177,16 +177,39 @@ The acceptance receipt records production build/start pass, 60/60 frontier
 cases, explicit human acceptance, disabled boot autostart, and no mutation of
 accepted v1.3 or its database. The local `SHA256SUMS` verified both receipts.
 
+Frozen V13-91 authorizes one attended EmceeDanko promotion lifecycle after
+Script 09 cleanup. Numbered Script 10 now binds the exact Script 07 image,
+Script 08 application, and all three Script 09 lifecycle receipts before any
+target contact. Its target helper stages and checks v1.3.1 while accepted v1.3
+remains ready; at the immediate switch boundary it stops v1.3, moves the
+stopped durable corpus-v3 state without schema, corpus, or role mutation, and
+starts the package-local v1.3.1 PostgreSQL, Retrieval API, and production UI
+on `5432`/`8384`/`3384`. A failed launch automatically reconstructs the v1.3
+runtime. Explicit rollback remains available until human acceptance; final
+acceptance proves the promoted runtime and consumer inventory before removing
+the superseded v1.3 root and old image. Historical v1.2 files and database are
+not modified.
+
+The isolated Script 10 target and wrapper harnesses cover complete promotion,
+acceptance, explicit rollback, failed-launch automatic restoration, database
+inventory refusal, old-image consumer refusal, exact-evidence validation,
+WSL-safe publication, returned-receipt refusal, nested target failure, signal
+propagation, and remote cleanup. Together with the pre-existing suite, all 18
+deployment harnesses pass. This is implementation evidence only: Script 09
+cleanup and the attended Script 10 target lifecycle have not yet run.
+
 The remaining ordered gates are:
 
 1. remove only the accepted isolated v1.3.1 qualification candidate with
    Script 09 `--cleanup` and preserve the verified qualification and
    acceptance receipts;
-2. complete the exact-image and exact-application advisory disposition from
+2. promote the exact v1.3.1 bytes with Script 10, review the production-port
+   UI, and record acceptance or explicitly roll back before acceptance;
+3. complete the exact-image and exact-application advisory disposition from
    their recorded SBOMs;
-3. accept the read-only Tech inventory and resolve any required offline native
+4. accept the read-only Tech inventory and resolve any required offline native
    prerequisite payload;
-4. complete independent review and atomically promote the exact carry bytes to
+5. complete independent review and atomically promote the exact carry bytes to
    the stable handoff.
 
 Current disposition:

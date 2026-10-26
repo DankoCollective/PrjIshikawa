@@ -167,13 +167,14 @@ target_read_secret() {
       'Rerun Script 06 from an interactive terminal.'
   bytes="$(LC_ALL=C printf '%s' "$value" | wc -c | tr -d ' ')"
   [[ "$bytes" =~ ^[0-9]+$ ]] \
-    || target_fail credential_length_invalid 'Credential length could not be validated.' \
+    || target_fail credential_length_invalid "The ${label} length could not be validated." \
       'Re-enter the complete credential.'
   (( bytes >= minimum && bytes <= maximum )) \
-    || target_fail credential_length_invalid 'Credential length is outside the accepted boundary.' \
+    || target_fail credential_length_invalid \
+      "The ${label} must be between ${minimum} and ${maximum} bytes." \
       'Re-enter the complete credential.'
   [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] \
-    || target_fail credential_line_break 'A credential contains a line break.' \
+    || target_fail credential_line_break "The ${label} contains a line break." \
       'Re-enter the credential without a line break.'
   printf -v "$destination" '%s' "$value"
   value=''

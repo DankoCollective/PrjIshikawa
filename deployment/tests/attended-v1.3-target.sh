@@ -320,6 +320,7 @@ run_target() {
   local name="$1" internal_mode="$2" secret_count="$3"
   local ingest_fail="${4:-0}" web_fail="${5:-0}" model_fail="${6:-0}" restore_fail="${7:-0}"
   local database_count_fail="${8:-0}"
+  local secret_override="${9:-}"
   local output="$test_root/${name}.stdout" result_path="$test_root/payload/${name}-result.txt"
   local command secrets=''
   rm -f -- "$result_path"
@@ -330,6 +331,7 @@ run_target() {
     5) secrets=$'gemma-test-key\nnomic-test-key-012345678901234567890123456789\nv12-test-password\nv13-ingest-test-password\nv13-retrieval-test-password\n' ;;
     *) fail invalid_test_secret_count ;;
   esac
+  [[ -z "$secret_override" ]] || secrets="$secret_override"
   command="ISHIKAWA_SCRIPT06_INTERNAL=1 bash '$orchestrator' '$internal_mode' --expected-hostname EmceeDanko --expected-os-version 24.04 --expected-architecture amd64 --payload-root '$test_root/payload' --result-path '$result_path' --gemma-base-url 'http://127.0.0.1:$model_port' --nomic-base-url 'http://127.0.0.1:$model_port'"
   set +e
   printf '%s' "$secrets" | \
@@ -366,6 +368,20 @@ run_target model-failure --target-launch 5 0 0 1
 grep -Fxq 'reason=model_health_unavailable' "$last_result" || fail model_failure_reason_missing
 [[ "$(<"$test_root/state/database")" == none && "$(<"$test_root/state/unit")" == active ]] \
   || fail model_failure_mutated_state
+
+reset_fresh_state
+short_ingest_secrets=$'gemma-test-key\nnomic-test-key-012345678901234567890123456789\nv12-test-password\nshort\n'
+run_target credential-length-failure --target-launch 5 0 0 0 0 0 "$short_ingest_secrets"
+(( target_status != 0 )) || fail credential_length_failure_accepted
+grep -Fxq 'reason=credential_length_invalid' "$last_result" \
+  || fail credential_length_failure_reason_missing
+grep -Fxq 'detail=The v1.3 PostgreSQL ingestion password must be between 16 and 4096 bytes.' "$last_result" \
+  || fail credential_length_failure_detail_missing
+[[ "$(<"$test_root/state/database")" == none \
+    && "$(<"$test_root/state/unit")" == active \
+    && "$(<"$test_root/state/postgres")" == active \
+    && ! -e "$test_root/home/Documents/Ishikawa-v1.3-attended" ]] \
+  || fail credential_length_failure_mutated_state
 
 reset_fresh_state
 candidate_drift_path="$candidate/config/deployment.yaml"
@@ -495,7 +511,7 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
   || fail qualified_candidate_changed
 
 printf '%s\n' \
-  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
+  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;credential_boundary_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

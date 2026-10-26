@@ -12,19 +12,20 @@
 - Governing standards: `AGENT_OPERATION.md`, `CODING_STANDARD.md`, and
   `LAB_RUN_PATH_STANDARD.md`
 
-This file is a readiness ledger and a structured queue for tomorrow's
-decision review. It does not freeze a release identity, dependency, runtime,
-installation, service, credential, database, corpus, or rollback design. An
-approved choice must be frozen in the authoritative release decision list
-before its implementation changes a protected control surface.
+This file is a readiness ledger and structured decision record. On 2026-10-26
+the operator froze `CARRY-D01`, `CARRY-D02`, `CARRY-D03`, and `CARRY-D05`
+through `CARRY-D11`, with the demo and black-corpus qualifications recorded in
+those items. `CARRY-D04` remains open. The matching authoritative decisions
+are in `docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`.
 
-## Tonight's boundary
+## Current review boundary
 
-Creating and registering this checklist is the only authorized action tonight.
-It does not authorize package promotion, archive mutation, dependency update,
-target contact, source-document access, service change, database change,
-credential handling, or requalification. Leave the accepted attended v1.3
-runtime on EmceeDanko unchanged.
+Freezing these decisions authorizes their bounded local implementation after
+`CARRY-D04` is resolved. It does not itself authorize target contact,
+black-corpus access, service or database mutation, credential handling, or
+package promotion. Leave the accepted attended v1.3 runtime on EmceeDanko
+unchanged until an operator-facing qualification action is separately
+authorized.
 
 The desired carry time is a target, not a reason to waive a mandatory gate. If
 any blocking item below remains incomplete, the package does not travel.
@@ -117,19 +118,22 @@ These findings prevent a carry-ready declaration today:
   psycopg. Org-lab has not yet proved exact compatible packages are present,
   and no reviewed offline prerequisite set has been selected or captured.
 
-## Pending decision review
+## Carry decisions
 
-The following items use the required decision-list shape so they can be
-reviewed efficiently tomorrow. Their status is `Open`; they are not frozen
-here. After operator approval, reconcile the chosen posture into
-`docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md` before implementation.
+The following items use the required decision-list shape. Ten are frozen by
+operator direction on 2026-10-26. `CARRY-D04` is the sole open package-design
+item. A post-freeze consistency review also found that `CARRY-D05`, as written,
+would replace the previously accepted Tech home-directory/user-unit design;
+that conflict requires operator reconciliation before implementation. Exact
+target facts remain preflight inputs rather than new architecture decisions
+unless inventory conflicts with a frozen posture.
 
 ### CARRY-D01 — Release identity after security/runtime changes
 
-Decision: Decide whether the security and production-runtime correction is a
-new patch release or an in-place replacement of the accepted v1.3 identity.
+Decision: Publish the security and production-runtime correction as Ishikawa
+v1.3.1 and preserve the accepted v1.3 identity and evidence.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Publish the corrected, requalified result as Ishikawa v1.3.1
 and preserve the accepted v1.3 application and evidence as its historical
@@ -141,10 +145,12 @@ replacement of the already accepted v1.3 artifact.
 
 ### CARRY-D02 — Final dependency set
 
-Decision: Select and freeze the exact Node.js, Next.js, React, React DOM,
-package-manager, operating-system base, and complete transitive dependency set.
+Decision: Keep the final runtime on the supported Node 24 and Next.js 16 lines,
+resolve currently fixed patch versions through the package-time advisory
+review, and pin the exact Node.js, Next.js, React, React DOM, package-manager,
+operating-system base, and transitive dependency set before assembly.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Remain on the supported Node 24 and Next.js 16 lines, select
 currently fixed patch versions after a fresh advisory review, pin every direct
@@ -154,13 +160,16 @@ target-side download.
 Reason/Evidence: The accepted image uses Node.js `24.22.0`, Next.js `16.4.1`,
 React `19.2.0`, and React DOM `19.2.0`. Current Node and React security sources
 require action before promotion, and the present image is not reproducible.
+Exact resolved pins are implementation evidence under this frozen rule; they
+require another operator decision only if qualification forces a change away
+from the frozen Node 24 or Next.js 16 lines.
 
 ### CARRY-D03 — Permanent web runtime
 
-Decision: Select how the final package creates, preserves, verifies, and starts
-production Next.js build output.
+Decision: Use `next build` plus `next start`, read-only runtime source, and
+checksum-bound production build output created by the exact reviewed image.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Use `next build` plus `next start`, keep application source
 read-only at runtime, and package or persist only checksum-bound build output
@@ -171,28 +180,34 @@ Reason/Evidence: The attended proof intentionally used a development runtime
 and disposable `.next` tmpfs. Production build-output persistence and restart
 behavior have not been qualified.
 
-### CARRY-D04 — Reproducible runtime image
+### CARRY-D04 — Carryable AMD64 web image
 
-Decision: Decide the final image build, platform, export, provenance, SBOM,
-license, advisory, and verification contract.
+Decision: Decide the minimum exact web-container image file and identity record
+that Tech needs in order to load and run the frozen production web runtime in
+org-lab without rebuilding it or downloading a substitute.
 
 Status: Open.
 
-Recommendation: Build one AMD64 image from a retained Dockerfile, exact base
-digest, and exact lockfile; export one standalone OCI or Docker archive; and
-bind its image identity, archive SHA-256, SBOM, license inventory, advisory
-disposition, and build report into the carry manifest.
+Recommendation: Carry one Linux AMD64 Docker image archive containing the
+already-built production Ishikawa web app, its SHA-256 and image identity, and
+the Dockerfile/lockfile that produced it. Tech verifies the archive and runs
+`docker load`; Tech does not use a registry, rebuild the image, or download
+dependencies. Do not build or carry ARM64 for this deployment.
 
-Reason/Evidence: A tag is not byte identity. The accepted local image lacks a
-reproducible recipe and authoritative single-image transfer artifact.
+Reason/Evidence: This is the practical purpose of item 4. A Docker tag is only
+a name and cannot be carried by itself. The actual image archive is required
+so the tested bytes can be copied to Tech and loaded offline. The broader SBOM,
+license, and advisory records are already mandatory under `SEC-01` through
+`SEC-04`; they do not require a second image design.
 
 ### CARRY-D05 — Canonical target layout and service posture
 
-Decision: Select the final application, configuration, state, log, credential,
-and service locations; service account; ports; ownership; permissions;
-autostart; and removal boundary.
+Decision: Use one stable product layout with function-based target names, one
+dedicated least-privilege service identity, explicit loopback listeners, the
+minimum service set, and boot-disabled first proof. Resolve exact target values
+through the package defaults and preflight inventory before mutation.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Use one stable product layout with function-based names, one
 dedicated least-privilege service identity, explicit loopback listeners, and
@@ -205,26 +220,29 @@ approved permanent org-lab topology.
 
 ### CARRY-D06 — PostgreSQL ownership and recovery
 
-Decision: Select the PostgreSQL 16/pgvector cluster, database, roles,
-credential source, backup, restore, upgrade, and removal posture.
+Decision: Use PostgreSQL 16 with pgvector, schema v5, and the qualified
+least-privilege database roles for a demo deployment. Backup and restore proof
+are explicitly outside this demo's acceptance scope.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Preserve schema-v5 names and least-privilege roles, install
-from the one canonical `schema.sql`, keep the corpus database separate from
-the package, and prove backup/restore before production acceptance.
+from the one canonical `schema.sql`, and keep the corpus database separate
+from the package. Prove clean creation, ingestion, retrieval, restart, and
+bounded removal; do not add a backup/restore exercise to this demo.
 
-Reason/Evidence: Schema v5 and the application roles are qualified, but the
-org-lab cluster owner, existing database posture, capacity, backup authority,
-and recovery requirement are unknown.
+Reason/Evidence: Schema v5 and the application roles are qualified. The
+operator explicitly classified this as a demo and waived backup/restore proof
+on 2026-10-26. Target cluster ownership, capacity, and collision checks remain
+read-only preflight facts, not a recovery-design gate.
 
 ### CARRY-D07 — Model routes and credential consumption
 
-Decision: Select the Gemma and Nomic endpoints, network path, authentication
-authority, injection method, rotation behavior, failure behavior, and log
-redaction boundary.
+Decision: Supply Gemma and Nomic endpoint and credential values only through
+approved runtime configuration and secret injection, with explicit failure and
+log-redaction behavior and no test-host values embedded in package bytes.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Supply endpoint names and credentials only through approved
 runtime configuration and secret injection, with no EmceeDanko port-forward,
@@ -235,27 +253,33 @@ hidden inputs. Those are validation mechanics, not a portable service design.
 
 ### CARRY-D08 — Organizational corpus intake
 
-Decision: Select the approved corpus source, document catalog, ingestion
-manifest, access boundary, validation owner, acceptance metrics, update
-procedure, and protected-evidence policy.
+Decision: Keep the agent and portable carry package unable to access
+`black_corpus`. Create the black-corpus document catalog and ingestion manifest
+inside org-lab through an authorized content-side operation, and derive every
+corpus metric from those exact inputs and the resulting PostgreSQL state.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
-Recommendation: Carry the reviewed catalog and manifest separately from the
-application, derive all counts from those exact inputs and PostgreSQL, and do
-not reuse corpus-v3 constants as organizational acceptance values.
+Recommendation: Carry only content-blind catalog/manifest creation and
+validation tooling plus empty templates. An authorized org-lab operator runs
+that tooling against `black_corpus`; the resulting catalog and manifest stay
+inside the protected environment. Derive document, page, chunk, relationship,
+embedding, and acceptance counts from that run and PostgreSQL. Do not reuse
+corpus-v3 constants.
 
 Reason/Evidence: Corpus v3 proves the application but contains synthetic data.
-No organizational document is authorized for access or packaging by this
-checklist.
+The operator stated on 2026-10-26 that the agent will not have black-corpus
+access and that its catalogs and manifests must be created for that corpus.
+Neither black-corpus content nor content-bearing evidence is authorized for
+repository or carry-package access.
 
 ### CARRY-D09 — Final carry contents
 
-Decision: Select the smallest authoritative file set needed to install,
-configure, run, verify, recover, and remove Ishikawa from a clean supported
-baseline.
+Decision: Carry the smallest authoritative final file set needed to install,
+configure, run, verify, and remove Ishikawa from a clean supported baseline,
+plus only inventory-required offline prerequisites.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Carry one final application artifact, one final AMD64 runtime
 image archive, one consolidated deployment entrypoint, one verifier, one
@@ -270,11 +294,11 @@ deployment package.
 
 ### CARRY-D10 — Qualification, promotion, and supersession
 
-Decision: Select the complete local, clean-install, EmceeDanko, human, and
-org-lab first-proof gates required after any release-byte or runtime change,
-and define how stable handoffs supersede earlier artifacts.
+Decision: Repeat every affected local, clean-install, installed-layout,
+EmceeDanko, production-runtime, failure, cleanup, and human gate against the
+exact final bytes before atomic stable-handoff promotion.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Repeat all affected first-party, package, installed-layout,
 production-runtime, failure, cleanup, and human UI gates against the exact
@@ -288,11 +312,11 @@ production build output, image bytes, installer behavior, or target topology.
 
 ### CARRY-D11 — Native prerequisite supply
 
-Decision: Decide whether the final target's existing PostgreSQL, pgvector,
-Python, PyYAML, psycopg, and other native prerequisites are accepted in place
-or supplied through a separate offline prerequisite bundle.
+Decision: Inventory the final target's PostgreSQL, pgvector, Python, PyYAML,
+psycopg, and other native prerequisites; reuse exact compatible installed
+packages or carry a separately checksummed complete offline prerequisite set.
 
-Status: Open.
+Status: Frozen by operator direction on 2026-10-26.
 
 Recommendation: Run the approved read-only prerequisite inventory first; reuse
 only exact compatible target packages with recorded identity and advisory
@@ -304,6 +328,28 @@ Reason/Evidence: The application archive intentionally excludes
 operating-system packages, and the accepted EmceeDanko host already supplied
 them. That does not prove org-lab has compatible bytes or permit the target to
 download replacements during deployment.
+
+## Post-freeze discussion items
+
+- **RECON-01 — Unfrozen image handoff.** `CARRY-D04`/V13-82 is the only
+  unfrozen package-design decision. Its reduced scope is one already-built
+  Linux AMD64 Ishikawa web image archive that Tech verifies and loads offline,
+  plus the checksum and build identity needed to prove it is the tested image.
+- **RECON-02 — Tech layout conflict.** `CARRY-D05`/V13-83 currently selects a
+  dedicated service identity and new canonical layout. The existing accepted
+  Tech contract instead uses `%h/Documents/Ishikawa`, packaged user units, and
+  the installing operator account; Ishikawa creates no Linux user or group.
+  Confirming the new service-account posture would require package, unit,
+  permission, install, and removal changes. Amending D05 to the existing Tech
+  contract is the smaller path.
+- **RECON-03 — Implementation evidence, not new decisions.** Exact fixed patch
+  versions under D02; exact Tech ports, capacity, and prerequisite versions;
+  and the protected `black_corpus` source path are values resolved by local
+  build evidence or operator-run preflight. They require a new decision only
+  if they conflict with a frozen posture.
+- **RECON-04 — Later autostart choice.** D05 keeps first proof boot-disabled.
+  Whether to enable startup after Tech acceptance is deliberately deferred and
+  does not block assembling or carrying the package.
 
 ## Mandatory package checklist
 
@@ -332,12 +378,14 @@ download replacements during deployment.
   no repeated container layers outside the selected image archive, and no
   duplicate source/config/schema copy without a documented consumer. Evidence:
   ___; reviewer/date: ___.
-- [ ] **SIZE-03 — MUST.** Exclude `node_modules`, `.next`, virtual environments,
-  caches, bytecode, logs, raw reports, editor files, temporary files, test
-  output, source documents, vectors, database dumps, model weights, OS package
-  caches, credentials, private keys, tokens, and environment files. A
-  checksum-bound production build output is allowed only under the frozen web
-  runtime design. Evidence: ___; reviewer/date: ___.
+- [ ] **SIZE-03 — MUST.** Exclude loose `node_modules`, `.next`, virtual
+  environments, caches, bytecode, logs, raw reports, editor files, temporary
+  files, test output, source documents, vectors, database dumps, model weights,
+  OS package caches, credentials, private keys, tokens, and environment files
+  from the application archive and carry directory. The single final web image
+  may contain only its exact pinned production runtime dependencies and
+  checksum-bound production build output under D02 through D04. Evidence: ___;
+  reviewer/date: ___.
 - [ ] **SIZE-04 — MUST.** Include first-party tests only if the final verifier
   executes them from the installed layout; otherwise keep full regression
   sources outside the fresh-deployment payload. Evidence: ___; reviewer/date:
@@ -549,8 +597,8 @@ disposition.
 
 ### Morning review
 
-1. Review `CARRY-D01` through `CARRY-D11` in order.
-2. Freeze approved choices in the authoritative decision list.
+1. Resolve `CARRY-D04` and the `CARRY-D05` Tech-layout conflict.
+2. Reconcile any resulting decision amendment in the authoritative list.
 3. Reconcile release documentation and create the content-free human
    acceptance receipt.
 4. Front-load org-lab inventory, license, advisory, platform, and dependency
@@ -577,4 +625,4 @@ disposition.
 
 ## Final status
 
-`carry_ready=blocked;reason=mandatory_decisions_and_package_gates_pending`
+`carry_ready=blocked;reason=image_handoff_and_tech_layout_reconciliation_pending`

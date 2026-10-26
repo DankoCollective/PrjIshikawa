@@ -3,19 +3,30 @@
 ## Purpose
 
 Record the frozen promotion of Ishikawa v1.3 from its Phase 28 development
-workspace into a first-class repository and define the EmceeDanko deployment
-journey.
+workspace into a first-class repository, the EmceeDanko deployment journey,
+and the final org-lab carry posture.
 
 ## Current Status
 
-Items V13-60 through V13-76 are frozen through the operator-approved release
-journey and bounded corrections to that contract. V13-76 adds an explicit
-waiver path without weakening Script 06's default reversible behavior. Scripts
-01-06 implement the corpus-agnostic build, independent corpus export,
-read-only inventory, side-by-side staging, disposable qualification, and
-attended deployment sequence. Script 05 passed on EmceeDanko with 60/60
-frontier cases and proved cleanup. The active gate is attended v1.3 human UI
-validation on EmceeDanko using the operator-selected V13-76 waiver posture.
+Items V13-60 through V13-78 are frozen through the operator-approved release,
+qualified EmceeDanko deployment, rollback-waived integrated proof, and human
+UI acceptance. On 2026-10-26 the operator froze V13-79 through V13-81 and
+V13-83 through V13-89 for the final org-lab carry. These decisions select a
+v1.3.1 security/runtime correction, patched Node 24 and Next.js 16 dependency
+lines, production Next.js operation, a canonical least-privilege target
+layout, demo PostgreSQL without backup/restore proof, portable model
+configuration, protected in-lab black-corpus catalog/manifest creation, a
+minimal carry set, exact-byte requalification, and inventory-driven native
+prerequisites. V13-82 remains open only to confirm the minimal AMD64 Docker
+image archive handoff. The post-freeze consistency review also found that
+V13-83's new dedicated service identity conflicts with the previously accepted
+Tech `%h/Documents/Ishikawa` and user-unit posture. The operator must confirm
+that replacement or amend V13-83 before implementation. Exact fixed dependency
+pins and target inventory values are implementation evidence, not additional
+architecture decisions unless they conflict with a frozen posture. No
+black-corpus access, target contact, service or database mutation, credential
+handling, or package promotion is authorized by these planning decisions
+alone.
 
 ## Decisions
 
@@ -423,3 +434,197 @@ PostgreSQL runtime remain unchanged. The complete regression matrix also
 proves waived retry, post-switchover failure cleanup without v1.2 restoration,
 final launch, acceptance, explicit conditional rollback, candidate
 immutability, and the standalone result contract.
+
+### V13-79 — Patch-release identity for the final carry
+
+Decision: Publish the security and production-runtime correction as Ishikawa
+v1.3.1 and preserve the accepted v1.3 application identity and evidence.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Use a new patch identity for every changed application,
+dependency, image, or production-runtime byte and retain v1.3 as the historical
+EmceeDanko acceptance baseline.
+
+Reason/Evidence: The accepted v1.3 archive and attended runtime are
+checksum-bound. Security dependency updates and replacing `next dev` with a
+production runtime change executed bytes and must not silently replace that
+accepted identity.
+
+### V13-80 — Patched and pinned dependency lines
+
+Decision: Keep the final runtime on supported Node 24 and Next.js 16 lines,
+resolve currently fixed patch versions through package-time advisory review,
+and pin the exact Node.js, Next.js, React, React DOM, package-manager,
+operating-system base, and transitive dependency set before assembly.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Use the newest reviewed fixed patch set within the frozen
+Node 24 and Next.js 16 lines, retain exact lock data, and permit no floating
+tag or target-side dependency download.
+
+Reason/Evidence: The accepted image contains Node.js `24.22.0`, Next.js
+`16.4.1`, React `19.2.0`, and React DOM `19.2.0`. The registered Node and React
+security sources require a fixed reviewed set before promotion. Exact resolved
+pins are implementation evidence under this decision; another operator choice
+is required only if qualification forces a change away from Node 24 or Next.js
+16.
+
+### V13-81 — Production Next.js runtime
+
+Decision: Use `next build` plus `next start`, read-only runtime source, and
+checksum-bound production build output created by the exact reviewed image.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Remove `next dev` from the permanent deployment and qualify
+build, start, readiness, proxies, static assets, restart, stop, cleanup, and
+bounded writable state against the final package.
+
+Reason/Evidence: The attended EmceeDanko proof intentionally used a
+development server and disposable `.next` state. That proves the application
+experience but not a permanent production-mode build/start lifecycle.
+
+### V13-82 — Minimal AMD64 image handoff
+
+Decision: Decide the minimum exact web-container image file and identity record
+that Tech needs to load and run the frozen production web runtime in org-lab
+without rebuilding it or downloading a substitute.
+
+Status: Open.
+
+Recommendation: Carry one Linux AMD64 Docker image archive containing the
+already-built production Ishikawa web app, its SHA-256 and image identity, and
+the Dockerfile/lockfile that produced it. Tech verifies the archive and runs
+`docker load`; Tech does not use a registry, rebuild the image, or download
+dependencies. Do not build or carry ARM64 for this deployment.
+
+Reason/Evidence: A Docker tag is only a name. The tested image bytes must be
+exported to a file to travel to Tech. SBOM, license, and advisory evidence are
+already required by V13-80 and the package checklist and do not create a
+second image design.
+
+### V13-83 — Canonical least-privilege target layout
+
+Decision: Use one stable product layout with function-based target names, one
+dedicated least-privilege service identity, explicit loopback listeners, the
+minimum service set, and boot-disabled first proof. Resolve exact target values
+through package defaults and read-only preflight before mutation.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Keep application, configuration, state, credential injection,
+and logging responsibilities in their canonical final locations; install no
+development, candidate, script-numbered, test-host, or repository-named target
+objects.
+
+Reason/Evidence: The EmceeDanko attended layout is a package-local validation
+arrangement, and the historical packaged unit assumes a home-directory path.
+Neither is an appropriate permanent target layout. Exact ports and paths are
+preflight values unless inventory reveals a conflict with this posture.
+
+### V13-84 — Demo PostgreSQL without backup/restore proof
+
+Decision: Use PostgreSQL 16 with pgvector, schema v5, and the qualified
+least-privilege database roles for the demo. Backup and restore proof are
+explicitly outside demo acceptance scope.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Install the one canonical `schema.sql`, keep database state
+outside the carry package, and prove clean creation, ingestion, retrieval,
+restart, and bounded removal without adding a backup/restore exercise.
+
+Reason/Evidence: Schema v5 and the database roles passed EmceeDanko
+qualification. The operator classified the org-lab installation as a demo and
+explicitly waived backup/restore proof. Capacity, ownership, and collision
+inventory remain required preflight facts.
+
+### V13-85 — Portable model and credential configuration
+
+Decision: Supply Gemma and Nomic endpoint and credential values only through
+approved runtime configuration and secret injection, with explicit failure and
+log-redaction behavior and no test-host values embedded in package bytes.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Keep endpoint, network, and credential values external to the
+package and reject missing or invalid values without exposing them in output,
+logs, commands, or retained evidence.
+
+Reason/Evidence: EmceeDanko used operator-created forwards and hidden inputs.
+Those were validation mechanics and must not become Tech configuration or
+package content.
+
+### V13-86 — Protected black-corpus materialization
+
+Decision: Keep the agent and portable package unable to access `black_corpus`.
+Create its document catalog and ingestion manifest inside org-lab through an
+authorized content-side operation and derive every corpus metric from those
+exact inputs and the resulting PostgreSQL state.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Carry only content-blind catalog/manifest creation and
+validation tooling plus empty templates. Keep the generated catalog, manifest,
+source documents, content-bearing reports, chunks, vectors, prompts, and
+responses inside the protected environment. Do not reuse corpus-v3 counts.
+
+Reason/Evidence: The operator stated that the agent will not have black-corpus
+access and that catalogs and manifests must be created for that corpus. The
+synthetic corpus proves the application but cannot define organizational
+document, page, chunk, relationship, embedding, or acceptance counts.
+
+### V13-87 — Minimal canonical carry set
+
+Decision: Carry the smallest authoritative final file set needed to install,
+configure, run, verify, and remove Ishikawa from a clean supported baseline,
+plus only inventory-required offline prerequisites.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Include one final application artifact, one final AMD64 web
+image archive after V13-82 is resolved, one consolidated deployment entrypoint,
+one verifier, one operator command sheet, and their required identity, SBOM,
+license, advisory, and checksum records. Keep corpus material separate.
+
+Reason/Evidence: The deployable-package standard forbids repair chains,
+superseded files, duplicated payloads, unclassified content, and repository
+history in the normal fresh-install lane.
+
+### V13-88 — Exact-byte requalification and stable promotion
+
+Decision: Repeat every affected local, clean-install, installed-layout,
+EmceeDanko, production-runtime, failure, cleanup, and human gate against the
+exact final bytes before atomic stable-handoff promotion.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Treat prior v1.3 evidence as the behavioral baseline, not as
+proof for changed v1.3.1 bytes. Publish only after final package and image
+checks pass and preserve displaced handoff bytes under an explicit superseded
+identity.
+
+Reason/Evidence: The security refresh, production web lifecycle, image bytes,
+and final deployment entrypoint are new. Syntax checks or the old attended
+runtime cannot establish their install, run, failure, cleanup, or human
+behavior.
+
+### V13-89 — Inventory-driven native prerequisites
+
+Decision: Inventory Tech's PostgreSQL, pgvector, Python, PyYAML, psycopg, and
+other native prerequisites; reuse exact compatible installed packages or carry
+a separately checksummed complete offline prerequisite set.
+
+Status: Frozen by operator direction on 2026-10-26.
+
+Recommendation: Run the approved read-only prerequisite inventory before bulk
+capture. If compatible packages are absent, stage the exact Linux AMD64
+packages and transitive dependencies locally, review them, and install only
+from the verified carried set.
+
+Reason/Evidence: The application archive intentionally excludes
+operating-system packages, and EmceeDanko already supplied its prerequisites.
+That does not prove Tech has compatible bytes or authorize live target package
+downloads.

@@ -241,6 +241,15 @@ case "$action" in
     grep -Fxv "$name" "$ISHIKAWA_TEST_STATE/retained-containers" >"$ISHIKAWA_TEST_STATE/retained-containers.next" || true
     mv "$ISHIKAWA_TEST_STATE/retained-containers.next" "$ISHIKAWA_TEST_STATE/retained-containers" ;;
   run)
+    original="$*"
+    if [[ "$original" == *"node-24-slim-nextjs-16-4-1:amd64 next --version"* ]]; then
+      if [[ "${ISHIKAWA_TEST_NEXT_VERSION_FAIL:-0}" == 1 ]]; then
+        printf "Next.js v17.0.0\n"
+      else
+        printf "Next.js v16.4.1\n"
+      fi
+      exit 0
+    fi
     name=""; auto_remove=false
     while (( $# )); do
       [[ "$1" == --rm ]] && auto_remove=true
@@ -248,6 +257,11 @@ case "$action" in
       shift
     done
     [[ -n "$name" ]] || exit 2
+    if [[ "$name" == ishikawa-v1.3-web ]]; then
+      printf "%s\n" "$original" >"$ISHIKAWA_TEST_STATE/v13-web-run-args"
+    elif [[ "$name" == ishikawa-web ]]; then
+      printf "%s\n" "$original" >"$ISHIKAWA_TEST_STATE/v12-web-run-args"
+    fi
     if [[ "$name" == ishikawa-v1.3-web && "${ISHIKAWA_TEST_WEB_FAIL:-0}" == 1 ]]; then exit 1; fi
     if [[ "$name" != ishikawa-v1.3-web || "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" != 1 ]]; then
       grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/containers" \
@@ -369,6 +383,7 @@ reset_fresh_state() {
   printf '%s\n' none >"$test_root/state/database"
   printf '%s\n' none >"$test_root/state/private-pg-port"
   rm -f -- "$test_root/state/v13-api-pid"
+  rm -f -- "$test_root/state/v13-web-run-args" "$test_root/state/v12-web-run-args"
   rm -rf -- "$test_root/home/Documents/Ishikawa-v1.3-attended"
 }
 
@@ -381,6 +396,7 @@ run_target() {
   local waive_v1_2_rollback="${11:-0}"
   local web_readiness_fail="${12:-0}"
   local web_exit_after_start="${13:-0}"
+  local next_version_fail="${14:-0}"
   local output="$test_root/${name}.stdout" result_path="$test_root/payload/${name}-result.txt"
   local command secrets='' waiver_option=''
   rm -f -- "$result_path"
@@ -407,6 +423,7 @@ run_target() {
     ISHIKAWA_TEST_WEB_FAIL="$web_fail" \
     ISHIKAWA_TEST_WEB_READINESS_FAIL="$web_readiness_fail" \
     ISHIKAWA_TEST_WEB_EXIT_AFTER_START="$web_exit_after_start" \
+    ISHIKAWA_TEST_NEXT_VERSION_FAIL="$next_version_fail" \
     ISHIKAWA_TEST_MODEL_FAIL="$model_fail" \
     ISHIKAWA_TEST_RESTORE_FAIL="$restore_fail" \
     ISHIKAWA_TEST_DB_COUNT_FAIL="$database_count_fail" \
@@ -433,6 +450,22 @@ run_target model-failure --target-launch 5 0 0 1
 grep -Fxq 'reason=model_health_unavailable' "$last_result" || fail model_failure_reason_missing
 [[ "$(<"$test_root/state/database")" == none && "$(<"$test_root/state/unit")" == active ]] \
   || fail model_failure_mutated_state
+
+reset_fresh_state
+run_target next-runtime-failure --target-launch 0 0 0 0 0 0 '' none 0 0 0 1
+(( target_status != 0 )) || fail next_runtime_failure_accepted
+grep -Fxq 'reason=web_runtime_command_invalid' "$last_result" \
+  || fail next_runtime_failure_reason_missing
+grep -Fxq 'detail=The exact image did not expose the required direct Next.js 16.4.1 command; observed Next.js v17.0.0.' "$last_result" \
+  || fail next_runtime_failure_detail_missing
+! grep -Fq '[INPUT REQUIRED]' "$last_output" \
+  || fail next_runtime_failure_prompted_for_credentials
+[[ "$(wc -l <"$test_root/state/containers")" -eq 1 \
+    && "$(grep -Fxc ishikawa-web "$test_root/state/containers")" -eq 1 \
+    && "$(wc -l <"$test_root/state/retained-containers")" -eq 0 \
+    && "$(wc -l <"$test_root/state/database")" -eq 1 \
+    && "$(<"$test_root/state/database")" == none ]] \
+  || fail next_runtime_failure_mutated_state
 
 reset_fresh_state
 short_ingest_secrets=$'gemma-test-key\nnomic-test-key-012345678901234567890123456789\nv12-test-password\nshort\n'
@@ -524,6 +557,11 @@ grep -Fxq 'ishikawa_v1_3_emceedanko_attended_launch=pass' "$last_result" \
 grep -Fq 'action=reused_exact' "$last_output" || fail waived_reuse_marker_missing
 grep -Fq 'v1_2_rollback_guarantee=waived' "$last_output" \
   || fail waived_launch_posture_missing
+grep -Eq 'node-24-slim-nextjs-16-4-1:amd64 next dev --hostname 127\.0\.0\.1 --port 3384$' \
+  "$test_root/state/v13-web-run-args" \
+  || fail v1_3_direct_next_command_missing
+! grep -Fq 'npm run dev' "$test_root/state/v13-web-run-args" \
+  || fail v1_3_npm_wrapper_retained
 [[ "$(<"$test_root/state/postgres")" == inactive \
     && "$(<"$test_root/state/unit")" == inactive \
     && "$(<"$test_root/state/private-pg-port")" == 5432 ]] \
@@ -618,6 +656,9 @@ grep -Fxq 'attended_runtime=stopped;v1_2_restored=true;durable_v1_3_database=pre
     && "$(<"$test_root/state/database")" == rag_catalog ]] \
   || fail rollback_state_invalid
 grep -Fxq ishikawa-web "$test_root/state/containers" || fail v1_2_web_not_restored
+grep -Eq 'node-24-slim-nextjs-16-4-1:amd64 npm run dev -- --hostname 127\.0\.0\.1 --port 3000$' \
+  "$test_root/state/v12-web-run-args" \
+  || fail v1_2_restore_command_changed
 ! grep -Fxq ishikawa-v1.3-web "$test_root/state/containers" || fail v1_3_web_not_stopped
 ! grep -Fxq ishikawa-v1.3-web "$test_root/state/retained-containers" \
   || fail retained_v1_3_web_not_removed
@@ -668,8 +709,8 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
   || fail qualified_candidate_changed
 
 printf '%s\n' \
-  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;credential_boundary_detail=pass;v1_2_readiness_component_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
-  'explicit_v1_2_rollback_waiver=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;web_supervision_diagnostics=pass;exited_web_log_retention=pass;protected_web_log_boundary=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
+  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;direct_next_preflight_no_mutation=pass;credential_boundary_detail=pass;v1_2_readiness_component_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
+  'explicit_v1_2_rollback_waiver=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;web_supervision_diagnostics=pass;exited_web_log_retention=pass;protected_web_log_boundary=pass;direct_next_runtime=pass;v1_2_npm_restore_unchanged=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

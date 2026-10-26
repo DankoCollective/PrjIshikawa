@@ -466,8 +466,9 @@ PY
 }
 
 target_start_web() {
-  local product_root="$1" container_name="$2" retain_on_exit="${3:-false}" values=''
-  local -a parsed=() mounts=() lifecycle=(--rm)
+  local product_root="$1" container_name="$2" retain_on_exit="${3:-false}"
+  local direct_next="${4:-false}" values=''
+  local -a parsed=() mounts=() lifecycle=(--rm) web_command=()
   [[ "$retain_on_exit" == true ]] && lifecycle=()
   values="$(target_web_values "$product_root")" || return 1
   mapfile -t parsed <<<"$values"
@@ -480,6 +481,11 @@ target_start_web() {
     --mount "type=bind,src=$product_root/application/web/package.json,dst=/opt/nextjs/package.json,readonly"
     --mount "type=bind,src=$product_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly"
   )
+  if [[ "$direct_next" == true ]]; then
+    web_command=(next dev --hostname "${parsed[2]}" --port "${parsed[3]}")
+  else
+    web_command=(npm run dev -- --hostname "${parsed[2]}" --port "${parsed[3]}")
+  fi
   "${target_docker[@]}" run --detach "${lifecycle[@]}" \
     --name "$container_name" --network host --restart no \
     --security-opt no-new-privileges --cap-drop ALL \
@@ -487,7 +493,7 @@ target_start_web() {
     --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=${parsed[1]}" \
     --env "ISHIKAWA_RETRIEVAL_BASE_URL=${parsed[4]}" \
     "${mounts[@]}" "node-24-slim-nextjs-16-4-1:amd64" \
-    npm run dev -- --hostname "${parsed[2]}" --port "${parsed[3]}" >/dev/null
+    "${web_command[@]}" >/dev/null
 }
 
 target_restore_v1_2() {
@@ -1659,7 +1665,7 @@ target_launch_v1_3() {
       "The package-local v1.3 Retrieval API did not become ready on port 8384;root_cause=$(target_safe_root_cause "$runtime_root/state/logs/attended-retrieval.stdout" "$runtime_root/state/logs/attended-retrieval.stderr")." \
       'Allow automatic v1.2 restoration and inspect its content-free readiness marker.'
   target_emit API 'state=pass;bind=127.0.0.1:8384;execution=package_local;autostart=false'
-  target_start_web "$runtime_root" "$v1_3_container" true \
+  target_start_web "$runtime_root" "$v1_3_container" true true \
     || target_fail v1_3_web_start_failed \
       'The distinct attended v1.3 web container failed to start.' \
       'Allow automatic v1.2 restoration and inspect bounded container state.'
@@ -1683,7 +1689,7 @@ target_launch_v1_3() {
 }
 
 target_launch_main() {
-  local image_id
+  local image_id web_runtime_version
   target_stage='preflight'
   for command_name in awk bash chmod cp curl date df docker dpkg find grep hostname id kill mkdir mktemp mv pg_isready psql python3 readlink rm sed setsid sha256sum sleep ss sudo systemctl tar timeout tr wc; do
     command -v "$command_name" >/dev/null 2>&1 \
@@ -1705,7 +1711,13 @@ target_launch_main() {
     || target_fail web_image_identity_mismatch \
       "Expected ${expected_web_image_id}; observed ${image_id:-missing}." \
       'Restore the exact accepted AMD64 Node 24/Next.js 16.4.1 image.'
-  target_emit IMAGE 'state=pass;image=node-24-slim-nextjs-16-4-1:amd64;identity=exact'
+  web_runtime_version="$("${target_docker[@]}" run --rm --network none \
+    'node-24-slim-nextjs-16-4-1:amd64' next --version 2>/dev/null || true)"
+  [[ "$web_runtime_version" =~ ^Next\.js[[:space:]]v?16\.4\.1$ ]] \
+    || target_fail web_runtime_command_invalid \
+      "The exact image did not expose the required direct Next.js 16.4.1 command; observed ${web_runtime_version:-missing}." \
+      'Restore the accepted image before entering credentials or changing target state.'
+  target_emit IMAGE 'state=pass;image=node-24-slim-nextjs-16-4-1:amd64;identity=exact;next_command=direct;next_version=16.4.1'
   target_read_secret 'Gemma API key' target_gemma_key 1 4096
   target_read_secret 'Nomic API key' target_nomic_key 32 1024
   if [[ "$target_waive_v1_2_rollback" == false ]]; then

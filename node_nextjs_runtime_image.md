@@ -197,6 +197,13 @@ container exits. The established attended runtime uses `next dev`. A
 production-mode `next start` workflow requires a separately tested
 build-output persistence or same-container build/start design.
 
+An attended launcher may invoke the image-provided `next dev` executable
+directly when it first proves that `next --version` matches the frozen image
+contract. This bypasses only npm's run-script wrapper; it does not change the
+image, framework version, working directory, source mounts, generated `.next`
+state, or application command. Keep any accepted rollback runtime on its
+previous launch path unless that runtime is separately requalified.
+
 ## Runtime Pattern
 
 The established attended runtime uses a unique container name, approved

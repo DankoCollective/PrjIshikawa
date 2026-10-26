@@ -5,6 +5,16 @@ umask 077
 # Purpose:
 #   Run the attended exact-byte Ishikawa v1.3.1 production requalification on
 #   EmceeDanko, record human UI acceptance, and clean the isolated candidate.
+# Mental model:
+#   Verify immutable local handoffs, transfer one private checksum-bound payload,
+#   run exactly one target lifecycle action, return its content-free receipt,
+#   and publish that receipt atomically without relying on WSL file modes.
+# Inputs or prerequisites:
+#   Exact Script 07/08 handoffs, strict SSH access, externally managed model
+#   tunnels on EmceeDanko, and attended secrets for --run.
+# Outputs or artifact lane:
+#   A local report and a checksum-bound qualification/acceptance/cleanup receipt
+#   set under local/artifacts; the --run candidate remains isolated on the target.
 #
 # Usage:
 #   bash ./deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh --validate-only
@@ -45,6 +55,8 @@ master_started=false
 remote_pid=''
 stream_pid=''
 artifact_stage=''
+artifact_probe=''
+recovered_qualification_receipt=''
 ssh_args=()
 
 usage() {
@@ -103,6 +115,11 @@ cleanup() {
       && -d "$artifact_stage" && ! -L "$artifact_stage" ]]; then
     rm -rf -- "$artifact_stage"
   fi
+  if [[ -n "$artifact_probe" \
+      && "$artifact_probe" == "$artifact_parent"/.emceedanko-v1.3.1-publication-probe.* \
+      && -d "$artifact_probe" && ! -L "$artifact_probe" ]]; then
+    rmdir -- "$artifact_probe" 2>/dev/null || true
+  fi
   exit "$status"
 }
 
@@ -133,6 +150,22 @@ if (
 PY
 }
 
+qualification_receipt_valid() {
+  local receipt_path="$1"
+  [[ -f "$receipt_path" && ! -L "$receipt_path" ]] \
+    && grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-qualification.v1' "$receipt_path" \
+    && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt_path" \
+    && grep -Fxq "runtime_archive_sha256=$expected_runtime_archive_sha256" "$receipt_path" \
+    && grep -Fxq "image_id=$expected_image_id" "$receipt_path" \
+    && grep -Fxq 'production_build_start=pass' "$receipt_path" \
+    && grep -Fxq 'fresh_container_rebuild=pass' "$receipt_path" \
+    && grep -Fxq 'frontier_cases=60/60' "$receipt_path" \
+    && grep -Fxq 'accepted_v1_3_mutated=false' "$receipt_path" \
+    && grep -Fxq 'accepted_database_mutated=false' "$receipt_path" \
+    && grep -Fxq 'boot_autostart=false' "$receipt_path" \
+    && grep -Fxq 'human_ui_acceptance=pending' "$receipt_path"
+}
+
 if [[ "$mode" == --help || "$mode" == -h ]]; then usage; exit 0; fi
 while (( $# > 0 )); do
   case "$1" in
@@ -158,7 +191,7 @@ if [[ -n "$identity_file" ]]; then
 fi
 validate_loopback_url "$gemma_base_url" || block gemma_url_invalid 'The Gemma URL is outside loopback HTTP.' 'Correct the model forward URL.'
 validate_loopback_url "$nomic_base_url" || block nomic_url_invalid 'The Nomic URL is outside loopback HTTP.' 'Correct the model forward URL.'
-for command_name in awk bash chmod cp date find grep jq kill mkdir mkfifo mktemp mv python3 rm scp sha256sum sleep sort ssh stat tar tee timeout tr; do
+for command_name in awk bash chmod cp date find grep jq kill mkdir mkfifo mktemp mv python3 rm rmdir scp sha256sum sleep sort ssh stat tar tee timeout tr; do
   command -v "$command_name" >/dev/null 2>&1 \
     || block "command_missing_${command_name}" "Required local command unavailable: ${command_name}." 'Restore the named command and rerun.'
 done
@@ -222,7 +255,8 @@ if [[ "$mode" == --validate-only ]]; then
 fi
 
 stage='report_setup'
-mkdir -p -- "$report_root"
+mkdir -p -- "$report_root" "$artifact_parent" \
+  || block local_output_parent_unwritable 'A local report or artifact parent could not be created.' 'Correct the local workspace permissions and rerun.'
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="$(mktemp "$report_root/requalification_${mode#--}_${timestamp}_XXXXXX.txt")" \
   || block report_creation_failed 'The Script 09 report could not be created.' 'Correct local report permissions.'
@@ -232,6 +266,23 @@ emit() { printf '[%s] %s\n' "$2" "$1" | tee -a "$report_path"; }
 emit "report_path=$report_path;state=start;mode=${mode#--}" READINESS
 emit "application_archive_sha256=$application_sha256;runtime_archive_sha256=$runtime_archive_sha256;image_id=$runtime_image_id;helper_sha256=$helper_sha256" READINESS
 emit 'accepted_v1_3_mutation=false;accepted_database_mutation=false;boot_autostart_change=false' BOUNDARY
+artifact_probe="$artifact_parent/.emceedanko-v1.3.1-publication-probe.${timestamp}.$$"
+mkdir -- "$artifact_probe" \
+  || block artifact_parent_unwritable 'The local evidence lane cannot create a staging directory.' 'Correct the local artifact directory permissions before target work.'
+rmdir -- "$artifact_probe" \
+  || block artifact_probe_cleanup_failed 'The empty local evidence probe could not be removed.' 'Remove only the reported empty probe and inspect the artifact lane.'
+artifact_probe=''
+emit 'state=pass;report_lane=writable;evidence_lane=writable;wsl_mode_metadata_required=false' READINESS
+if [[ -e "$artifact_current" || -L "$artifact_current" ]]; then
+  [[ -d "$artifact_current" && ! -L "$artifact_current" ]] \
+    || block current_evidence_unsafe 'The current requalification evidence path is unsafe.' 'Inspect the local artifact lane before target work.'
+  (cd -- "$artifact_current" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+    || block current_evidence_checksum_failed 'The current requalification evidence failed its checksum manifest.' 'Inspect it before any later lifecycle action.'
+  if [[ "$mode" != --run && -f "$artifact_current/qualification-receipt.txt" ]]; then
+    qualification_receipt_valid "$artifact_current/qualification-receipt.txt" \
+      || block current_qualification_receipt_invalid 'The current qualification receipt does not match the exact production gate.' 'Inspect the local evidence before a target lifecycle action.'
+  fi
+fi
 
 stage='payload_assembly'
 payload_root="$work_root/payload"
@@ -284,6 +335,18 @@ timeout --foreground 180 ssh "${ssh_args[@]}" -o BatchMode=yes "$target" \
   || block transferred_payload_invalid 'EmceeDanko rejected the payload archive or its internal checksums.' 'Correct the transfer; no candidate action was run.'
 emit 'state=pass;target_checksums=pass' TRANSFER
 
+if [[ "$mode" != --run && ! -f "$artifact_current/qualification-receipt.txt" ]]; then
+  stage='qualification_receipt_recovery'
+  recovered_qualification_receipt="$work_root/recovered-qualification-receipt.txt"
+  timeout --foreground 60 scp "${ssh_args[@]}" \
+    "$target:Documents/Ishikawa-v1.3.1-qualification/state/reports/qualification/emceedanko-v1.3.1-qualification.txt" \
+    "$recovered_qualification_receipt" >/dev/null \
+    || block qualification_receipt_recovery_failed 'The durable target qualification receipt could not be recovered before the requested lifecycle action.' 'Keep the candidate unchanged and inspect its qualification state.'
+  qualification_receipt_valid "$recovered_qualification_receipt" \
+    || block recovered_qualification_receipt_invalid 'The recovered target qualification receipt did not match the exact qualified candidate.' 'Do not accept or clean up an unbound candidate.'
+  emit 'state=pass;source=durable_target_candidate;content=qualification_receipt' RETURN
+fi
+
 stage="target_${mode#--}"
 emit "state=start;mode=${mode#--};interactive_prompts=$([[ "$mode" == --run ]] && printf true || printf false)" TARGET
 stream_path="$work_root/target.stream"
@@ -327,17 +390,44 @@ grep -Fxq "application_archive_sha256=$expected_application_sha256" "$work_root/
   && grep -Fxq 'accepted_database_mutated=false' "$work_root/$receipt_name" \
   && grep -Fxq 'boot_autostart=false' "$work_root/$receipt_name" \
   || block returned_receipt_invalid 'The returned target receipt omitted an exact identity or safety invariant.' 'Do not publish the receipt.'
+case "$mode" in
+  --run)
+    qualification_receipt_valid "$work_root/$receipt_name" \
+      || block returned_qualification_receipt_invalid 'The returned qualification receipt omitted an exact production gate.' 'Do not publish the qualification evidence.'
+    ;;
+  --accept)
+    grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-acceptance.v1' "$work_root/$receipt_name" \
+      && grep -Fxq 'human_ui_acceptance=accepted' "$work_root/$receipt_name" \
+      && grep -Fxq 'production_build_start=pass' "$work_root/$receipt_name" \
+      && grep -Fxq 'frontier_cases=60/60' "$work_root/$receipt_name" \
+      || block returned_acceptance_receipt_invalid 'The returned acceptance receipt omitted an exact human or production gate.' 'Do not publish acceptance.'
+    ;;
+  --cleanup)
+    grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-action.v1' "$work_root/$receipt_name" \
+      && grep -Fxq 'mode=cleanup' "$work_root/$receipt_name" \
+      && grep -Fxq 'state=pass' "$work_root/$receipt_name" \
+      && grep -Fxq 'detail=candidate_removed=true' "$work_root/$receipt_name" \
+      || block returned_cleanup_receipt_invalid 'The returned cleanup receipt omitted the exact successful removal state.' 'Do not publish cleanup.'
+    ;;
+esac
 
 stage='local_evidence_publication'
-mkdir -p -- "$artifact_parent"
 artifact_stage="$artifact_parent/.emceedanko-v1.3.1-requalification-current.${timestamp}.$$"
-mkdir -m 0700 -- "$artifact_stage"
+mkdir -- "$artifact_stage" \
+  || block evidence_stage_creation_failed 'The local evidence staging directory could not be created.' 'Correct the local artifact lane; the target result remains durable.'
 if [[ -e "$artifact_current" || -L "$artifact_current" ]]; then
   [[ -d "$artifact_current" && ! -L "$artifact_current" ]] \
     || block current_evidence_unsafe 'The current requalification evidence path is unsafe.' 'Inspect the local artifact lane.'
   (cd -- "$artifact_current" && sha256sum --check --strict SHA256SUMS >/dev/null) \
     || block current_evidence_checksum_failed 'The current requalification evidence failed its checksum manifest.' 'Inspect it before adding a later lifecycle receipt.'
-  cp -a -- "$artifact_current/." "$artifact_stage/"
+  if [[ "$mode" != --run ]]; then
+    cp -R --no-preserve=mode,ownership -- "$artifact_current/." "$artifact_stage/" \
+      || block current_evidence_copy_failed 'The current evidence could not be copied without POSIX-mode preservation.' 'Inspect the local artifact lane before retrying.'
+  fi
+fi
+if [[ -n "$recovered_qualification_receipt" ]]; then
+  cp -- "$recovered_qualification_receipt" "$artifact_stage/qualification-receipt.txt" \
+    || block recovered_qualification_publication_failed 'The recovered qualification receipt could not be staged locally.' 'Preserve the target candidate and inspect the local artifact lane.'
 fi
 if [[ "$mode" != --run && ! -f "$artifact_stage/qualification-receipt.txt" ]]; then
   block qualification_receipt_missing 'Acceptance or cleanup cannot publish without the exact qualification receipt.' 'Run Script 09 --run and preserve its returned receipt first.'
@@ -346,7 +436,8 @@ if [[ "$mode" == --accept && -e "$artifact_stage/acceptance-receipt.txt" ]]; the
   block acceptance_receipt_exists 'The current evidence already contains acceptance.' 'Review it rather than replacing it.'
 fi
 rm -f -- "$artifact_stage/SHA256SUMS"
-install -m 0600 -- "$work_root/$receipt_name" "$artifact_stage/$receipt_name"
+cp -- "$work_root/$receipt_name" "$artifact_stage/$receipt_name" \
+  || block lifecycle_receipt_publication_failed 'The returned lifecycle receipt could not be staged locally.' 'Preserve target state and inspect the local artifact lane.'
 (
   cd -- "$artifact_stage"
   while IFS= read -r name; do sha256sum -- "$name"; done < <(

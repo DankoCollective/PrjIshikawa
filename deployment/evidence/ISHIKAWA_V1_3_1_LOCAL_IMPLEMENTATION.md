@@ -127,11 +127,37 @@ and preserves the target's exact failure reason through the outer wrapper.
 The expanded target and wrapper harnesses pass the corrected default-route,
 component-diagnostic, nested-failure, complete lifecycle, and cleanup paths.
 
+The next operator Script 09 run completed every target qualification gate:
+the accepted v1.3 baseline remained ready, the exact generic image matched,
+the read-only corpus-v3 database reported 30 documents and 150 pages, model
+and API readiness passed, both fresh production web builds passed, and all
+60 frontier cases passed. The candidate remained ready on loopback ports
+`3385`/`8385`, and accepted v1.3 and its database remained unchanged. The
+content-free local report is SHA-256
+`b1843c8ef566b4fd33c731d2d113d1d49bd4155087c4748cb77040c1f3d8ed25`.
+
+The outer wrapper then blocked while creating its ignored local evidence
+stage because `mkdir -m` attempted a POSIX mode update on the Windows-backed
+WSL repository mount. This was a local receipt-publication defect after the
+successful target gate, not a candidate failure. The correction preflights
+both local output lanes before target work, avoids POSIX-mode preservation for
+content-free ignored evidence on that mount, validates each lifecycle receipt
+more narrowly, starts a rerun's evidence set without stale acceptance or
+cleanup receipts, and recovers the exact durable target qualification receipt
+before acceptance or cleanup when local publication was interrupted. No
+application, image, database, listener, service, credential, or boot posture
+changed. Executable wrapper coverage now includes WSL-mode refusal and both
+acceptance and cleanup receipt-recovery paths.
+
+After this correction, all 486 native tests and all 16 deployment harnesses
+passed together, including every Script 09 run, acceptance, cleanup,
+publication, receipt-recovery, failure-propagation, and checksum branch.
+
 The remaining ordered gates are:
 
-1. run Script 09 to requalify the exact Script 07 image and Script 08
-   application together in production mode on EmceeDanko, obtain human UI
-   acceptance, and clean the isolated candidate;
+1. review the already-qualified exact v1.3.1 UI, record human acceptance with
+   Script 09 `--accept`, and then remove the isolated candidate with
+   Script 09 `--cleanup`;
 2. complete the exact-image and exact-application advisory disposition from
    their recorded SBOMs;
 3. accept the read-only Tech inventory and resolve any required offline native

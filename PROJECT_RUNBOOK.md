@@ -181,5 +181,12 @@ modify corpus v3. A passing run leaves the exact candidate on ports
 `3385`/`8385` for attended review and prints the `--accept` and `--cleanup`
 commands. The accepted v1.3 runtime remains on `3384`/`8384` throughout.
 Script 09 defaults to the frozen v1.3 Gemma/Nomic forward ports
-`18000`/`18001`; create those loopback listeners on EmceeDanko, not on the
-wrapper host.
+`18000`/`18001`. The operator owns the direct EmceeDanko-to-00Danko SSH
+tunnel outside Script 09; use the canonical four-service mapping in
+`local/pf/Port_Forwarding.md`, even though Ishikawa consumes only Gemma and
+Nomic. Do not originate that model tunnel on the Script 09 wrapper host.
+Script 09 preflights its local report and evidence publication lanes before
+target work. Acceptance or cleanup may recover the exact content-free
+qualification receipt from the still-durable target candidate when a prior
+local publication failed; target runtime state and protected output are not
+recovered through that path.

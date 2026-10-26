@@ -26,6 +26,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p -- "$root/bin" "$root/reports" "$root/artifacts"
+remote_qualification="$root/remote-qualification-receipt.txt"
 
 printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' '
 for argument in "$@"; do
@@ -58,9 +59,23 @@ if [[ "$remote_command" == *"bash ./requalify-v1.3.1-on-emceedanko"* ]]; then
       "runtime_archive_sha256=af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f" \
       "image_id=sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298" \
       "accepted_v1_3_mutated=false" "accepted_database_mutated=false" "boot_autostart=false"
-    [[ "$mode" != --run ]] || printf "%s\n" "human_ui_acceptance=pending"
-    [[ "$mode" != --accept ]] || printf "%s\n" "human_ui_acceptance=accepted"
+    if [[ "$mode" == --run ]]; then
+      printf "%s\n" \
+        "production_build_start=pass" "fresh_container_rebuild=pass" \
+        "frontier_cases=60/60" "human_ui_acceptance=pending"
+    elif [[ "$mode" == --accept ]]; then
+      printf "%s\n" \
+        "production_build_start=pass" "frontier_cases=60/60" \
+        "human_ui_acceptance=accepted"
+    else
+      printf "%s\n" "mode=cleanup" "state=pass" "detail=candidate_removed=true"
+    fi
   } >"$payload"
+  if [[ "$mode" == --run ]]; then
+    cp -- "$payload" "$MOCK_REMOTE_QUALIFICATION"
+  elif [[ "$mode" == --cleanup ]]; then
+    rm -f -- "$MOCK_REMOTE_QUALIFICATION"
+  fi
   if [[ "${MOCK_BAD_RECEIPT:-0}" == 1 ]]; then
     sed -i "s/application_archive_sha256=.*/application_archive_sha256=bad/" "$payload"
   fi
@@ -82,18 +97,38 @@ done
 source_path="${positionals[0]}"
 destination="${positionals[1]}"
 if [[ "$source_path" == *:* ]]; then
-  cp -- "${source_path#*:}" "$destination"
+  if [[ "$source_path" == *"Documents/Ishikawa-v1.3.1-qualification/state/reports/qualification/emceedanko-v1.3.1-qualification.txt" ]]; then
+    cp -- "$MOCK_REMOTE_QUALIFICATION" "$destination"
+  else
+    cp -- "${source_path#*:}" "$destination"
+  fi
 else
   cp -- "$source_path" "${destination#*:}"
 fi' >"$root/bin/scp"
-chmod 0755 "$root/bin/ssh" "$root/bin/scp"
+printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' '
+for argument in "$@"; do
+  if [[ "$argument" == "$MOCK_ARTIFACT_PARENT"* && " $* " == *" -m "* ]]; then
+    exit 95
+  fi
+done
+exec /usr/bin/mkdir "$@"' >"$root/bin/mkdir"
+printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' '
+for argument in "$@"; do
+  [[ "$argument" != "$MOCK_ARTIFACT_PARENT"* ]] || exit 96
+done
+exec /usr/bin/install "$@"' >"$root/bin/install"
+chmod 0755 "$root/bin/ssh" "$root/bin/scp" "$root/bin/mkdir" "$root/bin/install"
 
 run_wrapper() {
-  local selected_mode="$1" output="$2"
+  local selected_mode="$1" output="$2" selected_artifact_parent
   shift 2
+  selected_artifact_parent="${MOCK_SELECTED_ARTIFACT_PARENT:-$root/artifacts}"
+  mkdir -p -- "$selected_artifact_parent"
   PATH="$root/bin:$PATH" \
   ISHIKAWA_SCRIPT09_REPORT_ROOT="$root/reports" \
-  ISHIKAWA_SCRIPT09_ARTIFACT_PARENT="$root/artifacts" \
+  ISHIKAWA_SCRIPT09_ARTIFACT_PARENT="$selected_artifact_parent" \
+  MOCK_ARTIFACT_PARENT="$selected_artifact_parent" \
+  MOCK_REMOTE_QUALIFICATION="$remote_qualification" \
   MOCK_TARGET_FAIL="${MOCK_TARGET_FAIL:-0}" MOCK_BAD_RECEIPT="${MOCK_BAD_RECEIPT:-0}" \
     bash "$wrapper" "$selected_mode" --target FakeEmcee "$@" >"$output" 2>&1
 }
@@ -110,6 +145,14 @@ evidence="$root/artifacts/emceedanko-v1.3.1-requalification-current"
 [[ -f "$evidence/qualification-receipt.txt" && ! -e "$evidence/acceptance-receipt.txt" ]]
 (cd -- "$evidence" && sha256sum --check --strict SHA256SUMS >/dev/null)
 
+recovered_evidence="$root/recovered-artifacts/emceedanko-v1.3.1-requalification-current"
+MOCK_SELECTED_ARTIFACT_PARENT="$root/recovered-artifacts" \
+  run_wrapper --accept "$root/recovered-accept.out"
+grep -Fxq 'script_09_v1_3_1_requalification=pass' "$root/recovered-accept.out"
+[[ -f "$recovered_evidence/qualification-receipt.txt" \
+    && -f "$recovered_evidence/acceptance-receipt.txt" ]]
+(cd -- "$recovered_evidence" && sha256sum --check --strict SHA256SUMS >/dev/null)
+
 run_wrapper --accept "$root/accept.out"
 grep -Fxq 'script_09_v1_3_1_requalification=pass' "$root/accept.out"
 [[ -f "$evidence/qualification-receipt.txt" && -f "$evidence/acceptance-receipt.txt" ]]
@@ -119,6 +162,15 @@ run_wrapper --cleanup "$root/cleanup.out"
 grep -Fxq 'script_09_v1_3_1_requalification=pass' "$root/cleanup.out"
 [[ -f "$evidence/cleanup-receipt.txt" ]]
 (cd -- "$evidence" && sha256sum --check --strict SHA256SUMS >/dev/null)
+
+cp -- "$evidence/qualification-receipt.txt" "$remote_qualification"
+recovered_cleanup_evidence="$root/recovered-cleanup-artifacts/emceedanko-v1.3.1-requalification-current"
+MOCK_SELECTED_ARTIFACT_PARENT="$root/recovered-cleanup-artifacts" \
+  run_wrapper --cleanup "$root/recovered-cleanup.out"
+grep -Fxq 'script_09_v1_3_1_requalification=pass' "$root/recovered-cleanup.out"
+[[ -f "$recovered_cleanup_evidence/qualification-receipt.txt" \
+    && -f "$recovered_cleanup_evidence/cleanup-receipt.txt" ]]
+(cd -- "$recovered_cleanup_evidence" && sha256sum --check --strict SHA256SUMS >/dev/null)
 
 manifest_before="$(sha256sum -- "$evidence/SHA256SUMS" | awk '{print $1}')"
 set +e
@@ -140,4 +192,4 @@ grep -Fq 'reason=returned_receipt_invalid' "$root/bad-receipt.out"
 
 find /tmp -maxdepth 1 -type d -name 'ishikawa-requalification-20*' -user "$(id -u)" -print -quit \
   | grep -q . && exit 1
-printf '%s\n' 'v1_3_1_requalification_wrapper_harness=pass;validate=pass;run=pass;accept=pass;cleanup=pass;target_failure=pass;receipt_failure=pass'
+printf '%s\n' 'v1_3_1_requalification_wrapper_harness=pass;validate=pass;run=pass;accept=pass;cleanup=pass;receipt_recovery=pass;wsl_publication=pass;target_failure=pass;receipt_failure=pass'

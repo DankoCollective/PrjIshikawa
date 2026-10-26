@@ -14,21 +14,19 @@
 
 This file is a readiness ledger and structured decision record. On 2026-10-26
 the operator froze `CARRY-D01`, `CARRY-D02`, and `CARRY-D06` through
-`CARRY-D08`, `CARRY-D10`, and `CARRY-D11`. The operator also froze earlier
-wording for D03, D05, and D09, but the subsequent operator clarification and
-two-agent review established that those items require corrected replacement
-text. Corrected D03, D04, D05, and D09 are now `Ready to freeze`; they are not
-implementation authority until the operator approves them. The matching
-authoritative decisions are in
+`CARRY-D08`, `CARRY-D10`, and `CARRY-D11`. The operator also froze corrected
+D03, D04, D05, and D09 after operator clarification and two-agent review
+established their replacement text. All eleven carry decisions are now frozen.
+The matching authoritative decisions are in
 `docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`.
 
 ## Current review boundary
 
-Implementation remains paused until corrected D03, D04, D05, and D09 are
-operator-frozen. No current decision authorizes target contact, black-corpus
-access, service or database mutation, credential handling, or package
-promotion. Leave the accepted attended v1.3 runtime on EmceeDanko unchanged
-until an operator-facing qualification action is separately authorized.
+The frozen carry design authorizes bounded local implementation. It does not
+itself authorize target contact, black-corpus access, service or database
+mutation, credential handling, or package promotion. Leave the accepted
+attended v1.3 runtime on EmceeDanko unchanged until an operator-facing
+qualification action is separately authorized.
 
 The desired carry time is a target, not a reason to waive a mandatory gate. If
 any blocking item below remains incomplete, the package does not travel.
@@ -123,11 +121,10 @@ These findings prevent a carry-ready declaration today:
 
 ## Carry decisions
 
-The following items use the required decision-list shape. Seven remain frozen
-by operator direction on 2026-10-26. Corrected D03, D04, D05, and D09 are
-`Ready to freeze` after operator clarification and previous-agent/current-agent
-agreement. Exact target facts remain preflight inputs rather than new
-architecture decisions unless inventory conflicts with a frozen posture.
+The following items use the required decision-list shape. All eleven are
+frozen by operator direction on 2026-10-26. Exact target facts remain preflight
+inputs rather than new architecture decisions unless inventory conflicts with
+a frozen posture.
 
 ### CARRY-D01 — Release identity after security/runtime changes
 
@@ -174,7 +171,7 @@ success against the prevalidated source/config/image identities, and then
 `exec next start` in that same container. Removing the container removes the
 generated build state.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Rebuild bounded ephemeral `.next` state on each start rather
 than publishing persistent build output. Keep `next dev` only as a separate
@@ -196,7 +193,7 @@ archive as a payload separate from Ishikawa. The image contains exact reviewed
 runtime dependencies but no Ishikawa source, configuration, corpus,
 credentials, database state, target state, or generated `.next` output.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Export the reviewed generic image to one Docker archive and
 carry its SHA-256, image identity, Dockerfile, exact base identity, lockfile,
@@ -218,7 +215,7 @@ packaged systemd user units; create no Linux user or group; use explicit
 loopback listeners resolved through inventory and validated configuration; and
 keep boot autostart and user lingering disabled for first proof.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Preserve the accepted Tech home-directory and user-service
 posture rather than introducing a dedicated service account or `/opt`, `/etc`,
@@ -296,7 +293,7 @@ the deployment/verifier/operator/security identity records and any
 inventory-required offline prerequisites needed to install, configure, run,
 verify, and remove the demo.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Carry one final external application artifact, one app-free
 generic AMD64 runtime-image archive, one consolidated deployment entrypoint,
@@ -349,12 +346,12 @@ download replacements during deployment.
 
 ## Two-agent review reconciliation
 
-- **RECON-01 — Ready amendments.** Corrected D03, D04, D05, and D09 now express
+- **RECON-01 — Frozen amendments.** Corrected D03, D04, D05, and D09 express
   one coherent design: external application, app-free generic runtime image,
   same-container production build/start with bounded ephemeral `.next`, the
   accepted Tech operator/home-directory/user-unit layout, and separate primary
-  carry payloads. Both reviewing agents agree; operator freeze is the remaining
-  decision gate.
+  carry payloads. Both reviewing agents agreed, and the operator froze the
+  corrected items on 2026-10-26.
 - **RECON-02 — No persistent production build state.** The provisional
   `state/web-build` design is rejected for the first demo. Rebuild `.next` on
   every start and let container removal destroy it. Persistent generated-state
@@ -619,8 +616,8 @@ disposition.
 
 ### Morning review
 
-1. Review and freeze corrected D03, D04, D05, and D09.
-2. Confirm the authoritative decision list and this checklist agree.
+1. Confirm the authoritative decision list and this checklist agree.
+2. Begin the bounded local implementation of the frozen design.
 3. Reconcile release documentation and create the content-free human
    acceptance receipt.
 4. Front-load org-lab inventory, license, advisory, platform, and dependency
@@ -647,4 +644,4 @@ disposition.
 
 ## Final status
 
-`carry_ready=blocked;reason=corrected_D03_D04_D05_D09_operator_freeze_pending`
+`carry_ready=blocked;reason=implementation_and_qualification_gates_pending`

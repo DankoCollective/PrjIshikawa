@@ -11,18 +11,20 @@ and the final org-lab carry posture.
 Items V13-60 through V13-80, V13-84 through V13-86, and V13-88 through V13-89
 are frozen through the accepted v1.3 baseline and operator-selected org-lab
 posture. Operator clarification and a completed two-agent review established
-corrected replacement text for V13-81, V13-82, V13-83, and V13-87. Those four
-items are now `Ready to freeze`: use an app-free generic Node/Next image; mount
+corrected replacement text for V13-81, V13-82, V13-83, and V13-87. The
+operator froze those four corrected items on 2026-10-26: use an app-free
+generic Node/Next image; mount
 the external application read-only; build ephemeral `.next` state and run
 `next start` in the same container lifecycle; retain the accepted Tech
 `$HOME/Documents/Ishikawa`, installing-operator, systemd-user-unit, loopback,
 and boot-disabled posture; and carry the application and generic image as
-separate primary payloads. Exact fixed dependency pins and target inventory
+separate primary payloads. All org-lab carry decisions are now frozen. Exact
+fixed dependency pins and target inventory
 values are implementation evidence, not additional architecture decisions
-unless they conflict with a frozen posture. Implementation remains paused
-until the operator freezes the four corrected items. No black-corpus access,
-target contact, service or database mutation, credential handling, or package
-promotion is authorized by these planning decisions alone.
+unless they conflict with a frozen posture. Bounded local implementation may
+begin. No black-corpus access, target contact, service or database mutation,
+credential handling, or package promotion is authorized by these planning
+decisions alone.
 
 ## Decisions
 
@@ -476,7 +478,7 @@ success against the prevalidated source/config/image identities, and then
 `exec next start` in that same container. Removing the container removes the
 generated build state.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Rebuild bounded ephemeral `.next` state on each start rather
 than publishing persistent build output. Keep `next dev` only as a separate
@@ -497,7 +499,7 @@ archive as a payload separate from Ishikawa. The image contains exact reviewed
 runtime dependencies but no Ishikawa source, configuration, corpus,
 credentials, database state, target state, or generated `.next` output.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Export the reviewed generic image to one Docker archive and
 carry its SHA-256, image identity, Dockerfile, exact base identity, lockfile,
@@ -519,7 +521,7 @@ packaged systemd user units; create no Linux user or group; use explicit
 loopback listeners resolved through inventory and validated configuration; and
 keep boot autostart and user lingering disabled for first proof.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Preserve the accepted Tech home-directory and user-service
 posture rather than introducing a dedicated service account or `/opt`, `/etc`,
@@ -594,7 +596,7 @@ deployment/verifier/operator/security identity records and any
 inventory-required offline prerequisites needed to install, configure, run,
 verify, and remove the demo.
 
-Status: Ready to freeze.
+Status: Frozen by operator direction on 2026-10-26 after two-agent review.
 
 Recommendation: Carry one final external application artifact, one app-free
 generic AMD64 runtime-image archive, one consolidated deployment entrypoint,

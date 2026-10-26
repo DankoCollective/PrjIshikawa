@@ -141,7 +141,7 @@ cp -- "$release_root/database/README.md" "$release_root/database/install-schema"
   && find . -type f -printf '%P\n' | sort \
   | while IFS= read -r file; do sha256sum -- "$file"; done) \
   >"$test_root/payload/candidate-SHA256SUMS"
-(cd -- "$candidate" && find . -type f -printf '%m %P\n' | sort) \
+(cd -- "$candidate" && find . -type f -printf '%m %P\n' | sort -r) \
   >"$test_root/payload/candidate-MODES"
 (cd -- "$test_root/payload" \
   && find . -type f ! -name SHA256SUMS ! -path './database/SHA256SUMS' -printf '%P\n' | sort \
@@ -501,6 +501,6 @@ printf '%s\n' \
   'pre_switchover_reuse_failure_cleanup=pass' \
   'unrelated_pid_protection=pass;partial_state_preservation=pass' \
   'unsafe_runtime_path_rejection_and_preservation=pass' \
-  'durable_reuse=pass;installed_layout_parity=pass;real_configuration_validator=pass;real_catalog_manifest_validators=pass' \
+  'durable_reuse=pass;installed_layout_parity=pass;mode_manifest_order_independence=pass;real_configuration_validator=pass;real_catalog_manifest_validators=pass' \
   'attended_launch=pass;human_acceptance=pass;explicit_rollback=pass;v1_2_database_untouched=pass;candidate_unchanged=pass'
 printf '\nSCRIPT RESULT\nattended_v1_3_target_test=pass\n'

@@ -680,8 +680,7 @@ target_verify_identity_and_payload() {
 }
 
 target_verify_candidate() {
-  local expected_modes actual_modes candidate_checksum_output candidate_mismatch_paths
-  local candidate_mode_mismatches
+  local candidate_checksum_output candidate_mismatch_paths candidate_mode_mismatches
   for path in "$candidate_root" "$corpus_input_root" "$active_v1_2_root" "$rollback_v1_2_root"; do
     [[ -d "$path" && ! -L "$path" ]] \
       || target_fail required_installation_unsafe "Required installation path is missing or unsafe: ${path}." \
@@ -711,10 +710,7 @@ actual = {item.relative_to(root).as_posix() for item in root.rglob("*") if item.
 if not expected or expected != actual or any(item.is_symlink() for item in root.rglob("*")):
     raise SystemExit(1)
 PY
-  expected_modes="$(<"$target_payload_root/candidate-MODES")"
-  actual_modes="$(cd -- "$candidate_root" && find . -type f -printf '%m %P\n' | sort)"
-  if [[ "$actual_modes" != "$expected_modes" ]]; then
-    candidate_mode_mismatches="$(PYTHONDONTWRITEBYTECODE=1 python3 -B - \
+  if ! candidate_mode_mismatches="$(PYTHONDONTWRITEBYTECODE=1 python3 -B - \
       "$target_payload_root/candidate-MODES" "$candidate_root" <<'PY'
 import pathlib
 import stat
@@ -739,9 +735,11 @@ for name in sorted(set(expected) | set(actual)):
         differences.append(
             f"{name}:expected={expected.get(name, 'missing')},actual={actual.get(name, 'missing')}"
         )
-print(",".join(differences[:10]))
+if differences:
+    print(",".join(differences[:10]))
+    raise SystemExit(1)
 PY
-)" || candidate_mode_mismatches='unclassified'
+)"; then
     [[ -n "$candidate_mode_mismatches" ]] || candidate_mode_mismatches='unclassified'
     target_fail staged_candidate_mode_mismatch \
       "The staged v1.3 candidate file modes differ from the exact release payload. Mode mismatches: ${candidate_mode_mismatches}." \

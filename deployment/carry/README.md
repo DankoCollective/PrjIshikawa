@@ -3,9 +3,20 @@
 This directory carries two independent primary payloads: the external
 Ishikawa application archive and an application-free Linux AMD64 Node/Next
 runtime-image archive. The application is never baked into the image.
-`carry-inventory.json` records the purpose, consumer, mode, byte size, and
-SHA-256 of every payload/support file; `SHA256SUMS` binds the inventory and all
-other carried files.
+`PACKAGE_MANIFEST.json` records the purpose, consumer, mode, byte size, and
+SHA-256 of every payload/support file and classifies its two control files;
+`SHA256SUMS` binds the package manifest and every other carried file.
+The recorded modes are the required target Unix modes. Transfer media that do
+not preserve Unix permission bits are supported: the verifier checks the
+classified intended modes, and installation materializes them on the native
+target filesystem.
+
+The assembly lane publishes these files first as a local package candidate.
+`deployment-package-receipt.json` must say `deployment_ready` before install or
+schema initialization is permitted. Exact-artifact security review, approved
+destination inventory, independent review, and stable-handoff publication are
+separate gates; renaming or copying an assembled candidate does not satisfy
+them.
 
 ## Requirements and boundaries
 

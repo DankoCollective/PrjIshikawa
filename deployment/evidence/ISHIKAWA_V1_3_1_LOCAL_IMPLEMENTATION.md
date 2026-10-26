@@ -5,7 +5,7 @@
 Date: 2026-10-26 America/Los_Angeles
 
 This content-free record covers the local source implementation authorized by
-frozen V13-79 through V13-90. No model endpoint, database,
+frozen V13-79 through V13-91. No model endpoint, database,
 credential, organizational corpus, or protected content was contacted.
 
 The v1.3.1 source manifest contains 211 files and has SHA-256:
@@ -239,15 +239,95 @@ human UI acceptance. Exact evidence identities are:
 - promotion evidence-manifest SHA-256:
   `ad5cb98188ed972b96bba9324e0a57006c66d8c4c47047b8c8185b48705643ce`.
 
+The first production-port acceptance action correctly blocked before retiring
+v1.3 because a container still referenced the superseded runtime image. It
+published no acceptance receipt and left the v1.3 rollback root and image in
+place. The acceptance helper now reconciles three exact, named Ishikawa
+containers when their inspected image ID is the exact superseded image:
+`ishikawa-v1.3-web`, historical `ishikawa-web`, and the disposable
+`ishikawa-v1.2-web-preflight`. It also removes stopped containers only after
+proving that same exact image identity; this covers non-operational development
+containers that otherwise prevent Docker image retirement. Files and databases
+are not changed. Any remaining running consumer still blocks and reports its
+container name, running state, and image identity. The complete target
+lifecycle and transport-wrapper harnesses passed after this correction,
+including expected named and stopped consumer cleanup, running unknown-consumer
+refusal, acceptance replay, rollback, failed-launch automatic restoration,
+returned-receipt refusal, signal handling, and remote cleanup.
+
+The corrected Script 10 `--accept` action then passed. It removed one stopped
+container after proving it referenced the exact superseded image, proved no
+consumer remained, removed the superseded v1.3 rollback root and image, and
+returned the checksum-bound production-port acceptance receipt. The receipt
+records `human_ui_acceptance=accepted`, `production_runtime=pass`, `60/60`
+frontier cases, and no database, schema, corpus, or boot-autostart mutation.
+Exact acceptance evidence identities are:
+
+- acceptance report SHA-256:
+  `876b7ee893fc3162bf6c766146fade860cb6deaca80e231d7223eee78ef0af43`;
+- acceptance receipt SHA-256:
+  `f7e781478502b7defb8aea323f6c47ff82ce62a0fb1138cf9016c9e1a32bbc2f`;
+  and
+- complete promotion-lifecycle manifest SHA-256:
+  `9fa08e0b47ae264d6d29382bbe6407a7bcdd1e0a61c2964d3592efa573b662f2`.
+
+Numbered Script 11 now implements the frozen small-footprint deployment-package
+assembly boundary. It requires the exact Script 07/08 handoffs and the complete
+Script 09 and Script 10 lifecycle evidence before copying any payload. It
+generates the final application release record, a classified 25-file package
+manifest, a package-state receipt, and one complete checksum manifest; invokes
+the portable verifier from the assembled directory; and publishes atomically
+only to the local candidate lane. The generated receipt remains
+`assembled_pending_security_inventory_and_independent_review`, and the
+deployer refuses mutation until a later reviewed promotion changes that state
+to `deployment_ready`.
+
+The Script 11 harness passed success, rerun, supersession, acceptance-gate,
+artifact/tmp capacity, payload-copy failure, generated-record failure, cleanup,
+checksum, image-provenance, image-identity, classified-manifest,
+portable-verification, and package-terminology branches. Every unexpected
+failure now emits actionable detail and the standalone Script 11 result. The
+complete portable deployment-entrypoint harness also proved review-state
+correlation, candidate
+refusal before mutation, clean installation, schema, lifecycle, failure
+cleanup, and guarded removal. All earlier deployment lifecycle harnesses passed
+after the change. Fresh scans of the real application archive, portable carry
+sources, and runtime handoff found no prohibited repository, workstream,
+agent, local-path, or test-host terminology. A fresh complete native run passed
+486/486 tests.
+
+The real Script 11 run then exposed that the Windows-backed transfer filesystem
+cannot honor `chmod` even though it can safely store the package bytes. Script
+11 was corrected to use mode-neutral candidate storage, record the required
+Unix modes in `PACKAGE_MANIFEST.json`, validate that classification, and leave
+mode materialization to the native Tech installer. A dedicated chmod-hostile
+storage branch and every prior carry/deployment lifecycle branch pass after
+that correction. The corrected real invocation published and independently
+verified the 25-file, 173,989,414-byte candidate. Exact evidence identities
+are:
+
+- assembly report SHA-256:
+  `58b94197f57e531a44fcfab44964f26d605c9536daa06ee92bbbc204446fe77f`;
+- package-manifest SHA-256:
+  `ade4973399b548467fe836b6c0d6a097ddec6741d14899a94f56186a36b123aa`;
+- package-receipt SHA-256:
+  `89a8c3ca3d7f0d1f7877700a161a7e06518a5a9ad3ef70a23a97ad4c3616c5dc`;
+  and
+- complete checksum-manifest SHA-256:
+  `a5659c63339b82608b300e7c354dc60b777b5564a19eaf6b422f1d461f1b0d52`.
+
+The mandatory post-assembly exact-image scan subsequently opened an advisory
+decision. The candidate remains intact and non-installable while that decision
+is resolved. See
+`deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`.
+
 The remaining ordered gates are:
 
-1. review the promoted production-port UI and record Script 10 acceptance or
-   explicitly roll back before acceptance;
-2. complete the exact-image and exact-application advisory disposition from
+1. complete the exact-image and exact-application advisory disposition from
    their recorded SBOMs;
-3. accept the read-only Tech inventory and resolve any required offline native
+2. accept the read-only Tech inventory and resolve any required offline native
    prerequisite payload;
-4. complete independent review and atomically promote the exact carry bytes to
+3. complete independent review and atomically promote the exact carry bytes to
    the stable handoff.
 
 Current disposition:

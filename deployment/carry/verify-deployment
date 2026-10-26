@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Verify every portable deployment byte without changing the host.
+# Purpose:
+#   Verify every portable Ishikawa deployment-package byte without changing
+#   the host.
+#
+# Mental model:
+#   Check the flat package inventory and hashes, inspect both primary archives
+#   without loading or installing them, verify all identity/SBOM/license
+#   bindings, and reject unsafe paths, unclassified files, or inconsistent
+#   package/review state. The local assembler owns the final terminology scan.
+#
+# Inputs or prerequisites:
+#   Run from inside the assembled package with standard local inspection tools.
+#
+# Outputs or artifact lane:
+#   Prints one content-free pass/block result. It writes only a bounded
+#   temporary verification directory beneath /tmp and removes it on exit.
+#
+# Usage:
+#   bash ./verify-deployment
 
 fail() {
   printf 'ishikawa_deployment_verification=blocked;reason=%s\n' "$1" >&2
@@ -18,7 +36,7 @@ readonly checksum_file="$carry_root/SHA256SUMS"
 readonly application_archive="$carry_root/ishikawa-v1.3.1.tar.gz"
 readonly image_archive="$carry_root/node-next-runtime-amd64.tar"
 readonly image_identity="$carry_root/runtime-image-identity.json"
-readonly carry_receipt="$carry_root/carry-receipt.json"
+readonly package_receipt="$carry_root/deployment-package-receipt.json"
 readonly temporary_base="${TMPDIR:-/tmp}"
 
 [[ -d "$carry_root" && ! -L "$carry_root" ]] || fail carry_directory_unsafe
@@ -28,7 +46,8 @@ readonly temporary_base="${TMPDIR:-/tmp}"
   || fail temporary_directory_unsafe
 find "$carry_root" -type l -print -quit | grep -q . && fail carry_symlink_found
 for required_file in \
-  README.md SHA256SUMS application-release.json carry-inventory.json carry-receipt.json \
+  README.md SHA256SUMS PACKAGE_MANIFEST.json application-release.json \
+  deployment-package-receipt.json \
   application-license.json application-sbom.cdx.json deploy-ishikawa \
   inspect-native-prerequisites ishikawa-v1.3.1.tar.gz \
   ishikawa-v1.3.1.tar.gz.sha256 ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS \
@@ -56,7 +75,8 @@ trap 'exit 143' TERM
 printf '%s\n' \
   ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS README.md RUNTIME_LICENSES.md \
   RUNTIME_README.md RUNTIME_SECURITY.md application-release.json \
-  application-license.json application-sbom.cdx.json carry-inventory.json carry-receipt.json \
+  application-license.json application-sbom.cdx.json PACKAGE_MANIFEST.json \
+  deployment-package-receipt.json \
   deploy-ishikawa inspect-native-prerequisites \
   ishikawa-v1.3.1.tar.gz ishikawa-v1.3.1.tar.gz.sha256 \
   node-next-runtime-amd64.tar node-next-runtime-amd64.tar.sha256 \
@@ -86,10 +106,19 @@ for index, archive_name in enumerate(sys.argv[1:]):
         members = archive.getmembers()
     if not members:
         raise SystemExit(1)
+    normalized_paths = set()
     for member in members:
         path = PurePosixPath(member.name)
-        if path.is_absolute() or ".." in path.parts or not member.name:
+        normalized = str(path)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or not member.name
+            or "\\" in member.name
+            or normalized in normalized_paths
+        ):
             raise SystemExit(1)
+        normalized_paths.add(normalized)
         if not (member.isfile() or member.isdir()):
             raise SystemExit(1)
         if index == 0 and (not path.parts or path.parts[0] != "ishikawa-v1.3.1"):
@@ -115,7 +144,8 @@ grep -Fxq 'manifest.json' "$temporary_root/image-files" \
 python3 -B - "$image_identity" "$carry_root/runtime-build-receipt.json" \
   "$carry_root/application-sbom.cdx.json" "$carry_root/application-license.json" \
   "$carry_root/runtime-sbom.cdx.json" "$carry_root/runtime-licenses.json" \
-  "$carry_receipt" "$application_archive" "$image_archive" <<'PY' \
+  "$package_receipt" "$carry_root/application-release.json" \
+  "$application_archive" "$image_archive" <<'PY' \
   || fail identity_record_invalid
 import hashlib
 import json
@@ -125,8 +155,8 @@ import tarfile
 from pathlib import Path
 
 (identity_path, build_receipt_path, application_sbom_path, application_license_path,
- runtime_sbom_path, runtime_licenses_path, receipt_path, application_path,
- image_path) = map(Path, sys.argv[1:])
+ runtime_sbom_path, runtime_licenses_path, receipt_path, application_release_path,
+ application_path, image_path) = map(Path, sys.argv[1:])
 identity = json.loads(identity_path.read_text(encoding="utf-8"))
 build_receipt = json.loads(build_receipt_path.read_text(encoding="utf-8"))
 application_sbom = json.loads(application_sbom_path.read_text(encoding="utf-8"))
@@ -134,6 +164,7 @@ application_license = json.loads(application_license_path.read_text(encoding="ut
 runtime_sbom = json.loads(runtime_sbom_path.read_text(encoding="utf-8"))
 runtime_licenses = json.loads(runtime_licenses_path.read_text(encoding="utf-8"))
 receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+application_release = json.loads(application_release_path.read_text(encoding="utf-8"))
 
 def digest(path: Path) -> str:
     value = hashlib.sha256()
@@ -151,16 +182,21 @@ def stream_digest(stream) -> str:
 expected_identity = {
     "application_in_image": False,
     "architecture": "amd64",
+    "base_bundled_npm_executed": False,
+    "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
     "generated_next_in_image": False,
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "next": "16.4.3",
     "node": "24.22.1",
-    "npm": "11.19.1",
     "platform": "linux/amd64",
     "react": "19.2.9",
     "react_dom": "19.2.9",
-    "schema": "node-next-runtime-image.v1",
-    "yarn": "1.22.22",
+    "runtime_npm": False,
+    "runtime_yarn": False,
+    "schema": "node-next-runtime-image.v3",
+    "tzdata": "2026e-0+deb12u1",
 }
 if any(identity.get(key) != value for key, value in expected_identity.items()):
     raise SystemExit(1)
@@ -223,9 +259,9 @@ if identity.get("config_digest") != config_digest:
     raise SystemExit(1)
 if identity.get("history_sha256") != history_digest:
     raise SystemExit(1)
-if build_receipt.get("schema") != "node-next-runtime-build-receipt.v1":
+if build_receipt.get("schema") != "node-next-runtime-build-receipt.v3":
     raise SystemExit(1)
-for field in ("image_id", "image_reference", "archive_sha256", "architecture", "platform", "config_digest", "history_sha256"):
+for field in ("image_id", "image_reference", "archive_sha256", "architecture", "platform", "config_digest", "history_sha256", "base_bundled_npm_executed", "base_bundled_yarn_executed", "build_npm", "build_npm_archive_sha256", "runtime_npm", "runtime_yarn", "tzdata"):
     if build_receipt.get(field) != identity.get(field):
         raise SystemExit(1)
 if build_receipt.get("sbom_sha256") != digest(runtime_sbom_path):
@@ -238,23 +274,36 @@ properties = runtime_sbom.get("metadata", {}).get("component", {}).get("properti
 if not any(item.get("name") == "oci:image:config-digest" and item.get("value") == config_digest for item in properties):
     raise SystemExit(1)
 components = runtime_sbom.get("components", [])
-expected_components = {("node", "24.22.1", "MIT"), ("npm", "11.19.1", "Artistic-2.0"), ("yarn", "1.22.22", "BSD-2-Clause")}
+expected_components = {("node", "24.22.1", "MIT")}
 observed_components = set()
 for item in components:
     for license_entry in item.get("licenses", []):
         observed_components.add((item.get("name"), item.get("version"), license_entry.get("license", {}).get("id")))
 if not expected_components.issubset(observed_components):
     raise SystemExit(1)
+if any(item.get("name") in {"npm", "yarn"} for item in components):
+    raise SystemExit(1)
 runtime_tools = runtime_licenses.get("runtime_tools")
-if runtime_licenses.get("schema") != "node-runtime-license-inventory.v1":
+if runtime_licenses.get("schema") != "node-runtime-license-inventory.v2":
     raise SystemExit(1)
-if not isinstance(runtime_tools, list) or len(runtime_tools) != 3:
+if not isinstance(runtime_tools, list) or len(runtime_tools) != 1:
     raise SystemExit(1)
-expected_tools = {("node", "24.22.1", "MIT"), ("npm", "11.19.1", "Artistic-2.0"), ("yarn", "1.22.22", "BSD-2-Clause")}
+expected_tools = {("node", "24.22.1", "MIT")}
 observed_tools = {(item.get("name"), item.get("version"), item.get("license")) for item in runtime_tools}
 if observed_tools != expected_tools:
     raise SystemExit(1)
 if any(re.fullmatch(r"[0-9a-f]{64}", item.get("license_sha256", "")) is None for item in runtime_tools):
+    raise SystemExit(1)
+build_tools = runtime_licenses.get("build_tools")
+if not isinstance(build_tools, list) or len(build_tools) != 1:
+    raise SystemExit(1)
+if any(item.get("retained_in_runtime") is not False for item in build_tools):
+    raise SystemExit(1)
+if {(item.get("name"), item.get("version")) for item in build_tools} != {("npm", "11.21.1")}:
+    raise SystemExit(1)
+if build_tools[0].get("base_bundled_copy_executed") is not False:
+    raise SystemExit(1)
+if build_tools[0].get("archive_sha256") != "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b":
     raise SystemExit(1)
 if application_sbom.get("bomFormat") != "CycloneDX":
     raise SystemExit(1)
@@ -265,24 +314,62 @@ if application_license.get("schema") != "ishikawa.application-license.v1":
     raise SystemExit(1)
 if application_license.get("application_license") != "Apache-2.0":
     raise SystemExit(1)
+expected_application_release = {
+    "application_archive_sha256": digest(application_path),
+    "coding_standard": "pass",
+    "deterministic_archive": True,
+    "fresh_install": "pass",
+    "human_ui_validation": "accepted",
+    "javascript_test_count": 17,
+    "native_test_count": 486,
+    "production_runtime": "pass",
+    "release": "Ishikawa v1.3.1",
+    "schema": "ishikawa.application-release.v1",
+}
+if any(application_release.get(key) != value for key, value in expected_application_release.items()):
+    raise SystemExit(1)
+for field in (
+    "promotion_acceptance_sha256", "promotion_receipt_sha256",
+    "qualification_acceptance_sha256", "qualification_receipt_sha256",
+    "source_build_receipt_sha256", "source_manifest_sha256",
+):
+    if re.fullmatch(r"[0-9a-f]{64}", application_release.get(field, "")) is None:
+        raise SystemExit(1)
 expected_receipt = {
     "application_archive_sha256": digest(application_path),
-    "application_release": "Ishikawa v1.3.1 candidate",
+    "application_release": "Ishikawa v1.3.1",
     "architecture": "amd64",
     "boot_autostart": False,
+    "exact_byte_requalification": "pass",
+    "human_ui_validation": "accepted",
     "image_archive_sha256": digest(image_path),
     "image_config_digest": config_digest,
     "image_history_sha256": history_digest,
     "image_reference": expected_identity["image_reference"],
     "platform": "linux/amd64",
-    "schema": "ishikawa.carry-receipt.v1",
+    "production_runtime": "pass",
+    "schema": "ishikawa.deployment-package-receipt.v1",
 }
 if any(receipt.get(key) != value for key, value in expected_receipt.items()):
     raise SystemExit(1)
-if receipt.get("promotion_state") not in {
-    "candidate_pending_exact_byte_requalification",
-    "final_exact_byte_requalified",
-}:
+review_states = {
+    "assembled_pending_security_inventory_and_independent_review": {
+        "independent_final_review": "pending",
+        "security_review": "pending_complete_exact_artifact_review",
+        "stable_handoff": False,
+        "target_inventory": "pending",
+    },
+    "deployment_ready": {
+        "independent_final_review": "pass",
+        "security_review": "pass",
+        "stable_handoff": True,
+        "target_inventory": "approved",
+    },
+}
+release_state = receipt.get("release_state")
+if release_state not in review_states:
+    raise SystemExit(1)
+if any(receipt.get(key) != value for key, value in review_states[release_state].items()):
     raise SystemExit(1)
 PY
 
@@ -291,43 +378,57 @@ if find "$carry_root" -type f \( -name '*.key' -o -name '*.pem' -o -name '*.p12'
   fail prohibited_secret_file_found
 fi
 
-promotion_state="$(jq -r '.promotion_state' "$carry_receipt")"
-python3 -B - "$carry_root" "$carry_root/carry-inventory.json" <<'PY' \
+release_state="$(jq -r '.release_state' "$package_receipt")"
+python3 -B - "$carry_root" "$carry_root/PACKAGE_MANIFEST.json" <<'PY' \
   || fail carry_inventory_record_invalid
 import hashlib
 import json
-import stat
 import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
 record = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-if record.get("schema") != "ishikawa.carry-inventory.v1":
+if record.get("schema") != "ishikawa.deployment-package-manifest.v1":
     raise SystemExit(1)
 files = record.get("files")
-if not isinstance(files, list) or record.get("file_count") != len(files):
+if not isinstance(files, list) or record.get("payload_file_count") != len(files):
     raise SystemExit(1)
 expected_paths = {
     item.name for item in root.iterdir()
-    if item.is_file() and item.name not in {"carry-inventory.json", "SHA256SUMS"}
+    if item.is_file() and item.name not in {"PACKAGE_MANIFEST.json", "SHA256SUMS"}
 }
 observed_paths = {item.get("path") for item in files}
 if observed_paths != expected_paths or len(observed_paths) != len(files):
     raise SystemExit(1)
+expected_modes = {path: "0644" for path in expected_paths}
+for path in ("deploy-ishikawa", "inspect-native-prerequisites", "verify-deployment"):
+    expected_modes[path] = "0755"
 total = 0
 for item in files:
     path = root / item["path"]
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    mode = format(stat.S_IMODE(path.stat().st_mode), "04o")
     if item.get("type") != "file" or item.get("sha256") != digest:
         raise SystemExit(1)
-    if item.get("size_bytes") != path.stat().st_size or item.get("mode") != mode:
+    if item.get("size_bytes") != path.stat().st_size:
+        raise SystemExit(1)
+    if item.get("mode") != expected_modes[item["path"]]:
         raise SystemExit(1)
     if not item.get("purpose") or not item.get("consumer"):
         raise SystemExit(1)
     total += item["size_bytes"]
-if record.get("total_bytes") != total:
+if record.get("payload_total_bytes") != total:
+    raise SystemExit(1)
+control_files = record.get("control_files")
+if not isinstance(control_files, list) or {item.get("path") for item in control_files} != {"PACKAGE_MANIFEST.json", "SHA256SUMS"}:
+    raise SystemExit(1)
+expected_control_modes = {"PACKAGE_MANIFEST.json": "0644", "SHA256SUMS": "0644"}
+for item in control_files:
+    if item.get("type") != "file" or not item.get("purpose") or not item.get("consumer"):
+        raise SystemExit(1)
+    if item.get("mode") != expected_control_modes[item["path"]]:
+        raise SystemExit(1)
+if record.get("package_file_count") != len(files) + len(control_files):
     raise SystemExit(1)
 PY
-printf 'ishikawa_deployment_verification=pass;release=v1.3.1;platform=linux/amd64;promotion_state=%s\n' \
-  "$promotion_state"
+printf 'ishikawa_deployment_verification=pass;release=v1.3.1;platform=linux/amd64;release_state=%s\n' \
+  "$release_state"

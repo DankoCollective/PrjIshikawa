@@ -14,8 +14,8 @@ is never copied into the image.
 | Image reference | `node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64` |
 | Platform | `linux/amd64` |
 | Node.js | `24.22.1` |
-| npm | `11.19.1` |
-| Yarn | `1.22.22` |
+| Build-only npm | `11.21.1`, checksum-pinned, absent from runtime |
+| Base-bundled npm/Yarn | Not executed; absent from runtime |
 | Next.js | `16.4.3` |
 | React | `19.2.9` |
 | React DOM | `19.2.9` |
@@ -23,6 +23,8 @@ is never copied into the image.
 | AMD64 base manifest | `sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae` |
 | Work directory | `/opt/nextjs` |
 
+The fixed npm build archive is pinned to SHA-256
+`dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b`.
 The exact transitive npm graph and integrity values are in
 `deployment/runtime-image/package-lock.json`. The Dockerfile, lock, advisory
 disposition, license boundary, SBOM, image ID, archive checksum, and build
@@ -61,7 +63,7 @@ provide native AMD64 kernel, Debian-package, and Docker architecture; Ubuntu
 24.04; Docker with buildx; at least two logical CPUs, 4 GiB available memory,
 1 GiB available under `/tmp`, 2 GiB build-workspace capacity, and 5 GiB Docker
 storage capacity; and build-time HTTPS access to the pinned Docker Hub base
-and npm lock objects. The script does not need Gemma, Nomic, PostgreSQL,
+and the checksum-pinned npm archive and lock objects. The script does not need Gemma, Nomic, PostgreSQL,
 application ports, application credentials, application source, or corpus
 input.
 

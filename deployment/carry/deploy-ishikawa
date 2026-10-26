@@ -2,7 +2,26 @@
 set -Eeuo pipefail
 umask 077
 
-# Consolidated operator entrypoint for the portable Ishikawa deployment.
+# Purpose:
+#   Inventory, install, initialize, operate, and remove one portable Ishikawa
+#   demo deployment through a single operator entrypoint.
+#
+# Mental model:
+#   Verify immutable package bytes before every mutation. Keep application,
+#   image, database, user-unit, and runtime transitions explicit and refuse
+#   drift. Roll back only objects created by the current failed action.
+#
+# Inputs or prerequisites:
+#   A deployment-ready package, Ubuntu 26.04 AMD64, reviewed native
+#   prerequisites, attended sudo where stated, and action-specific credentials.
+#
+# Outputs or artifact lane:
+#   inventory writes only to the selected output directory; installation uses
+#   $HOME/Documents/Ishikawa and $HOME/.config/systemd/user; schema setup uses
+#   the named local PostgreSQL cluster. Boot enablement and lingering stay off.
+#
+# Usage:
+#   bash ./deploy-ishikawa --help
 
 usage() {
   printf '%s\n' \
@@ -51,7 +70,7 @@ readonly inspector="$carry_root/inspect-native-prerequisites"
 readonly application_archive="$carry_root/ishikawa-v1.3.1.tar.gz"
 readonly image_archive="$carry_root/node-next-runtime-amd64.tar"
 readonly image_identity="$carry_root/runtime-image-identity.json"
-readonly carry_receipt="$carry_root/carry-receipt.json"
+readonly package_receipt="$carry_root/deployment-package-receipt.json"
 readonly image_reference='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
 readonly install_root="$HOME/Documents/Ishikawa"
 readonly user_unit_root="$HOME/.config/systemd/user"
@@ -133,7 +152,7 @@ if [[ "$action" == install-schema ]]; then
     command -v "$required" >/dev/null 2>&1 || fail "command_missing_${required}"
   done
   bash "$verifier" >/dev/null || fail carry_verification_failed
-  [[ "$(jq -r '.promotion_state' "$carry_receipt")" == final_exact_byte_requalified ]] \
+  [[ "$(jq -r '.release_state' "$package_receipt")" == deployment_ready ]] \
     || fail carry_not_final
   [[ -f "$install_root/config/deployment.yaml" && ! -L "$install_root/config/deployment.yaml" ]] \
     || fail application_not_installed
@@ -326,7 +345,7 @@ for required in bash cp docker find grep install jq loginctl mkdir mktemp mv pyt
 done
 printf '[PREFLIGHT] state=start;mutation=false\n'
 bash "$verifier" >/dev/null || fail carry_verification_failed
-[[ "$(jq -r '.promotion_state' "$carry_receipt")" == final_exact_byte_requalified ]] \
+[[ "$(jq -r '.release_state' "$package_receipt")" == deployment_ready ]] \
   || fail carry_not_final
 [[ ! -e "$install_root" && ! -L "$install_root" ]] || fail installation_exists
 for unit_name in "${unit_names[@]}"; do

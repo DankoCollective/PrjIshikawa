@@ -508,7 +508,7 @@ fi
 image_id="$(jq -r '.image_id' "$fetched_handoff/image-identity.json")"
 jq -e --arg archive_sha256 "$archive_sha256" --arg image_id "$image_id" \
   --arg config_digest "$config_digest" --arg history_sha256 "$history_sha256" \
-  '.schema == "node-next-runtime-image.v1"
+  '.schema == "node-next-runtime-image.v3"
    and .architecture == "amd64"
    and .platform == "linux/amd64"
    and .application_in_image == false
@@ -520,8 +520,13 @@ jq -e --arg archive_sha256 "$archive_sha256" --arg image_id "$image_id" \
    and .config_digest == $config_digest
    and .history_sha256 == $history_sha256
    and .node == "24.22.1"
-   and .npm == "11.19.1"
-   and .yarn == "1.22.22"
+   and .build_npm == "11.21.1"
+   and .build_npm_archive_sha256 == "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b"
+   and .base_bundled_npm_executed == false
+   and .base_bundled_yarn_executed == false
+   and .runtime_npm == false
+   and .runtime_yarn == false
+   and .tzdata == "2026e-0+deb12u1"
    and .next == "16.4.3"
    and .react == "19.2.9"
    and .react_dom == "19.2.9"' \
@@ -532,7 +537,7 @@ licenses_sha256="$(sha256sum -- "$fetched_handoff/licenses.json" | awk '{print $
 jq -e --arg archive_sha256 "$archive_sha256" --arg image_id "$image_id" \
   --arg config_digest "$config_digest" --arg history_sha256 "$history_sha256" \
   --arg sbom_sha256 "$sbom_sha256" --arg licenses_sha256 "$licenses_sha256" \
-  '.schema == "node-next-runtime-build-receipt.v1"
+  '.schema == "node-next-runtime-build-receipt.v3"
    and .architecture == "amd64"
    and .platform == "linux/amd64"
    and .application_in_image == false
@@ -542,6 +547,13 @@ jq -e --arg archive_sha256 "$archive_sha256" --arg image_id "$image_id" \
    and .image_id == $image_id
    and .config_digest == $config_digest
    and .history_sha256 == $history_sha256
+   and .build_npm == "11.21.1"
+   and .build_npm_archive_sha256 == "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b"
+   and .base_bundled_npm_executed == false
+   and .base_bundled_yarn_executed == false
+   and .runtime_npm == false
+   and .runtime_yarn == false
+   and .tzdata == "2026e-0+deb12u1"
    and .sbom_sha256 == $sbom_sha256
    and .licenses_sha256 == $licenses_sha256' \
   "$fetched_handoff/build-receipt.json" >/dev/null \
@@ -554,29 +566,24 @@ jq -e --arg config_digest "$config_digest" '
   and any(.components[];
     .name == "node" and .version == "24.22.1"
     and any(.licenses[]; .license.id == "MIT"))
-  and any(.components[];
-    .name == "npm" and .version == "11.19.1"
-    and any(.licenses[]; .license.id == "Artistic-2.0"))
-  and any(.components[];
-    .name == "yarn" and .version == "1.22.22"
-    and any(.licenses[]; .license.id == "BSD-2-Clause"))' \
+  and all(.components[]; .name != "npm" and .name != "yarn")' \
   "$fetched_handoff/sbom.cdx.json" >/dev/null \
   || block fetched_sbom_invalid \
     'The returned runtime SBOM omits an exact runtime identity or image-config binding.' \
     'Do not publish the returned handoff.'
 jq -e '
-  .schema == "node-runtime-license-inventory.v1"
-  and (.runtime_tools | type == "array" and length == 3)
+  .schema == "node-runtime-license-inventory.v2"
+  and (.runtime_tools | type == "array" and length == 1)
   and all(.runtime_tools[]; .license_sha256 | test("^[0-9a-f]{64}$"))
   and any(.runtime_tools[];
     .name == "node" and .version == "24.22.1" and .license == "MIT"
     and .license_file == "/usr/local/LICENSE")
-  and any(.runtime_tools[];
-    .name == "npm" and .version == "11.19.1" and .license == "Artistic-2.0"
-    and .license_file == "/usr/local/lib/node_modules/npm/LICENSE")
-  and any(.runtime_tools[];
-    .name == "yarn" and .version == "1.22.22" and .license == "BSD-2-Clause"
-    and .license_file == "/opt/yarn-v1.22.22/LICENSE")' \
+  and (.build_tools | type == "array" and length == 1)
+  and all(.build_tools[]; .retained_in_runtime == false)
+  and any(.build_tools[];
+    .name == "npm" and .version == "11.21.1"
+    and .base_bundled_copy_executed == false
+    and .archive_sha256 == "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b")' \
   "$fetched_handoff/licenses.json" >/dev/null \
   || block fetched_license_inventory_invalid \
     'The returned runtime license inventory omits an exact bundled runtime tool.' \

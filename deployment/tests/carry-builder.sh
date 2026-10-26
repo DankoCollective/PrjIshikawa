@@ -1,11 +1,31 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Exercise portable carry assembly and refusal branches with private fixtures.
+# Purpose:
+#   Exercise deployment-package assembly and refusal branches with private
+#   fixtures only.
+#
+# Mental model:
+#   Create exact-shaped application, image, qualification, and promotion
+#   fixtures; run the numbered assembler through success, rerun, supersession,
+#   and adjacent refusal paths; then prove no fixture survives cleanup.
+#
+# Inputs or prerequisites:
+#   Local shell, Python, jq, tar, and checksum tools. No target is contacted.
+#
+# Outputs or artifact lane:
+#   Temporary files exist only beneath /tmp and are removed on exit.
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
+readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
+readonly expected_runtime_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
+readonly expected_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
 test_root="$(mktemp -d /tmp/ishikawa-carry-builder.XXXXXX)"
+real_df="$(command -v df)"
+real_cp="$(command -v cp)"
+real_chmod="$(command -v chmod)"
+real_python3="$(command -v python3)"
 
 fail() {
   printf '\nSCRIPT RESULT\nishikawa_carry_builder_test=blocked;reason=%s\n' "$1" >&2
@@ -23,14 +43,61 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+mkdir -p -- "$test_root/bin"
+cat >"$test_root/bin/df" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${ISHIKAWA_TEST_LOW_CAPACITY:-0}" == 1 ]]; then
+  printf '%s\n' \
+    'Filesystem 1-blocks Used Available Capacity Mounted on' \
+    'fixture 100 99 1 99% /tmp'
+  exit 0
+fi
+exec "${ISHIKAWA_TEST_REAL_DF:?}" "$@"
+MOCK
+chmod 0755 "$test_root/bin/df"
+cat >"$test_root/bin/cp" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ "${ISHIKAWA_TEST_COPY_FAIL:-0}" != 1 ]] || exit 88
+exec "${ISHIKAWA_TEST_REAL_CP:?}" "$@"
+MOCK
+chmod 0755 "$test_root/bin/cp"
+cat >"$test_root/bin/chmod" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ "${ISHIKAWA_TEST_CHMOD_FAIL:-0}" != 1 ]] || exit 87
+exec "${ISHIKAWA_TEST_REAL_CHMOD:?}" "$@"
+MOCK
+chmod 0755 "$test_root/bin/chmod"
+cat >"$test_root/bin/python3" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${ISHIKAWA_TEST_RECORD_GENERATION_FAIL:-0}" == 1 ]]; then
+  for argument in "$@"; do
+    [[ "$argument" != */application-release.json ]] || exit 89
+  done
+fi
+exec "${ISHIKAWA_TEST_REAL_PYTHON3:?}" "$@"
+MOCK
+chmod 0755 "$test_root/bin/python3"
+export ISHIKAWA_TEST_REAL_DF="$real_df"
+export ISHIKAWA_TEST_REAL_CP="$real_cp"
+export ISHIKAWA_TEST_REAL_CHMOD="$real_chmod"
+export ISHIKAWA_TEST_REAL_PYTHON3="$real_python3"
+export PATH="$test_root/bin:$PATH"
+
 fixture="$test_root/repo"
 mkdir -p -- \
   "$fixture/deployment/scripts" "$fixture/deployment/carry" \
   "$fixture/docs/decisions" \
   "$fixture/Ishikawa/packaging/native-prerequisite-inventory" \
   "$fixture/local/artifacts/ishikawa-v1.3.1-candidate-current" \
-  "$fixture/local/artifacts/node-next-runtime-current"
-cp -- "$repo_root/deployment/scripts/build-carry-candidate.sh" "$fixture/deployment/scripts/"
+  "$fixture/local/artifacts/node-next-runtime-current" \
+  "$fixture/local/artifacts/emceedanko-v1.3.1-requalification-current" \
+  "$fixture/local/artifacts/emceedanko-v1.3.1-promotion-current"
+cp -- "$repo_root/deployment/scripts/11_assemble-ishikawa-v1.3.1-deployment-package.sh" \
+  "$fixture/deployment/scripts/"
 cp -- "$repo_root/deployment/carry/"* "$fixture/deployment/carry/"
 cp -- "$repo_root/docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md" "$fixture/docs/decisions/"
 cp -- "$repo_root/Ishikawa/packaging/native-prerequisite-inventory/inspect-native-prerequisites" \
@@ -141,20 +208,158 @@ printf 'License inventory accompanies this file.\n' >"$runtime/LICENSES.md"
   ) >SHA256SUMS
 )
 
-builder="$fixture/deployment/scripts/build-carry-candidate.sh"
+application_sha="$(sha256sum "$application/ishikawa-v1.3.1.tar.gz" | awk '{print $1}')"
+fixture_image_id="sha256:$(printf '%064d' 0)"
+python3 -B - "$application/release-receipt.json" "$application_sha" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+record = json.loads(path.read_text(encoding="utf-8"))
+record["archive_sha256"] = sys.argv[2]
+record["source_manifest_sha256"] = "a" * 64
+path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+(
+  cd -- "$application"
+  while IFS= read -r name; do sha256sum -- "$name"; done < <(
+    find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+  ) >SHA256SUMS
+)
+requalification="$fixture/local/artifacts/emceedanko-v1.3.1-requalification-current"
+promotion="$fixture/local/artifacts/emceedanko-v1.3.1-promotion-current"
+printf '%s\n' \
+  'schema=ishikawa.emceedanko-v1.3.1-qualification.v1' \
+  "application_archive_sha256=$application_sha" \
+  "runtime_archive_sha256=$image_sha" \
+  "image_id=$fixture_image_id" \
+  'production_build_start=pass' \
+  'frontier_cases=60/60' \
+  >"$requalification/qualification-receipt.txt"
+printf '%s\n' \
+  'schema=ishikawa.emceedanko-v1.3.1-acceptance.v1' \
+  "application_archive_sha256=$application_sha" \
+  "runtime_archive_sha256=$image_sha" \
+  "image_id=$fixture_image_id" \
+  'human_ui_acceptance=accepted' \
+  'production_build_start=pass' \
+  'frontier_cases=60/60' \
+  >"$requalification/acceptance-receipt.txt"
+printf '%s\n' \
+  'schema=ishikawa.emceedanko-v1.3.1-action.v1' \
+  'state=pass' \
+  "application_archive_sha256=$application_sha" \
+  >"$requalification/cleanup-receipt.txt"
+(
+  cd -- "$requalification"
+  sha256sum -- qualification-receipt.txt acceptance-receipt.txt cleanup-receipt.txt >SHA256SUMS
+)
+printf '%s\n' \
+  'schema=ishikawa.emceedanko-v1.3.1-promotion.v1' \
+  "application_archive_sha256=$application_sha" \
+  "runtime_archive_sha256=$image_sha" \
+  "image_id=$fixture_image_id" \
+  'production_build_start=pass' \
+  >"$promotion/promotion-receipt.txt"
+(
+  cd -- "$promotion"
+  sha256sum -- promotion-receipt.txt >SHA256SUMS
+)
+
+builder="$fixture/deployment/scripts/11_assemble-ishikawa-v1.3.1-deployment-package.sh"
+sed -i \
+  -e "s/$expected_application_sha256/$application_sha/g" \
+  -e "s/$expected_runtime_sha256/$image_sha/g" \
+  -e "s/$expected_image_id/$fixture_image_id/g" \
+  "$builder"
 validation_output="$(bash "$builder" --validate-only 2>&1)" || fail validate_only_failed
-grep -Fxq 'ishikawa_carry_candidate_build=ready' <<<"$validation_output" \
+grep -Fxq 'ishikawa_deployment_package_assembly=ready' <<<"$validation_output" \
   || fail validate_ready_marker_missing
 
-run_output="$(bash "$builder" --run 2>&1)" \
+set +e
+acceptance_missing_output="$(bash "$builder" --run 2>&1)"
+acceptance_missing_status="$?"
+set -e
+(( acceptance_missing_status != 0 )) || fail missing_promotion_acceptance_reported_success
+grep -Fq 'reason=promotion_acceptance_missing' <<<"$acceptance_missing_output" \
+  || fail missing_promotion_acceptance_reason_missing
+printf '%s\n' \
+  'schema=ishikawa.emceedanko-v1.3.1-promotion-acceptance.v1' \
+  "application_archive_sha256=$application_sha" \
+  "runtime_archive_sha256=$image_sha" \
+  "image_id=$fixture_image_id" \
+  'human_ui_acceptance=accepted' \
+  'production_runtime=pass' \
+  'frontier_cases=60/60' \
+  'superseded_v1_3_removed=true' \
+  'superseded_image_removed=true' \
+  'database_mutated=false' \
+  'schema_mutated=false' \
+  'corpus_mutated=false' \
+  'boot_autostart=false' \
+  >"$promotion/acceptance-receipt.txt"
+(
+  cd -- "$promotion"
+  sha256sum -- promotion-receipt.txt acceptance-receipt.txt >SHA256SUMS
+)
+
+set +e
+capacity_output="$(ISHIKAWA_TEST_LOW_CAPACITY=1 bash "$builder" --run 2>&1)"
+capacity_status="$?"
+set -e
+(( capacity_status != 0 )) || fail insufficient_capacity_reported_success
+grep -Fq 'reason=insufficient_artifact_capacity' <<<"$capacity_output" \
+  || fail insufficient_capacity_reason_missing
+[[ ! -e "$fixture/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current" ]] \
+  || fail insufficient_capacity_published_candidate
+
+set +e
+copy_output="$(ISHIKAWA_TEST_COPY_FAIL=1 bash "$builder" --run 2>&1)"
+copy_status="$?"
+set -e
+(( copy_status != 0 )) || fail payload_copy_failure_reported_success
+grep -Fq 'reason=payload_copy_failed' <<<"$copy_output" \
+  || fail payload_copy_failure_reason_missing
+[[ ! -e "$fixture/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current" \
+    && -z "$(find "$fixture/local/artifacts" -maxdepth 1 -type d \
+      -name '.ishikawa-deployment-v1.3.1-candidate-current.*' -print -quit)" ]] \
+  || fail payload_copy_failure_cleanup_incomplete
+
+set +e
+record_output="$(ISHIKAWA_TEST_RECORD_GENERATION_FAIL=1 bash "$builder" --run 2>&1)"
+record_status="$?"
+set -e
+(( record_status != 0 )) || fail record_generation_failure_reported_success
+grep -Fq 'reason=application_release_generation_failed' <<<"$record_output" \
+  || fail record_generation_failure_reason_missing
+[[ ! -e "$fixture/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current" \
+    && -z "$(find "$fixture/local/artifacts" -maxdepth 1 -type d \
+      -name '.ishikawa-deployment-v1.3.1-candidate-current.*' -print -quit)" ]] \
+  || fail record_generation_failure_cleanup_incomplete
+
+run_output="$(ISHIKAWA_TEST_CHMOD_FAIL=1 bash "$builder" --run 2>&1)" \
   || { printf '%s\n' "$run_output" >&2; fail success_path_failed; }
-grep -Fxq 'ishikawa_carry_candidate_build=pass' <<<"$run_output" \
+grep -Fxq 'ishikawa_deployment_package_assembly=pass' <<<"$run_output" \
   || fail success_marker_missing
 handoff="$fixture/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current"
 bash "$handoff/verify-deployment" >/dev/null || fail published_verification_failed
+jq -e \
+  '.release == "Ishikawa v1.3.1"
+   and .human_ui_validation == "accepted"
+   and .production_runtime == "pass"' \
+  "$handoff/application-release.json" >/dev/null \
+  || fail canonical_application_release_invalid
+jq -e \
+  '.schema == "ishikawa.deployment-package-manifest.v1"
+   and .package_file_count == 25
+   and .payload_file_count == 23
+   and .primary_payloads == ["ishikawa-v1.3.1.tar.gz", "node-next-runtime-amd64.tar"]' \
+  "$handoff/PACKAGE_MANIFEST.json" >/dev/null \
+  || fail package_manifest_invalid
 
 second_output="$(bash "$builder" --run 2>&1)" || fail rerun_failed
-grep -Fxq 'ishikawa_carry_candidate_build=pass' <<<"$second_output" \
+grep -Fxq 'ishikawa_deployment_package_assembly=pass' <<<"$second_output" \
   || fail rerun_marker_missing
 [[ "$(find "$fixture/local/artifacts/superseded" -mindepth 1 -maxdepth 1 -type d | wc -l)" == 1 ]] \
   || fail superseded_count_invalid
@@ -251,6 +456,8 @@ grep -Fq 'reason=publication_language_invalid' <<<"$language_output" \
   || fail language_failure_reason_missing
 
 printf '%s\n' \
+  'acceptance_gate=pass;capacity_gate=pass;copy_failure=pass;record_failure=pass;mode_neutral_storage=pass' \
   'success=pass;rerun=pass;supersession=pass;published_verification=pass' \
-  'checksum_refusal=pass;provenance_refusal=pass;identity_refusal=pass;terminology_refusal=pass'
+  'application_release=pass;classified_manifest=pass;checksum_refusal=pass' \
+  'provenance_refusal=pass;identity_refusal=pass;terminology_refusal=pass'
 printf '\nSCRIPT RESULT\nishikawa_carry_builder_test=pass\n'

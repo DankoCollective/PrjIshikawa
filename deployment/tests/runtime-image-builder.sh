@@ -81,6 +81,10 @@ case "${1:-}" in
     ;;
   run)
     if [[ "$*" == *'--entrypoint sh '* && "$*" == *'runtime_identity=pass'* ]]; then
+      if [[ "${MOCK_RUNTIME_IDENTITY_FAIL:-false}" == true ]]; then
+        printf 'probe_detail=tzdata_identity_failed\n' >&2
+        exit 45
+      fi
       printf 'runtime_identity=pass\n'
       exit 0
     fi
@@ -90,17 +94,16 @@ case "${1:-}" in
     fi
     if [[ "$*" == *'--entrypoint dpkg-query'* ]]; then
       printf 'libc6\t2.36-9+deb12u13\tamd64\n'
+      printf 'tzdata\t2026e-0+deb12u1\tall\n'
       exit 0
     fi
-    if [[ "$*" == *'--entrypoint npm'* ]]; then
-      printf '%s\n' '{"dependencies":{"next":{"version":"16.4.3"},"react":{"version":"19.2.9"},"react-dom":{"version":"19.2.9"}}}'
+    if [[ "$*" == *'--entrypoint node'* ]]; then
+      printf '%s\n' '[{"path":"node_modules/next","version":"16.4.3"},{"path":"node_modules/react","version":"19.2.9"},{"path":"node_modules/react-dom","version":"19.2.9"}]'
       exit 0
     fi
     if [[ "$*" == *'--entrypoint sha256sum'* ]]; then
       [[ "${MOCK_RUNTIME_LICENSE_FAIL:-false}" != true ]] || exit 44
       printf '%064d  %s\n' 1 /usr/local/LICENSE
-      printf '%064d  %s\n' 2 /usr/local/lib/node_modules/npm/LICENSE
-      printf '%064d  %s\n' 3 /opt/yarn-v1.22.22/LICENSE
       exit 0
     fi
     exit 93
@@ -206,6 +209,27 @@ validation_output="$(run_builder --validate-only)" || fail validate_only_failed
 grep -Fxq 'node_next_runtime_build=ready' <<<"$validation_output" \
   || fail validate_ready_marker_missing
 
+dockerfile="$test_root/repo/deployment/runtime-image/Dockerfile"
+cp -- "$dockerfile" "$test_root/Dockerfile.reviewed"
+sed -i '$aRUN npm ci' "$dockerfile"
+set +e
+base_npm_output="$(run_builder --validate-only)"
+base_npm_status="$?"
+set -e
+(( base_npm_status != 0 )) || fail base_npm_execution_reported_ready
+grep -Fq 'reason=base_bundled_package_manager_execution_found' <<<"$base_npm_output" \
+  || fail base_npm_execution_reason_missing
+cp -- "$test_root/Dockerfile.reviewed" "$dockerfile"
+sed -i '/&& hash -r/d' "$dockerfile"
+set +e
+hash_reset_output="$(run_builder --validate-only)"
+hash_reset_status="$?"
+set -e
+(( hash_reset_status != 0 )) || fail missing_hash_reset_reported_ready
+grep -Fq 'reason=package_manager_absence_proof_unsafe' <<<"$hash_reset_output" \
+  || fail missing_hash_reset_reason_missing
+cp -- "$test_root/Dockerfile.reviewed" "$dockerfile"
+
 run_output="$(run_builder --run)" \
   || { printf '%s\n' "$run_output" >&2; fail success_path_failed; }
 grep -Fxq 'node_next_runtime_build=pass' <<<"$run_output" \
@@ -229,35 +253,47 @@ jq -e \
    and .generated_next_in_image == false
    and (.config_digest | test("^sha256:[0-9a-f]{64}$"))
    and (.history_sha256 | test("^[0-9a-f]{64}$"))
+   and .schema == "node-next-runtime-image.v3"
    and .node == "24.22.1"
-   and .npm == "11.19.1"
-   and .yarn == "1.22.22"
+   and .build_npm == "11.21.1"
+   and .build_npm_archive_sha256 == "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b"
+   and .base_bundled_npm_executed == false
+   and .base_bundled_yarn_executed == false
+   and .runtime_npm == false
+   and .runtime_yarn == false
+   and .tzdata == "2026e-0+deb12u1"
    and .next == "16.4.3"
    and .react == "19.2.9"' \
   "$handoff/image-identity.json" >/dev/null || fail identity_record_invalid
 jq -e \
   '.bomFormat == "CycloneDX"
    and any(.components[]; .name == "node" and .version == "24.22.1")
-   and any(.components[]; .name == "npm" and .version == "11.19.1")
-   and any(.components[]; .name == "yarn" and .version == "1.22.22")
+   and all(.components[]; .name != "npm" and .name != "yarn")
    and any(.components[]; .name == "next" and .version == "16.4.3")
    and any(.components[]; .name == "libc6" and .version == "2.36-9+deb12u13")
+   and any(.components[]; .name == "tzdata" and .version == "2026e-0+deb12u1")
    and any(.metadata.component.properties[]; .name == "oci:image:config-digest")' \
   "$handoff/sbom.cdx.json" >/dev/null || fail combined_sbom_invalid
 jq -e \
-  '.schema == "node-runtime-license-inventory.v1"
-   and (.runtime_tools | length == 3)
+  '.schema == "node-runtime-license-inventory.v2"
+   and (.runtime_tools | length == 1)
    and any(.runtime_tools[]; .name == "node" and .version == "24.22.1" and .license == "MIT")
-   and any(.runtime_tools[]; .name == "npm" and .version == "11.19.1" and .license == "Artistic-2.0")
-   and any(.runtime_tools[]; .name == "yarn" and .version == "1.22.22" and .license == "BSD-2-Clause")
+   and (.build_tools | length == 1)
+   and all(.build_tools[]; .retained_in_runtime == false)
+   and any(.build_tools[]; .name == "npm" and .version == "11.21.1" and .base_bundled_copy_executed == false)
    and any(.javascript_packages[]; .name == "next" and .version == "16.4.3")
    and any(.operating_system_packages[]; .name == "libc6")' \
   "$handoff/licenses.json" >/dev/null || fail combined_license_inventory_invalid
 jq -e \
-  '.schema == "node-next-runtime-build-receipt.v1"
+  '.schema == "node-next-runtime-build-receipt.v3"
    and .architecture == "amd64"
    and .application_in_image == false
    and .generated_next_in_image == false
+   and .runtime_npm == false
+   and .runtime_yarn == false
+   and .base_bundled_npm_executed == false
+   and .base_bundled_yarn_executed == false
+   and .tzdata == "2026e-0+deb12u1"
    and (.config_digest | test("^sha256:[0-9a-f]{64}$"))
    and (.history_sha256 | test("^[0-9a-f]{64}$"))' \
   "$handoff/build-receipt.json" >/dev/null || fail build_receipt_invalid
@@ -289,6 +325,16 @@ set -e
 (( boundary_failure_status != 0 )) || fail boundary_failure_reported_success
 grep -Fq 'reason=image_boundary_failed' <<<"$boundary_failure_output" \
   || fail boundary_failure_reason_missing
+
+set +e
+runtime_identity_failure_output="$(MOCK_RUNTIME_IDENTITY_FAIL=true run_builder --run)"
+runtime_identity_failure_status="$?"
+set -e
+(( runtime_identity_failure_status != 0 )) || fail runtime_identity_failure_reported_success
+grep -Fq 'reason=runtime_identity_mismatch' <<<"$runtime_identity_failure_output" \
+  || fail runtime_identity_failure_reason_missing
+grep -Fq 'probe_detail=tzdata_identity_failed' <<<"$runtime_identity_failure_output" \
+  || fail runtime_identity_failure_detail_hidden
 
 set +e
 archive_config_failure_output="$(MOCK_ARCHIVE_CONFIG_FAIL=true run_builder --run)"
@@ -348,7 +394,8 @@ grep -Fq 'reason=docker_storage_capacity_insufficient' <<<"$docker_capacity_outp
 
 printf '%s\n' \
   'success=pass;rerun=pass;supersession=pass;checksums=pass' \
-  'build_failure=pass;boundary_failure=pass;archive_config_failure=pass;runtime_license_failure=pass;jargon_failure=pass' \
+  'build_failure=pass;boundary_failure=pass;runtime_identity_failure=pass;archive_config_failure=pass;runtime_license_failure=pass;jargon_failure=pass' \
   'native_architecture_failure=pass;docker_architecture_failure=pass' \
-  'cpu_capacity_failure=pass;docker_capacity_failure=pass'
+  'cpu_capacity_failure=pass;docker_capacity_failure=pass' \
+  'base_npm_execution_refusal=pass;missing_hash_reset_refusal=pass'
 printf '\nSCRIPT RESULT\nruntime_image_builder_test=pass\n'

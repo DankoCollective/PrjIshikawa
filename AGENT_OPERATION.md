@@ -31,6 +31,9 @@ of target mutation, or successful cleanup does not reduce the violation.
 
 - Read `danko_lab.md` before lab-specific planning or execution; verify its
   recorded snapshot against fresh read-only inventory when current state matters.
+- Read `local/Port_Forwarding.md` before proposing or changing a Danko Lab
+  SSH service forward. Reuse its complete direct-tunnel convention and
+  canonical local aliases; do not invent a one-off mapping or transit chain.
 - Read `node_nextjs_runtime_image.md` before selecting, changing, packaging,
   or using the shared Node/Next.js container runtime.
 - Read the relevant local docs before changing procedure or evidence.

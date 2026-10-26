@@ -11,14 +11,16 @@ Primary license sources:
 - <https://www.debian.org/legal/licenses/>
 - the `license` fields and package tarball identities in `package-lock.json`
 
-The generated license inventory covers the exact JavaScript graph, the
-installed Debian package inventory, and the runtime tools inherited from the
-official base. It records and hashes these in-image license files:
+The generated license inventory covers the exact JavaScript graph, installed
+Debian package inventory, and final runtime tools. It records and hashes this
+in-image runtime license file:
 
 - Node.js 24.22.1 (`MIT`): `/usr/local/LICENSE`
-- npm 11.19.1 (`Artistic-2.0`):
-  `/usr/local/lib/node_modules/npm/LICENSE`
-- Yarn 1.22.22 (`BSD-2-Clause`): `/opt/yarn-v1.22.22/LICENSE`
+
+npm 11.21.1 is a checksum-pinned build tool only and is absent from the
+flattened distributed image, including its license and dependency tree. The
+older npm and Yarn copies bundled in the base are not executed and are also
+absent from the distributed image.
 
 Each Debian record identifies the copyright file retained inside the image.
 The combined CycloneDX SBOM and license inventory must be reviewed before the

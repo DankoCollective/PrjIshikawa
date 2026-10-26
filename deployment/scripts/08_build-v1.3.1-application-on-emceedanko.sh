@@ -285,9 +285,13 @@ if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity.get("image_id", "")):
 expected = {
     "application_in_image": False, "architecture": "amd64",
     "generated_next_in_image": False, "image_reference": reference,
-    "next": "16.4.3", "node": "24.22.1", "npm": "11.19.1",
+    "base_bundled_npm_executed": False, "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
+    "next": "16.4.3", "node": "24.22.1",
     "platform": "linux/amd64", "react": "19.2.9", "react_dom": "19.2.9",
-    "schema": "node-next-runtime-image.v1", "yarn": "1.22.22",
+    "runtime_npm": False, "runtime_yarn": False,
+    "schema": "node-next-runtime-image.v3", "tzdata": "2026e-0+deb12u1",
 }
 if any(identity.get(key) != value for key, value in expected.items()):
     raise SystemExit(1)
@@ -337,9 +341,9 @@ config_text = config_bytes.decode("utf-8", errors="strict").lower()
 for forbidden in ("ishikawa", "emceedanko", "dankosurface", "org_lab", "black_corpus"):
     if forbidden in config_text:
         raise SystemExit(1)
-if receipt.get("schema") != "node-next-runtime-build-receipt.v1":
+if receipt.get("schema") != "node-next-runtime-build-receipt.v3":
     raise SystemExit(1)
-for field in ("image_id", "image_reference", "archive_sha256", "architecture", "platform", "config_digest", "history_sha256"):
+for field in ("image_id", "image_reference", "archive_sha256", "architecture", "platform", "config_digest", "history_sha256", "base_bundled_npm_executed", "base_bundled_yarn_executed", "build_npm", "build_npm_archive_sha256", "runtime_npm", "runtime_yarn", "tzdata"):
     if receipt.get(field) != identity.get(field):
         raise SystemExit(1)
 PY

@@ -421,8 +421,10 @@ posture.
 
 The bounded local implementation now includes:
 
-- exact Node.js `24.22.1`, npm `11.19.1`, Next.js `16.4.3`, React/React DOM
-  `19.2.9`, sharp `0.35.5`, Linux AMD64, and official base-manifest pins;
+- exact Node.js `24.22.1`, checksum-pinned build-only npm `11.21.1`,
+  Next.js `16.4.3`, React/React DOM `19.2.9`, sharp `0.35.5`, Linux AMD64,
+  and official base-manifest pins; base-bundled npm/Yarn are not executed and
+  every package-manager copy is absent from the flattened runtime;
 - the application-free runtime Dockerfile and exact npm lock;
 - a runtime-image builder with checksum, identity, archive-load, SBOM,
   license, image-boundary, terminology, failure, and atomic-publication gates;
@@ -435,11 +437,13 @@ The bounded local implementation now includes:
 - the permanent read-only-source production lifecycle with a bounded
   ephemeral `.next`, `next build`, `next start`, UID/GID identity, readiness,
   timeout, capacity, stop, and failure cleanup;
-- a minimal carry-candidate assembler with separate application and image
-  archives, exact runtime build receipt, combined npm/Debian runtime SBOM,
-  runtime license inventory, purpose/consumer/mode/size/hash inventory, one
-  complete checksum manifest, portable verification, and no stable final
-  promotion;
+- numbered Script 11 as the minimal carry-candidate assembler, with separate
+  application and image archives, exact runtime build receipt, combined
+  npm/Debian runtime SBOM,
+  runtime license inventory, a classified 25-file
+  purpose/consumer/mode/size/hash inventory, one complete checksum manifest,
+  portable verification, exact Script 09/10 lifecycle binding, and no stable
+  final promotion;
 - one portable deployment entrypoint for inventory, exact-image load,
   application/configuration/unit installation, clean least-privilege database
   and schema-v5 initialization, start/status/stop, and guarded empty-install
@@ -449,8 +453,9 @@ The bounded local implementation now includes:
 
 The complete 486-test native suite passed on 2026-10-26, as did the current
 application-builder, runtime-builder, stack-lifecycle, carry-builder,
-deployment-entrypoint, and release-boundary harnesses. These are source and command-double results. They
-do not close the gates that require a real Linux AMD64 image build, exact
+deployment-entrypoint, and release-boundary harnesses. These are source and
+command-double results. They do not close the gates that require a real Linux
+AMD64 image build, exact
 application build, exact-image advisory/license review, installed production
 UI, EmceeDanko requalification and human acceptance, Tech inventory, protected
 corpus execution, independent final review, or stable-handoff promotion.
@@ -468,9 +473,40 @@ accepted the v1.3.1 UI. Candidate cleanup and its checksum-bound evidence are
 complete. Frozen V13-91 and numbered Script 10 define the immediate attended
 promotion on EmceeDanko without changing the org-lab carry design. Script 10
 promotion passed with corpus-v3 unchanged and v1.3 rollback still available;
-production-port human UI acceptance is the immediate gate. The package remains
-**NOT CARRY-READY** until promotion acceptance and every remaining mandatory
-package gate pass.
+the operator accepted the production-port UI and corrected Script 10 acceptance
+published its checksum-bound receipt. The action proved the exact application,
+image, production runtime, 60/60 frontier result, old-image retirement, and no
+database, schema, corpus, or boot-autostart mutation. Script 11 is implemented
+and its success, rerun, supersession, acceptance-gate, checksum, provenance,
+identity, package-manifest, portable-verification, terminology, artifact/tmp
+capacity, payload-copy failure, generated-record failure, mode-neutral
+storage, and cleanup branches pass in isolated end-to-end harnesses. Its
+corrected real invocation assembled and independently verified the exact
+25-file, 173,989,414-byte candidate. The package remains **NOT CARRY-READY**
+until the exact-artifact security review, approved Tech inventory, independent
+review, and stable publication pass.
+
+The first complete exact-image vulnerability scan is now durable under
+`local/reports/ishikawa-v1.3.1-security-review/` and summarized in
+`deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`. It opened a decision
+about build-time npm/Yarn retained in the runtime image; no package byte is
+being silently changed while that decision is open.
+
+The superseded vulnerable runtime archive and currently running pre-correction
+image remain operationally isolated and **carry-blocked** until a corrected
+image has passed scan, production requalification, and attended acceptance.
+Before stable carry publication, prove removal of the superseded image and
+archive from the carry lane and perform only identity-bounded build-residue
+cleanup; broad Docker pruning is prohibited.
+
+The first Script 10 acceptance attempt then blocked safely because a container
+still referenced the superseded image. The bounded correction removes exact
+named Ishikawa containers and stopped containers only after proving their exact
+old-image identity; an unknown running consumer still blocks with precise
+details. Target, wrapper, stack, package-assembly, and portable-deployment
+regressions pass after the correction. The corrected acceptance action passed,
+removed one stopped exact-image consumer, and published the complete lifecycle
+evidence without changing application data or boot posture.
 
 ## Mandatory package checklist
 
@@ -494,10 +530,12 @@ package gate pass.
   reviewer/date: operator acceptance reconciled 2026-10-26.
 - [x] **REL-04 — MUST.** State whether the accepted v1.3 artifact is retained,
   superseded, or reused; never silently overwrite its identity. Evidence:
-  v1.3 is retained as the immutable historical behavioral baseline and v1.3.1
-  is a separate unpromoted patch candidate, as recorded in
-  `ISHIKAWA_V1_3_RELEASE_FREEZE.md`; reviewer/date: current-agent
-  reconciliation, 2026-10-26.
+  v1.3 is retained as the immutable historical behavioral baseline; v1.3.1 is
+  the separately identified, promoted, and production-port-accepted runtime,
+  with its superseded v1.3 rollback root and image retired by Script 10, as recorded in
+  `ISHIKAWA_V1_3_RELEASE_FREEZE.md` and
+  `deployment/evidence/ISHIKAWA_V1_3_1_LOCAL_IMPLEMENTATION.md`;
+  reviewer/date: current-agent reconciliation, 2026-10-26.
 
 ### 2. Small footprint and classified contents
 
@@ -772,4 +810,4 @@ disposition.
 
 ## Final status
 
-`carry_ready=blocked;reason=implementation_and_qualification_gates_pending`
+`carry_ready=blocked;reason=security_inventory_and_final_review_pending`

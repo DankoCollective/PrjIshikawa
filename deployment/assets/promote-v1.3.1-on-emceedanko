@@ -33,6 +33,7 @@ readonly old_container='ishikawa-v1.3-web'
 readonly new_container='ishikawa-v1.3.1-web'
 readonly qualification_container='ishikawa-v1.3.1-qualification-web'
 readonly historical_v1_2_container='ishikawa-web'
+readonly historical_v1_2_preflight_container='ishikawa-v1.2-web-preflight'
 readonly ui_port=3384
 readonly retrieval_port=8384
 readonly postgresql_port=5432
@@ -145,6 +146,45 @@ remove_container() {
   container_exists "$name" || return 0
   container_running "$name" && "${docker_command[@]}" stop --time 20 "$name" >/dev/null 2>&1 || true
   "${docker_command[@]}" rm --force "$name" >/dev/null 2>&1
+}
+
+old_image_consumer_ids() {
+  {
+    "${docker_command[@]}" ps -aq --filter "ancestor=$old_image_reference" 2>/dev/null || true
+    "${docker_command[@]}" ps -aq --filter "ancestor=$expected_old_image_id" 2>/dev/null || true
+  } | sort -u | sed '/^$/d'
+}
+
+old_image_consumer_details() {
+  local consumer_id details
+  while IFS= read -r consumer_id; do
+    [[ -n "$consumer_id" ]] || continue
+    details="$("${docker_command[@]}" inspect --format \
+      'name={{.Name}};running={{.State.Running}};image={{.Image}}' \
+      "$consumer_id" 2>/dev/null || printf 'name=unresolved;running=unknown;image=unknown')"
+    printf '%s\n' "${details/name=\//name=}"
+  done
+}
+
+remove_safe_old_image_consumers() {
+  local name consumer_id image_id running removed=0
+  for name in "$old_container" "$historical_v1_2_container" \
+    "$historical_v1_2_preflight_container"; do
+    container_exists "$name" || continue
+    image_id="$("${docker_command[@]}" inspect --format '{{.Image}}' "$name" 2>/dev/null || true)"
+    [[ "$image_id" == "$expected_old_image_id" ]] || continue
+    remove_container "$name" || return 1
+    removed=$((removed + 1))
+  done
+  while IFS= read -r consumer_id; do
+    [[ -n "$consumer_id" ]] || continue
+    image_id="$("${docker_command[@]}" inspect --format '{{.Image}}' "$consumer_id" 2>/dev/null || true)"
+    running="$("${docker_command[@]}" inspect --format '{{.State.Running}}' "$consumer_id" 2>/dev/null || true)"
+    [[ "$image_id" == "$expected_old_image_id" && "$running" == false ]] || continue
+    "${docker_command[@]}" rm --force "$consumer_id" >/dev/null 2>&1 || return 1
+    removed=$((removed + 1))
+  done < <(old_image_consumer_ids)
+  printf '%s' "$removed"
 }
 
 pid_is_api() {
@@ -636,7 +676,7 @@ case "$mode" in --run|--accept|--rollback) ;; *) usage >&2; exit 2 ;; esac
   || fail target_paths_invalid 'The private payload or result path is outside the target contract.' 'Rerun through Script 10.'
 
 stage='target_preflight'
-for required in awk bash chmod cp curl date docker dpkg find grep hostname id jq kill mkdir mv pg_isready psql python3 readlink rm sed setsid sha256sum sleep sort ss stat sudo systemctl tar tr; do
+for required in awk bash chmod cp curl date docker dpkg find grep hostname id jq kill mkdir mv paste pg_isready psql python3 readlink rm sed setsid sha256sum sleep sort ss stat sudo systemctl tar tr; do
   command -v "$required" >/dev/null 2>&1 || fail "command_missing_${required}" "Required target command unavailable: $required." 'Restore the named prerequisite.'
 done
 [[ "$(sha256sum -- "$0" | awk '{print $1}')" == "$expected_helper_sha256" ]] \
@@ -698,21 +738,19 @@ if [[ "$mode" == --accept ]]; then
   fi
   new_runtime_ready || fail promoted_runtime_not_ready 'Promoted v1.3.1 is not completely ready.' 'Do not accept; use Script 10 --rollback if it cannot be reconciled.'
   check_boot_posture || fail boot_posture_changed 'Boot posture changed after promotion.' 'Restore disabled boot posture before acceptance.'
-  consumers="$({
-    "${docker_command[@]}" ps -aq --filter "ancestor=$old_image_reference" 2>/dev/null || true
-    "${docker_command[@]}" ps -aq --filter "ancestor=$expected_old_image_id" 2>/dev/null || true
-  } | sort -u | sed '/^$/d')"
-  if [[ -n "$consumers" ]] \
-      && container_exists "$historical_v1_2_container" \
-      && ! container_running "$historical_v1_2_container" \
-      && [[ "$("${docker_command[@]}" inspect --format '{{.Image}}' "$historical_v1_2_container" 2>/dev/null || true)" == "$expected_old_image_id" ]]; then
-    "${docker_command[@]}" rm "$historical_v1_2_container" >/dev/null
-    consumers="$({
-      "${docker_command[@]}" ps -aq --filter "ancestor=$old_image_reference" 2>/dev/null || true
-      "${docker_command[@]}" ps -aq --filter "ancestor=$expected_old_image_id" 2>/dev/null || true
-    } | sort -u | sed '/^$/d')"
+  removed_safe_consumers="$(remove_safe_old_image_consumers)" \
+    || fail safe_consumer_removal_failed \
+      'A stopped old-image consumer or exact named Ishikawa container could not be removed.' \
+      'Inspect the reported old-image containers and retry acceptance.'
+  consumers="$(old_image_consumer_ids)"
+  if [[ -n "$consumers" ]]; then
+    consumer_details="$(old_image_consumer_details <<<"$consumers" | paste -sd '|' -)"
+    fail superseded_image_in_use \
+      "Remaining superseded-image consumers: ${consumer_details:-unresolved}." \
+      'Remove or reconcile every reported consumer before acceptance.'
   fi
-  [[ -z "$consumers" ]] || fail superseded_image_in_use 'A remaining container still references the superseded image.' 'Remove or reconcile every reported consumer before acceptance.'
+  emit RETIREMENT \
+    "state=pass;safe_consumers_removed=${removed_safe_consumers};remaining_consumers=0"
   mutation_started=true
   if [[ -d "$rollback_root" && ! -L "$rollback_root" ]]; then
     rm -rf -- "$rollback_root"

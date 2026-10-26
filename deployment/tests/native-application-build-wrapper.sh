@@ -125,15 +125,21 @@ identity = {
     "architecture": "amd64", "config_digest": "sha256:" + config,
     "generated_next_in_image": False, "history_sha256": history,
     "image_id": "sha256:" + "0" * 63 + "7", "image_reference": reference,
-    "next": "16.4.3", "node": "24.22.1", "npm": "11.19.1",
+    "base_bundled_npm_executed": False, "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
+    "next": "16.4.3", "node": "24.22.1",
     "platform": "linux/amd64", "react": "19.2.9", "react_dom": "19.2.9",
-    "schema": "node-next-runtime-image.v1", "yarn": "1.22.22",
+    "runtime_npm": False, "runtime_yarn": False,
+    "schema": "node-next-runtime-image.v3", "tzdata": "2026e-0+deb12u1",
 }
 receipt = {key: identity[key] for key in (
     "archive_sha256", "architecture", "config_digest", "generated_next_in_image",
     "history_sha256", "image_id", "image_reference", "platform",
+    "base_bundled_npm_executed", "base_bundled_yarn_executed", "build_npm",
+    "build_npm_archive_sha256", "runtime_npm", "runtime_yarn", "tzdata",
 )}
-receipt.update({"application_in_image": False, "schema": "node-next-runtime-build-receipt.v1"})
+receipt.update({"application_in_image": False, "schema": "node-next-runtime-build-receipt.v3"})
 for path, value in ((Path(identity_path), identity), (Path(receipt_path), receipt)):
     path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY

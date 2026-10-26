@@ -149,6 +149,36 @@ Qualification must prove that:
 4. the v1.3.1-to-v1.3.2 updater changes the displayed identity as part of the
    same atomic application update and restores the prior identity on rollback.
 
+## Citation excerpt overflow and visibility
+
+The accepted v1.3.1 UI scrolls the citation rail as one list. An expanded
+citation card grows with its excerpt content and does not provide an
+independent internal scrollbar. During attended review, the operator observed
+that expanded text can extend below the currently visible part of the rail and
+can therefore appear unavailable even though the outer citation list remains
+scrollable.
+
+Ishikawa v1.3.2 should investigate the least surprising accessible behavior
+for long citation excerpts. The correction may use a bounded independently
+scrollable excerpt region, deliberate outer-rail scrolling that keeps the
+expanded card and its remaining text visibly reachable, or another tested
+interaction. It must not silently clip returned citation text.
+
+Qualification must prove that:
+
+1. every excerpt rendered in an expanded citation remains reachable by
+   keyboard, pointer, and touch interaction at supported desktop and narrow
+   viewport sizes;
+2. focus and scroll position remain understandable when a card is opened,
+   closed, or followed by `View full document`;
+3. any nested scrollbar has a visible affordance and does not trap keyboard
+   or wheel scrolling; and
+4. long citations, multiple expanded citations, rail resizing, and the final
+   citation in the list do not hide text or controls.
+
+This is a v1.3.2 usability item and does not reopen or gate the accepted
+v1.3.1 carry baseline.
+
 ## Qualification requirements
 
 Before acceptance, one consolidated v1.3.2 qualification path must:

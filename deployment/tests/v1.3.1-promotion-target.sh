@@ -2,8 +2,21 @@
 set -Eeuo pipefail
 umask 077
 
-# Exercise Script 10 target promotion, acceptance/finalization, explicit
-# rollback, automatic failed-launch restoration, and refusal branches.
+# Purpose:
+#   Exercise Script 10 target promotion, acceptance, rollback, restoration,
+#   and refusal behavior without changing a real target.
+#
+# Mental model:
+#   Build one isolated EmceeDanko-shaped fixture, replace host/runtime commands
+#   with bounded doubles, and execute complete lifecycle branches through the
+#   real target helper.
+#
+# Inputs or prerequisites:
+#   Exact local v1.3.1 application and runtime identity handoffs plus standard
+#   local shell tools. No remote host, credential, model, or database is used.
+#
+# Outputs or artifact lane:
+#   Temporary fixture state exists only beneath /tmp and is removed on exit.
 
 readonly test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$test_dir/../.." && pwd -P)"
@@ -119,7 +132,22 @@ case "$command" in
   inspect)
     if [[ "${1:-}" == --format ]]; then
       format="$2"; name="$3"
-      if [[ "$format" == *State.Running* ]]; then running "$name" && printf "%s\n" true || printf "%s\n" false
+      if [[ "$format" == *"name={{.Name}}"* ]]; then
+        running_value=false
+        if [[ -f "$state/container.$name.running" \
+            || ( "$name" == old-consumer-id && "${MOCK_OLD_CONSUMER:-0}" == 1 ) ]]; then
+          running_value=true
+        fi
+        printf "name=/%s;running=%s;image=%s\n" "$name" \
+          "$running_value" \
+          "sha256:368f4381b61bf90ad27aa5a9dd4c10e1de0b4b4666006911e1b6cb4aafcfb8a6"
+      elif [[ "$format" == *State.Running* ]]; then
+        if running "$name" \
+            || [[ "$name" == old-consumer-id && "${MOCK_OLD_CONSUMER:-0}" == 1 ]]; then
+          printf "%s\n" true
+        else
+          printf "%s\n" false
+        fi
       elif [[ "$format" == *HostConfig.Tmpfs* ]]; then printf "%s\n" "rw,nosuid,nodev,size=536870912,mode=0700,uid=1000,gid=1000"
       elif [[ "$format" == *Config.User* ]]; then printf "%s:%s\n" "$(id -u)" "$(id -g)"
       elif [[ "$format" == *ReadonlyRootfs* ]]; then printf "%s\n" true
@@ -168,9 +196,17 @@ case "$command" in
   rm)
     name="${*: -1}"
     rm -f -- "$state/container.$name.running" "$state/container.$name.exists"
+    [[ "$name" != emceedanko-nextjs-dev ]] || : >"$state/stopped-old-consumer.removed"
     ;;
   ps)
+    for name in ishikawa-v1.3-web ishikawa-web ishikawa-v1.2-web-preflight; do
+      exists "$name" && printf "%s\n" "$name"
+    done
     [[ "${MOCK_OLD_CONSUMER:-0}" != 1 ]] || printf "%s\n" old-consumer-id
+    if [[ "${MOCK_STOPPED_OLD_CONSUMER:-0}" == 1 \
+        && ! -f "$state/stopped-old-consumer.removed" ]]; then
+      printf "%s\n" emceedanko-nextjs-dev
+    fi
     ;;
   *) exit 1 ;;
 esac'
@@ -280,6 +316,34 @@ grep -Fq 'human_ui_acceptance=already_recorded' "$root/accept-repeat.out"
 grep -Fxq 'human_ui_acceptance=accepted' "$payload/accept-repeat-result.txt"
 
 reset_fixture
+run_helper --run "$payload/expected-consumer-run-result.txt" "$root/expected-consumer-run.out"
+: >"$root/state/container.ishikawa-web.exists"
+: >"$root/state/container.ishikawa-web.running"
+: >"$root/state/container.ishikawa-v1.2-web-preflight.exists"
+refresh_payload
+run_helper --accept "$payload/expected-consumer-result.txt" "$root/expected-consumer.out"
+grep -Fq 'v1_3_1_promotion_acceptance=pass' "$root/expected-consumer.out"
+grep -Fq '[RETIREMENT] state=pass;safe_consumers_removed=2;remaining_consumers=0' \
+  "$root/expected-consumer.out"
+[[ ! -e "$root/state/container.ishikawa-web.exists" \
+    && ! -e "$root/state/container.ishikawa-web.running" \
+    && ! -e "$root/state/container.ishikawa-v1.2-web-preflight.exists" \
+    && ! -e "$root/home/Documents/Ishikawa-v1.3-retired-for-v1.3.1" \
+    && -f "$root/state/old-image.removed" ]]
+
+reset_fixture
+run_helper --run "$payload/stopped-consumer-run-result.txt" "$root/stopped-consumer-run.out"
+refresh_payload
+run_helper --accept "$payload/stopped-consumer-result.txt" "$root/stopped-consumer.out" \
+  'MOCK_STOPPED_OLD_CONSUMER=1'
+grep -Fq 'v1_3_1_promotion_acceptance=pass' "$root/stopped-consumer.out"
+grep -Fq '[RETIREMENT] state=pass;safe_consumers_removed=1;remaining_consumers=0' \
+  "$root/stopped-consumer.out"
+[[ -f "$root/state/stopped-old-consumer.removed" \
+    && ! -e "$root/home/Documents/Ishikawa-v1.3-retired-for-v1.3.1" \
+    && -f "$root/state/old-image.removed" ]]
+
+reset_fixture
 run_helper --run "$payload/rollback-run-result.txt" "$root/rollback-run.out"
 refresh_payload
 run_helper --rollback "$payload/rollback-result.txt" "$root/rollback.out"
@@ -312,6 +376,8 @@ consumer_status="$?"
 set -e
 (( consumer_status != 0 ))
 grep -Fq 'reason=superseded_image_in_use' "$root/consumer.out"
+grep -Fq 'name=old-consumer-id;running=true;image=sha256:368f4381b61bf90ad27aa5a9dd4c10e1de0b4b4666006911e1b6cb4aafcfb8a6' \
+  "$root/consumer.out"
 [[ -d "$root/home/Documents/Ishikawa-v1.3-retired-for-v1.3.1" \
     && ! -e "$root/state/old-image.removed" ]]
 
@@ -324,4 +390,4 @@ set -e
 grep -Fq 'reason=accepted_database_inventory_mismatch' "$root/database.out"
 [[ -d "$root/home/Documents/Ishikawa-v1.3-attended" && ! -e "$root/home/Documents/Ishikawa-v1.3.1" ]]
 
-printf '%s\n' 'v1_3_1_promotion_target_harness=pass;run=pass;accept=pass;rollback=pass;launch_failure_restoration=pass;consumer_refusal=pass;database_refusal=pass'
+printf '%s\n' 'v1_3_1_promotion_target_harness=pass;run=pass;accept=pass;rollback=pass;launch_failure_restoration=pass;expected_consumer_cleanup=pass;stopped_consumer_cleanup=pass;running_unknown_consumer_refusal=pass;database_refusal=pass'

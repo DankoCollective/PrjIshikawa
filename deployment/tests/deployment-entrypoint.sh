@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Exercise the portable deployment entrypoint without host or service changes.
+# Purpose:
+#   Exercise the portable verifier and deployment entrypoint without changing
+#   a real host, service, image store, or database.
+#
+# Mental model:
+#   Build one complete private package fixture, replace external host commands
+#   with bounded doubles, then run verification, install, schema, lifecycle,
+#   cleanup, replay, and refusal paths through the shipped entrypoint.
+#
+# Inputs or prerequisites:
+#   Local shell, Python, jq, tar, checksum tools, and PyYAML. No target, model,
+#   credential authority, or protected corpus is contacted.
+#
+# Outputs or artifact lane:
+#   Temporary fixture and mock state exist only beneath /tmp and are removed
+#   automatically on success, failure, or interruption.
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
@@ -124,7 +139,6 @@ mkdir -p -- \
 tar -czf "$carry/ishikawa-v1.3.1.tar.gz" -C "$test_root/application" ishikawa-v1.3.1
 (cd -- "$carry" && sha256sum ishikawa-v1.3.1.tar.gz >ishikawa-v1.3.1.tar.gz.sha256)
 printf '%064d  Ishikawa/fixture\n' 0 >"$carry/ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS"
-printf '{"release":"Ishikawa v1.3.1 candidate"}\n' >"$carry/application-release.json"
 printf '%s\n' \
   '{"bomFormat":"CycloneDX","metadata":{"component":{"name":"Ishikawa","version":"1.3.1"}}}' \
   >"$carry/application-sbom.cdx.json"
@@ -156,13 +170,14 @@ printf '%s\n' \
   >"$carry/runtime-licenses.json"
 runtime_sbom_sha="$(sha256sum "$carry/runtime-sbom.cdx.json" | awk '{print $1}')"
 runtime_licenses_sha="$(sha256sum "$carry/runtime-licenses.json" | awk '{print $1}')"
-python3 -B - "$carry/runtime-image-identity.json" "$carry/carry-receipt.json" \
+python3 -B - "$carry/runtime-image-identity.json" \
+  "$carry/deployment-package-receipt.json" "$carry/application-release.json" \
   "$image_sha" "$application_sha" "$config_hex" "$history_sha" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-identity_path, receipt_path, image_sha, application_sha, config_hex, history_sha = sys.argv[1:]
+identity_path, receipt_path, application_release_path, image_sha, application_sha, config_hex, history_sha = sys.argv[1:]
 reference = "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"
 identity = {
     "application_in_image": False,
@@ -184,19 +199,48 @@ identity = {
 }
 receipt = {
     "application_archive_sha256": application_sha,
-    "application_release": "Ishikawa v1.3.1 candidate",
+    "application_release": "Ishikawa v1.3.1",
     "architecture": "amd64",
     "boot_autostart": False,
+    "exact_byte_requalification": "pass",
+    "human_ui_validation": "accepted",
     "image_archive_sha256": image_sha,
     "image_config_digest": "sha256:" + config_hex,
     "image_history_sha256": history_sha,
     "image_reference": reference,
+    "independent_final_review": "pass",
     "platform": "linux/amd64",
-    "promotion_state": "final_exact_byte_requalified",
-    "schema": "ishikawa.carry-receipt.v1",
+    "production_runtime": "pass",
+    "release_state": "deployment_ready",
+    "schema": "ishikawa.deployment-package-receipt.v1",
+    "security_review": "pass",
+    "stable_handoff": True,
+    "target_inventory": "approved",
+}
+application_release = {
+    "application_archive_sha256": application_sha,
+    "coding_standard": "pass",
+    "deterministic_archive": True,
+    "fresh_install": "pass",
+    "human_ui_validation": "accepted",
+    "javascript_test_count": 17,
+    "native_test_count": 486,
+    "production_runtime": "pass",
+    "promotion_acceptance_sha256": "1" * 64,
+    "promotion_receipt_sha256": "2" * 64,
+    "qualification_acceptance_sha256": "3" * 64,
+    "qualification_receipt_sha256": "4" * 64,
+    "release": "Ishikawa v1.3.1",
+    "schema": "ishikawa.application-release.v1",
+    "source_build_receipt_sha256": "5" * 64,
+    "source_manifest_sha256": "6" * 64,
 }
 for path, value in ((Path(identity_path), identity), (Path(receipt_path), receipt)):
     path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+Path(application_release_path).write_text(
+    json.dumps(application_release, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
 PY
 python3 -B - "$carry/runtime-build-receipt.json" "$image_sha" "$config_hex" \
   "$history_sha" "$runtime_sbom_sha" "$runtime_licenses_sha" <<'PY'
@@ -256,17 +300,17 @@ write_inventory() {
   python3 -B - "$carry" <<'PY'
 import hashlib
 import json
-import stat
 import sys
 from pathlib import Path
 root = Path(sys.argv[1])
 records = []
+executable_paths = {"deploy-ishikawa", "inspect-native-prerequisites", "verify-deployment"}
 for path in sorted(root.iterdir(), key=lambda item: item.name):
-    if not path.is_file() or path.name in {"carry-inventory.json", "SHA256SUMS"}:
+    if not path.is_file() or path.name in {"PACKAGE_MANIFEST.json", "SHA256SUMS"}:
         continue
     records.append({
         "consumer": "fixture",
-        "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
+        "mode": "0755" if path.name in executable_paths else "0644",
         "path": path.name,
         "purpose": "fixture",
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -274,13 +318,18 @@ for path in sorted(root.iterdir(), key=lambda item: item.name):
         "type": "file",
     })
 record = {
-    "control_files": ["carry-inventory.json", "SHA256SUMS"],
-    "file_count": len(records),
+    "control_files": [
+        {"consumer": "fixture", "mode": "0644", "path": "PACKAGE_MANIFEST.json", "purpose": "fixture", "type": "file"},
+        {"consumer": "fixture", "mode": "0644", "path": "SHA256SUMS", "purpose": "fixture", "type": "file"},
+    ],
     "files": records,
-    "schema": "ishikawa.carry-inventory.v1",
-    "total_bytes": sum(item["size_bytes"] for item in records),
+    "package_file_count": len(records) + 2,
+    "payload_file_count": len(records),
+    "payload_total_bytes": sum(item["size_bytes"] for item in records),
+    "primary_payloads": ["ishikawa-v1.3.1.tar.gz", "node-next-runtime-amd64.tar"],
+    "schema": "ishikawa.deployment-package-manifest.v1",
 }
-(root / "carry-inventory.json").write_text(
+(root / "PACKAGE_MANIFEST.json").write_text(
     json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
     encoding="utf-8",
 )
@@ -411,6 +460,27 @@ verify_output="$(bash "$deploy" verify 2>&1)" || fail verify_failed
 grep -Fq 'ishikawa_deployment_verification=pass;' <<<"$verify_output" \
   || fail verify_marker_missing
 
+cp -- "$carry/deployment-package-receipt.json" "$test_root/deployment-package-receipt.json"
+python3 -B - "$carry/deployment-package-receipt.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+record = json.loads(path.read_text())
+record["security_review"] = "pending_complete_exact_artifact_review"
+path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+PY
+write_manifest
+set +e
+review_state_output="$(bash "$deploy" verify 2>&1)"
+review_state_status="$?"
+set -e
+(( review_state_status != 0 )) || fail inconsistent_review_state_reported_success
+grep -Fxq 'ishikawa_deployment_verification=blocked;reason=identity_record_invalid' \
+  <<<"$review_state_output" || fail inconsistent_review_state_reason_missing
+mv -- "$test_root/deployment-package-receipt.json" "$carry/deployment-package-receipt.json"
+write_manifest
+
 install_output="$(bash "$deploy" install \
   --postgresql-port 55432 --retrieval-port 11384 --web-port 13000 \
   --gemma-port 18000 --nomic-port 18001 2>&1)" || fail install_failed
@@ -493,13 +563,17 @@ grep -Fxq 'reason=installed_configuration_invalid' <<<"$failure_output" \
 [[ ! -e "$home/Documents/Ishikawa" && ! -e "$mock_state/image" ]] \
   || fail configuration_failure_cleanup_incomplete
 
-python3 -B - "$carry/carry-receipt.json" <<'PY'
+python3 -B - "$carry/deployment-package-receipt.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 record = json.loads(path.read_text())
-record["promotion_state"] = "candidate_pending_exact_byte_requalification"
+record["release_state"] = "assembled_pending_security_inventory_and_independent_review"
+record["independent_final_review"] = "pending"
+record["security_review"] = "pending_complete_exact_artifact_review"
+record["stable_handoff"] = False
+record["target_inventory"] = "pending"
 path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
 PY
 write_manifest
@@ -514,7 +588,7 @@ grep -Fxq 'reason=carry_not_final' <<<"$candidate_output" \
   || fail candidate_preflight_mutated
 
 printf '%s\n' \
-  'verify=pass;inventory_preflight=pass;install=pass;configuration=pass;schema=pass' \
+  'verify=pass;review_state_correlation=pass;inventory_preflight=pass;install=pass;configuration=pass;schema=pass' \
   'start_status_stop=pass;replay_refusal=pass;empty_removal=pass' \
   'schema_failure_cleanup=pass;failure_cleanup=pass;candidate_refusal_before_mutation=pass'
 printf '\nSCRIPT RESULT\nishikawa_deployment_entrypoint_test=pass\n'

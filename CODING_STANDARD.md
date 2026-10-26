@@ -250,6 +250,18 @@
 - Tailscale SSH authentication is a separate security mode from ordinary OpenSSH routed over a Tailscale address. If supporting it changes authentication or host-key handling, expose and document that mode explicitly rather than inferring it from a `100.x.y.z` destination
 - Apply this standard to new scripts and bring an existing remote script into compliance when its SSH interface is materially revised; a repo-wide retrofit requires its own reviewed scope
 
+## Danko Lab Service-Forwarding Standard
+- Read `danko_lab.md` and `local/Port_Forwarding.md` before proposing, documenting, or implementing a Danko Lab SSH service forward
+- Treat `local/Port_Forwarding.md` as the canonical operator map for direct forwarding of the accepted `00Danko` service set to DankoSurface or EmceeDanko
+- Use one complete tunnel carrying Gemma `8000 -> 18000`, Nomic `8001 -> 18001`, Qwen `8002 -> 18002`, and Dalton `18080 -> 18080`; do not create application-specific aliases or forward only the first service needed
+- Bind every consumer endpoint to `127.0.0.1` and connect from the consumer directly to `00Danko`; do not transit through another consumer unless an explicit architecture decision approves the chain
+- Use the function-specific identity held on the tunnel origin, `IdentitiesOnly=yes`, `StrictHostKeyChecking=yes`, `ExitOnForwardFailure=yes`, bounded keepalives, and `-N -T`
+- Preflight all four consumer ports before launch and report every collision in one pass; do not silently select replacement ports
+- Keep route and identity independent: changing between an accepted LAN address and an operator-proved Tailscale address changes only the SSH destination address, never the user, key, host acceptance, or service map
+- State explicitly that a tunnel does not start the source services and that listener presence alone does not prove readiness, authentication, model identity, or functional behavior
+- Repair or extend the canonical forwarding script/document when the established path is insufficient; do not hand the operator a novel one-off command that drifts from the shared convention
+- When the canonical map changes, reconcile `local/Port_Forwarding.md`, `danko_lab.md`, affected forwarding scripts, and every first-class repository copy in the same reviewed change
+
 ## CLI And Operator Surface
 - Keep scripts CLI-driven rather than interactive by default unless a reviewed exception says otherwise
 - For any operator-facing command with multiple substantive stages or an

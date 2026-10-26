@@ -117,14 +117,25 @@
     API and production UI on `8384`/`3384`. A failed launch automatically
     restores v1.3. Record the promoted UI decision with Script 10 `--accept`,
     or use Script 10 `--rollback` before acceptance. Acceptance retires the
-    superseded v1.3 application root and old runtime image only after proving
-    that no container still uses that image. Boot autostart stays disabled;
-    v1.2 files and database remain historical and non-operational.
-19. Assemble only the candidate carry directory with
-    `build-carry-candidate.sh`. Promote to the stable
+    superseded v1.3 application root and old runtime image only after removing
+    exact named Ishikawa containers and stopped containers that still use that
+    exact old image, then proving no running unknown consumer remains. A
+    running unknown consumer blocks with its name, running state, and image
+    identity. Boot autostart stays disabled; v1.2 files and database remain
+    historical and non-operational.
+19. After Script 10 acceptance, assemble only the candidate deployment-package
+    directory with Script 11
+    `11_assemble-ishikawa-v1.3.1-deployment-package.sh`. Script 11 requires the
+    complete Script 09 and Script 10 lifecycle receipts, creates the canonical
+    final application-release record and classified package manifest, and
+    refuses stable promotion. Promote to the stable
     `local/artifacts/ishikawa-deployment-current/` handoff only after exact-byte
     requalification, target-independent security and license review, complete
     checklist closure, and independent final review.
+    Candidate storage may be mode-neutral (for example, a Windows-backed
+    transfer directory): `PACKAGE_MANIFEST.json` records the required Unix
+    modes, the portable verifier validates that classification, and the Tech
+    installer materializes those modes on the native target filesystem.
 20. On Tech, run the portable verifier and read-only inventory before any
     mutation. Install through the consolidated `deploy-ishikawa` entrypoint,
     create the protected catalog and manifest inside org-lab, and derive every
@@ -142,7 +153,7 @@
 - `deployment/scripts/08_build-v1.3.1-application-on-emceedanko.sh`
 - `deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh`
 - `deployment/scripts/10_promote-v1.3.1-on-emceedanko.sh`
-- `deployment/scripts/build-carry-candidate.sh`
+- `deployment/scripts/11_assemble-ishikawa-v1.3.1-deployment-package.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`
 

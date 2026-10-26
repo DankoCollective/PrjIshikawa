@@ -125,16 +125,15 @@ case "${1:-}" in
     fi
     if [[ "$*" == *'--entrypoint dpkg-query'* ]]; then
       printf 'libc6\t2.36-9+deb12u13\tamd64\n'
+      printf 'tzdata\t2026e-0+deb12u1\tall\n'
       exit 0
     fi
-    if [[ "$*" == *'--entrypoint npm'* ]]; then
-      printf '%s\n' '{"dependencies":{"next":{"version":"16.4.3"},"react":{"version":"19.2.9"},"react-dom":{"version":"19.2.9"}}}'
+    if [[ "$*" == *'--entrypoint node'* ]]; then
+      printf '%s\n' '[{"path":"node_modules/next","version":"16.4.3"},{"path":"node_modules/react","version":"19.2.9"},{"path":"node_modules/react-dom","version":"19.2.9"}]'
       exit 0
     fi
     if [[ "$*" == *'--entrypoint sha256sum'* ]]; then
       printf '%064d  %s\n' 1 /usr/local/LICENSE
-      printf '%064d  %s\n' 2 /usr/local/lib/node_modules/npm/LICENSE
-      printf '%064d  %s\n' 3 /opt/yarn-v1.22.22/LICENSE
       exit 0
     fi
     exit 93
@@ -286,20 +285,28 @@ handoff="$test_root/repo/local/artifacts/node-next-runtime-current"
   sha256sum --check --strict SHA256SUMS >/dev/null
 ) || fail local_handoff_checksum_failed
 jq -e '
-  .npm == "11.19.1"
-  and .yarn == "1.22.22"
+  .schema == "node-next-runtime-image.v3"
+  and .build_npm == "11.21.1"
+  and .build_npm_archive_sha256 == "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b"
+  and .base_bundled_npm_executed == false
+  and .base_bundled_yarn_executed == false
+  and .runtime_npm == false
+  and .runtime_yarn == false
+  and .tzdata == "2026e-0+deb12u1"
   and (.config_digest | test("^sha256:[0-9a-f]{64}$"))
   and (.history_sha256 | test("^[0-9a-f]{64}$"))' \
   "$handoff/image-identity.json" >/dev/null || fail returned_identity_incomplete
 jq -e '
-  any(.components[]; .name == "npm" and .version == "11.19.1")
-  and any(.components[]; .name == "yarn" and .version == "1.22.22")' \
+  all(.components[]; .name != "npm" and .name != "yarn")
+  and any(.components[]; .name == "tzdata" and .version == "2026e-0+deb12u1")' \
   "$handoff/sbom.cdx.json" >/dev/null || fail returned_sbom_incomplete
 jq -e '
-  (.runtime_tools | length == 3)
+  .schema == "node-runtime-license-inventory.v2"
+  and (.runtime_tools | length == 1)
   and any(.runtime_tools[]; .name == "node" and .version == "24.22.1")
-  and any(.runtime_tools[]; .name == "npm" and .version == "11.19.1")
-  and any(.runtime_tools[]; .name == "yarn" and .version == "1.22.22")' \
+  and (.build_tools | length == 1)
+  and all(.build_tools[]; .retained_in_runtime == false)
+  and any(.build_tools[]; .name == "npm" and .version == "11.21.1" and .base_bundled_copy_executed == false)' \
   "$handoff/licenses.json" >/dev/null || fail returned_license_inventory_incomplete
 [[ -f "$test_root/image-retained" ]] || fail remote_image_not_retained
 find /tmp -maxdepth 1 -type d -name 'ishikawa-runtime-build-*' -print -quit \

@@ -188,6 +188,47 @@ grep -Fq 'FROM --platform=linux/amd64 ' "$source_root/Dockerfile" \
   || block image_platform_unpinned \
     'The Dockerfile is not pinned to Linux AMD64.' \
     'Restore the frozen target platform and rerun.'
+grep -Fq 'ADD --checksum=sha256:dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b' \
+    "$source_root/Dockerfile" \
+  && grep -Fq 'node /opt/npm-11.21.1/bin/npm-cli.js ci --omit=dev --no-audit --no-fund' \
+    "$source_root/Dockerfile" \
+  || block fixed_build_tool_contract_missing \
+    'The Dockerfile does not checksum-pin and directly execute the reviewed npm 11.21.1 build tool.' \
+    'Restore the reviewed fixed build-tool path before target contact.'
+if grep -Eq '(^|RUN[[:space:]]+|&&[[:space:]]+)npm[[:space:]]+(ci|install|run|exec|cache)([[:space:]]|$)' \
+    "$source_root/Dockerfile" \
+    || grep -Eq '(^|RUN[[:space:]]+|&&[[:space:]]+)yarn([[:space:]]|$)' "$source_root/Dockerfile"; then
+  block base_bundled_package_manager_execution_found \
+    'The Dockerfile executes a package manager through the base-image PATH.' \
+    'Use only the checksum-pinned direct npm 11.21.1 path; never execute base-bundled npm or Yarn.'
+fi
+grep -Fq '&& hash -r \' "$source_root/Dockerfile" \
+  && grep -Fq '&& ! command -v npm >/dev/null 2>&1 \' "$source_root/Dockerfile" \
+  && grep -Fq '&& ! command -v yarn >/dev/null 2>&1 \' "$source_root/Dockerfile" \
+  || block package_manager_absence_proof_unsafe \
+    'The package-manager absence proof does not clear the shell command cache or suppress cached-path output.' \
+    'Restore the reviewed hash reset and command-plus-filesystem absence checks.'
+python3 -B - "$source_root/Dockerfile" <<'PY' \
+  || block base_package_manager_removed_too_late \
+    'The base-bundled package managers are not removed and proved absent before fixed npm installs dependencies.' \
+    'Move the complete base-package-manager removal and PATH absence proof before the fixed npm ci command.'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+fixed_install = text.index(
+    "node /opt/npm-11.21.1/bin/npm-cli.js ci --omit=dev --no-audit --no-fund"
+)
+required_before = (
+    "rm -rf /usr/local/lib/node_modules/npm",
+    "rm -f /usr/local/bin/npm",
+    "! command -v npm >/dev/null 2>&1",
+    "! command -v yarn >/dev/null 2>&1",
+    "! command -v corepack >/dev/null 2>&1",
+)
+if any(text.index(marker) > fixed_install for marker in required_before):
+    raise SystemExit(1)
+PY
 for decision in V13-79 V13-80 V13-81 V13-82 V13-83 V13-84 V13-85 V13-86 V13-87 V13-88 V13-89 V13-90; do
   decision_block="$(awk -v header="### ${decision} " '
     index($0, header) == 1 {capture=1}
@@ -204,7 +245,7 @@ if [[ "$mode" == '--validate-only' ]]; then
   printf '%s\n' \
     "[SOURCE] state=pass;platform=linux/amd64;image=${image_reference}" \
     '[BOUNDARY] state=pass;application_in_image=false;generated_next_in_image=false' \
-    '[NETWORK] build_time_only=pinned_base_and_lock_objects;target_downloads=false'
+    '[NETWORK] build_time_only=pinned_base_fixed_npm_archive_and_lock_objects;target_downloads=false'
   result ready
   exit 0
 fi
@@ -359,15 +400,22 @@ image_id="$("${docker_command[@]}" image inspect "$image_reference" --format '{{
     'Inspect the Docker build result and rerun.'
 "${docker_command[@]}" run --rm --network none --entrypoint sh "$image_reference" -eu -c '
   test "$(node --version)" = "v24.22.1"
-  test "$(npm --version)" = "11.19.1"
-  test "$(yarn --version)" = "1.22.22"
+  ! command -v npm
+  ! command -v npx
+  ! command -v yarn
+  ! command -v yarnpkg
+  ! command -v corepack
+  ! command -v pnpm
+  ! command -v pnpx
+  test "$(dpkg-query -W -f="\${Version}" tzdata)" = "2026e-0+deb12u1"
   node --input-type=module -e '\''import next from "next/package.json" with {type:"json"}; import react from "react/package.json" with {type:"json"}; import reactDom from "react-dom/package.json" with {type:"json"}; const expected={next:"16.4.3",react:"19.2.9",reactDom:"19.2.9"}; const actual={next:next.version,react:react.version,reactDom:reactDom.version}; if(JSON.stringify(actual)!==JSON.stringify(expected)){process.exit(1)}'\''
   printf "runtime_identity=pass\n"
-' \
-  >"$work_root/runtime-identity.txt" 2>&1 \
-  || block runtime_identity_mismatch \
-    'The built image does not expose the exact reviewed runtime versions.' \
-    'Inspect the lock and image build before rerunning.'
+' >"$work_root/runtime-identity.txt" 2>&1 || {
+  tail -n 120 "$work_root/runtime-identity.txt" | tee -a "$report_path" >&2
+  block runtime_identity_mismatch \
+    'The built image does not expose the exact reviewed runtime versions; the exact probe output precedes this detail.' \
+    'Correct the reported identity or absence check before rerunning.'
+}
 grep -Fxq 'runtime_identity=pass' "$work_root/runtime-identity.txt" \
   || block runtime_identity_marker_missing \
     'The runtime identity probe omitted its pass marker.' \
@@ -379,15 +427,19 @@ grep -Fxq 'runtime_identity=pass' "$work_root/runtime-identity.txt" \
   test ! -e /opt/nextjs/config
   test ! -e /opt/nextjs/corpus
   test -d /opt/nextjs/node_modules
+  test -f /opt/nextjs/node_modules/.package-lock.json
   test -f /opt/nextjs/package-lock.json
   test -f /usr/local/LICENSE
-  test -f /usr/local/lib/node_modules/npm/LICENSE
-  test -f /opt/yarn-v1.22.22/LICENSE
+  test ! -e /usr/local/lib/node_modules/npm
+  test ! -e /usr/local/lib/node_modules/corepack
+  test ! -e /opt/yarn-v1.22.22
   ! find /opt/nextjs -path /opt/nextjs/node_modules -prune -o -iname "*ishikawa*" -print | grep -q .
-' >/dev/null 2>&1 \
-  || block image_boundary_failed \
-    'The image is missing runtime dependencies or contains application/build state.' \
-    'Correct the Dockerfile boundary and rebuild.'
+' >"$work_root/image-boundary.txt" 2>&1 || {
+  tail -n 120 "$work_root/image-boundary.txt" | tee -a "$report_path" >&2
+  block image_boundary_failed \
+    'The image is missing runtime dependencies or contains application/build state; the exact probe output precedes this detail.' \
+    'Correct the reported Dockerfile boundary failure and rebuild.'
+}
 if "${docker_command[@]}" history --no-trunc --format '{{.CreatedBy}} {{.Comment}}' "$image_reference" \
     | grep -Eiq 'Ishikawa|Prj|phase-|Script[[:space:]]+[0-9]|Codex|EmceeDanko|DankoSurface'; then
   block image_history_jargon_found \
@@ -494,20 +546,20 @@ fi
   || { tail -n 80 "$work_root/os-packages.stderr" | tee -a "$report_path" >&2; block os_inventory_failed \
     'The exact image operating-system package inventory could not be read.' \
     'Correct the image package state before publication.'; }
-"${docker_command[@]}" run --rm --network none --entrypoint npm "$image_reference" \
-  ls --omit=dev --all --json >"$work_root/npm-installed.json" \
-  2>"$work_root/npm-installed.stderr" \
-  || { tail -n 80 "$work_root/npm-installed.stderr" | tee -a "$report_path" >&2; block npm_inventory_failed \
-    'The exact installed npm dependency inventory could not be read.' \
+"${docker_command[@]}" run --rm --network none --entrypoint node "$image_reference" \
+  -e 'const fs=require("fs");const lock=JSON.parse(fs.readFileSync("/opt/nextjs/node_modules/.package-lock.json","utf8"));const packages=Object.entries(lock.packages||{}).filter(([path,record])=>path&&record&&typeof record.version==="string").map(([path,record])=>({path,version:record.version})).sort((a,b)=>a.path.localeCompare(b.path));process.stdout.write(JSON.stringify(packages));' \
+  >"$work_root/installed-javascript.json" \
+  2>"$work_root/installed-javascript.stderr" \
+  || { tail -n 80 "$work_root/installed-javascript.stderr" | tee -a "$report_path" >&2; block javascript_inventory_failed \
+    'The exact installed JavaScript dependency inventory could not be read.' \
     'Correct the image dependency state before publication.'; }
 "${docker_command[@]}" run --rm --network none --entrypoint sha256sum "$image_reference" \
-  /usr/local/LICENSE /usr/local/lib/node_modules/npm/LICENSE \
-  /opt/yarn-v1.22.22/LICENSE >"$work_root/runtime-tool-licenses.tsv" \
+  /usr/local/LICENSE >"$work_root/runtime-tool-licenses.tsv" \
   2>"$work_root/runtime-tool-licenses.stderr" \
   || { tail -n 80 "$work_root/runtime-tool-licenses.stderr" | tee -a "$report_path" >&2; block runtime_tool_license_inventory_failed \
-    'The exact Node.js, npm, and Yarn license identities could not be read.' \
+    'The exact Node.js runtime license identity could not be read.' \
     'Correct the image license state before publication.'; }
-python3 -B - "$source_root/package-lock.json" "$work_root/npm-installed.json" \
+python3 -B - "$source_root/package-lock.json" "$work_root/installed-javascript.json" \
   "$work_root/os-packages.tsv" \
   "$artifact_stage/sbom.cdx.json" "$image_reference" "$image_id" "$config_digest" <<'PY'
 import base64
@@ -517,17 +569,13 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-lock_path, npm_path, os_path, output_path, image_reference, image_id, config_digest = sys.argv[1:]
+lock_path, installed_path, os_path, output_path, image_reference, image_id, config_digest = sys.argv[1:]
 lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
-npm_tree = json.loads(Path(npm_path).read_text(encoding="utf-8"))
-installed_npm = set()
-def collect(dependencies):
-    for name, record in dependencies.items():
-        version = record.get("version")
-        if isinstance(version, str):
-            installed_npm.add((name, version))
-        collect(record.get("dependencies", {}))
-collect(npm_tree.get("dependencies", {}))
+installed_records = json.loads(Path(installed_path).read_text(encoding="utf-8"))
+installed_npm = {
+    (record["path"].rsplit("node_modules/", 1)[-1], record["version"])
+    for record in installed_records
+}
 components = [
     {
         "bom-ref": "pkg:generic/node@24.22.1",
@@ -536,22 +584,6 @@ components = [
         "purl": "pkg:generic/node@24.22.1",
         "type": "framework",
         "version": "24.22.1",
-    },
-    {
-        "bom-ref": "pkg:npm/npm@11.19.1",
-        "licenses": [{"license": {"id": "Artistic-2.0"}}],
-        "name": "npm",
-        "purl": "pkg:npm/npm@11.19.1",
-        "type": "application",
-        "version": "11.19.1",
-    },
-    {
-        "bom-ref": "pkg:npm/yarn@1.22.22",
-        "licenses": [{"license": {"id": "BSD-2-Clause"}}],
-        "name": "yarn",
-        "purl": "pkg:npm/yarn@1.22.22",
-        "type": "application",
-        "version": "1.22.22",
     },
 ]
 seen = set()
@@ -622,7 +654,7 @@ Path(output_path).write_text(
     encoding="utf-8",
 )
 PY
-python3 -B - "$source_root/package-lock.json" "$work_root/npm-installed.json" \
+python3 -B - "$source_root/package-lock.json" "$work_root/installed-javascript.json" \
   "$work_root/os-packages.tsv" \
   "$work_root/runtime-tool-licenses.tsv" "$artifact_stage/licenses.json" <<'PY'
 import json
@@ -630,15 +662,11 @@ import sys
 from pathlib import Path
 
 lock = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-npm_tree = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-installed_npm = set()
-def collect(dependencies):
-    for name, record in dependencies.items():
-        version = record.get("version")
-        if isinstance(version, str):
-            installed_npm.add((name, version))
-        collect(record.get("dependencies", {}))
-collect(npm_tree.get("dependencies", {}))
+installed_records = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+installed_npm = {
+    (record["path"].rsplit("node_modules/", 1)[-1], record["version"])
+    for record in installed_records
+}
 javascript_packages = []
 seen = set()
 for package_path, record in sorted(lock["packages"].items()):
@@ -676,8 +704,6 @@ for line in Path(sys.argv[4]).read_text(encoding="utf-8").splitlines():
 runtime_tools = []
 for name, version, license_id, license_file in (
     ("node", "24.22.1", "MIT", "/usr/local/LICENSE"),
-    ("npm", "11.19.1", "Artistic-2.0", "/usr/local/lib/node_modules/npm/LICENSE"),
-    ("yarn", "1.22.22", "BSD-2-Clause", "/opt/yarn-v1.22.22/LICENSE"),
 ):
     license_sha256 = license_hashes.get(license_file)
     if license_sha256 is None:
@@ -690,10 +716,19 @@ for name, version, license_id, license_file in (
         "version": version,
     })
 output = {
+    "build_tools": [
+        {
+            "archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
+            "base_bundled_copy_executed": False,
+            "name": "npm",
+            "retained_in_runtime": False,
+            "version": "11.21.1",
+        },
+    ],
     "javascript_packages": javascript_packages,
     "operating_system_packages": operating_system_packages,
     "runtime_tools": runtime_tools,
-    "schema": "node-runtime-license-inventory.v1",
+    "schema": "node-runtime-license-inventory.v2",
 }
 Path(sys.argv[5]).write_text(
     json.dumps(output, sort_keys=True, separators=(",", ":")) + "\n",
@@ -724,13 +759,18 @@ record = {
     "image_reference": reference,
     "lock_sha256": lock_digest,
     "node": "24.22.1",
-    "npm": "11.19.1",
+    "base_bundled_npm_executed": False,
+    "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
     "next": "16.4.3",
     "platform": "linux/amd64",
     "react": "19.2.9",
     "react_dom": "19.2.9",
-    "schema": "node-next-runtime-image.v1",
-    "yarn": "1.22.22",
+    "runtime_npm": False,
+    "runtime_yarn": False,
+    "schema": "node-next-runtime-image.v3",
+    "tzdata": "2026e-0+deb12u1",
 }
 Path(output).write_text(
     json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
@@ -761,8 +801,15 @@ record = {
     "licenses_sha256": licenses_digest,
     "lock_sha256": lock_digest,
     "platform": "linux/amd64",
+    "base_bundled_npm_executed": False,
+    "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
+    "runtime_npm": False,
+    "runtime_yarn": False,
     "sbom_sha256": sbom_digest,
-    "schema": "node-next-runtime-build-receipt.v1",
+    "schema": "node-next-runtime-build-receipt.v3",
+    "tzdata": "2026e-0+deb12u1",
 }
 Path(output).write_text(
     json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",

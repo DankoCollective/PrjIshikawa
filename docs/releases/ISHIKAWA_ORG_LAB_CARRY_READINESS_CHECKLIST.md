@@ -466,9 +466,11 @@ atomic candidate publication, and cleanup. Evidence:
 passed exact-byte side-by-side production requalification and the operator
 accepted the v1.3.1 UI. Candidate cleanup and its checksum-bound evidence are
 complete. Frozen V13-91 and numbered Script 10 define the immediate attended
-promotion on EmceeDanko without changing the org-lab carry design. The package
-remains **NOT CARRY-READY** until promotion acceptance and every remaining
-mandatory package gate pass.
+promotion on EmceeDanko without changing the org-lab carry design. Script 10
+promotion passed with corpus-v3 unchanged and v1.3 rollback still available;
+production-port human UI acceptance is the immediate gate. The package remains
+**NOT CARRY-READY** until promotion acceptance and every remaining mandatory
+package gate pass.
 
 ## Mandatory package checklist
 

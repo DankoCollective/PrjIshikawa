@@ -218,13 +218,31 @@ acceptance, explicit rollback, failed-launch automatic restoration, database
 inventory refusal, old-image consumer refusal, exact-evidence validation,
 WSL-safe publication, returned-receipt refusal, nested target failure, signal
 propagation, and remote cleanup. Together with the pre-existing suite, all 18
-deployment harnesses pass. Script 09 cleanup is complete; the attended Script
-10 target lifecycle has not yet run.
+deployment harnesses pass. Script 09 cleanup is complete.
+
+Script 10 `--run` then passed. It verified the exact application, image, and
+complete Script 09 lifecycle; checked accepted v1.3, corpus-v3, model routes,
+ports, and disabled boot posture before the switch; stopped v1.3 only at the
+switch boundary; moved the stopped durable database state unchanged; and
+started v1.3.1 on `5432`/`8384`/`3384`. The promoted inventory remains 30
+documents, 150 pages, 786 authoritative chunks, 943 retrieval candidates, 157
+retrieval-scoring-only candidates, 943 embeddings, 240 relationship records,
+and 90 relationship pairs. The receipt records no database, schema, or corpus
+mutation and leaves the exact v1.3 rollback available pending production-port
+human UI acceptance. Exact evidence identities are:
+
+- promotion report SHA-256:
+  `79a1e36d6d5a6e434f380906d09015e610f6661455f1c5acd503bc1b67899d32`;
+- promotion receipt SHA-256:
+  `e7d5d267cf8f9916f2d003f3b8ec184d3e829512b728a912b0162d4cbf6dfe32`;
+  and
+- promotion evidence-manifest SHA-256:
+  `ad5cb98188ed972b96bba9324e0a57006c66d8c4c47047b8c8185b48705643ce`.
 
 The remaining ordered gates are:
 
-1. promote the exact v1.3.1 bytes with Script 10, review the production-port
-   UI, and record acceptance or explicitly roll back before acceptance;
+1. review the promoted production-port UI and record Script 10 acceptance or
+   explicitly roll back before acceptance;
 2. complete the exact-image and exact-application advisory disposition from
    their recorded SBOMs;
 3. accept the read-only Tech inventory and resolve any required offline native

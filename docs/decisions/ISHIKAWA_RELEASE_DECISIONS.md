@@ -8,25 +8,21 @@ and the final org-lab carry posture.
 
 ## Current Status
 
-Items V13-60 through V13-78 are frozen through the operator-approved release,
-qualified EmceeDanko deployment, rollback-waived integrated proof, and human
-UI acceptance. On 2026-10-26 the operator froze V13-79 through V13-81 and
-V13-83 through V13-89 for the final org-lab carry. These decisions select a
-v1.3.1 security/runtime correction, patched Node 24 and Next.js 16 dependency
-lines, production Next.js operation, a canonical least-privilege target
-layout, demo PostgreSQL without backup/restore proof, portable model
-configuration, protected in-lab black-corpus catalog/manifest creation, a
-minimal carry set, exact-byte requalification, and inventory-driven native
-prerequisites. V13-82 remains open only to confirm the minimal AMD64 Docker
-image archive handoff. The post-freeze consistency review also found that
-V13-83's new dedicated service identity conflicts with the previously accepted
-Tech `%h/Documents/Ishikawa` and user-unit posture. The operator must confirm
-that replacement or amend V13-83 before implementation. Exact fixed dependency
-pins and target inventory values are implementation evidence, not additional
-architecture decisions unless they conflict with a frozen posture. No
-black-corpus access, target contact, service or database mutation, credential
-handling, or package promotion is authorized by these planning decisions
-alone.
+Items V13-60 through V13-80, V13-84 through V13-86, and V13-88 through V13-89
+are frozen through the accepted v1.3 baseline and operator-selected org-lab
+posture. Operator clarification and a completed two-agent review established
+corrected replacement text for V13-81, V13-82, V13-83, and V13-87. Those four
+items are now `Ready to freeze`: use an app-free generic Node/Next image; mount
+the external application read-only; build ephemeral `.next` state and run
+`next start` in the same container lifecycle; retain the accepted Tech
+`$HOME/Documents/Ishikawa`, installing-operator, systemd-user-unit, loopback,
+and boot-disabled posture; and carry the application and generic image as
+separate primary payloads. Exact fixed dependency pins and target inventory
+values are implementation evidence, not additional architecture decisions
+unless they conflict with a frozen posture. Implementation remains paused
+until the operator freezes the four corrected items. No black-corpus access,
+target contact, service or database mutation, credential handling, or package
+promotion is authorized by these planning decisions alone.
 
 ## Decisions
 
@@ -473,56 +469,69 @@ is required only if qualification forces a change away from Node 24 or Next.js
 
 ### V13-81 — Production Next.js runtime
 
-Decision: Use `next build` plus `next start`, read-only runtime source, and
-checksum-bound production build output created by the exact reviewed image.
+Decision: For every permanent web start, launch one container from the exact
+generic runtime image, mount the external Ishikawa source read-only, give only
+`/opt/nextjs/.next` a bounded writable tmpfs, run `next build`, validate build
+success against the prevalidated source/config/image identities, and then
+`exec next start` in that same container. Removing the container removes the
+generated build state.
 
-Status: Frozen by operator direction on 2026-10-26.
+Status: Ready to freeze.
 
-Recommendation: Remove `next dev` from the permanent deployment and qualify
-build, start, readiness, proxies, static assets, restart, stop, cleanup, and
-bounded writable state against the final package.
+Recommendation: Rebuild bounded ephemeral `.next` state on each start rather
+than publishing persistent build output. Keep `next dev` only as a separate
+local development/test action and qualify build timeout, capacity, progress,
+signals, failure cleanup, readiness, proxies, static assets, restart, and stop.
 
 Reason/Evidence: The attended EmceeDanko proof intentionally used a
 development server and disposable `.next` state. That proves the application
-experience but not a permanent production-mode build/start lifecycle.
+experience but not a permanent production-mode build/start lifecycle. The
+completed two-agent review found that persistent `state/web-build` publication
+would add stale-build, replacement, and recovery machinery the attended demo
+does not need. Accepted startup cost is preferable to that added state.
 
-### V13-82 — Minimal AMD64 image handoff
+### V13-82 — Generic AMD64 runtime-image handoff
 
-Decision: Decide the minimum exact web-container image file and identity record
-that Tech needs to load and run the frozen production web runtime in org-lab
-without rebuilding it or downloading a substitute.
+Decision: Carry one checksum-bound generic Linux AMD64 Node/Next runtime-image
+archive as a payload separate from Ishikawa. The image contains exact reviewed
+runtime dependencies but no Ishikawa source, configuration, corpus,
+credentials, database state, target state, or generated `.next` output.
 
-Status: Open.
+Status: Ready to freeze.
 
-Recommendation: Carry one Linux AMD64 Docker image archive containing the
-already-built production Ishikawa web app, its SHA-256 and image identity, and
-the Dockerfile/lockfile that produced it. Tech verifies the archive and runs
-`docker load`; Tech does not use a registry, rebuild the image, or download
-dependencies. Do not build or carry ARM64 for this deployment.
+Recommendation: Export the reviewed generic image to one Docker archive and
+carry its SHA-256, image identity, Dockerfile, exact base identity, lockfile,
+SBOM, license record, advisory disposition, and build receipt. Tech verifies
+and runs `docker load`; Tech does not use a registry, rebuild the image, or
+download dependencies. Do not build or carry ARM64 for this deployment.
 
-Reason/Evidence: A Docker tag is only a name. The tested image bytes must be
-exported to a file to travel to Tech. SBOM, license, and advisory evidence are
-already required by V13-80 and the package checklist and do not create a
-second image design.
+Reason/Evidence: The operator clarified that Tech must use the same reusable
+image/external-application architecture as EmceeDanko so application changes
+do not force an image rebuild. A Docker tag alone is not transferable byte
+identity; the generic image archive is the exact offline payload. V13-81
+supplies application source and ephemeral build state only at runtime.
 
-### V13-83 — Canonical least-privilege target layout
+### V13-83 — Accepted Tech user-scoped layout
 
-Decision: Use one stable product layout with function-based target names, one
-dedicated least-privilege service identity, explicit loopback listeners, the
-minimum service set, and boot-disabled first proof. Resolve exact target values
-through package defaults and read-only preflight before mutation.
+Decision: Install at `$HOME/Documents/Ishikawa`; use the installing Tech
+operator as the native process and numeric web-container identity; use the
+packaged systemd user units; create no Linux user or group; use explicit
+loopback listeners resolved through inventory and validated configuration; and
+keep boot autostart and user lingering disabled for first proof.
 
-Status: Frozen by operator direction on 2026-10-26.
+Status: Ready to freeze.
 
-Recommendation: Keep application, configuration, state, credential injection,
-and logging responsibilities in their canonical final locations; install no
-development, candidate, script-numbered, test-host, or repository-named target
-objects.
+Recommendation: Preserve the accepted Tech home-directory and user-service
+posture rather than introducing a dedicated service account or `/opt`, `/etc`,
+or `/var/lib` application layout. Treat later unattended or boot-start
+operation as a separate post-acceptance decision.
 
-Reason/Evidence: The EmceeDanko attended layout is a package-local validation
-arrangement, and the historical packaged unit assumes a home-directory path.
-Neither is an appropriate permanent target layout. Exact ports and paths are
-preflight values unless inventory reveals a conflict with this posture.
+Reason/Evidence: The operating-surface record already defines
+`%h/Documents/Ishikawa`, the installing operator, and systemd user units as the
+accepted Tech design. A dedicated account adds provisioning, ownership, unit,
+install, removal, and operating work without benefiting this attended
+boot-disabled demo. User lingering is unnecessary while the operator is
+present and remains disabled.
 
 ### V13-84 — Demo PostgreSQL without backup/restore proof
 
@@ -578,20 +587,27 @@ document, page, chunk, relationship, embedding, or acceptance counts.
 
 ### V13-87 — Minimal canonical carry set
 
-Decision: Carry the smallest authoritative final file set needed to install,
-configure, run, verify, and remove Ishikawa from a clean supported baseline,
-plus only inventory-required offline prerequisites.
+Decision: Carry the smallest authoritative final set with the external
+Ishikawa application archive and generic AMD64 Node/Next runtime-image archive
+as separate primary payloads. Neither is nested in the other. Add only the
+deployment/verifier/operator/security identity records and any
+inventory-required offline prerequisites needed to install, configure, run,
+verify, and remove the demo.
 
-Status: Frozen by operator direction on 2026-10-26.
+Status: Ready to freeze.
 
-Recommendation: Include one final application artifact, one final AMD64 web
-image archive after V13-82 is resolved, one consolidated deployment entrypoint,
+Recommendation: Carry one final external application artifact, one app-free
+generic AMD64 runtime-image archive, one consolidated deployment entrypoint,
 one verifier, one operator command sheet, and their required identity, SBOM,
-license, advisory, and checksum records. Keep corpus material separate.
+license, advisory, and checksum records. Add native prerequisites only when
+V13-89 and target inventory require them. Carry no corpus input or generated
+`.next` output.
 
 Reason/Evidence: The deployable-package standard forbids repair chains,
 superseded files, duplicated payloads, unclassified content, and repository
-history in the normal fresh-install lane.
+history in the normal fresh-install lane. The operator and both reviewing
+agents agree that the image is a reusable dependency layer and application
+source remains external.
 
 ### V13-88 — Exact-byte requalification and stable promotion
 

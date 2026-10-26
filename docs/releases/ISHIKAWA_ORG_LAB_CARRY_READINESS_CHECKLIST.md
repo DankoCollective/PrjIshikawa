@@ -13,19 +13,22 @@
   `LAB_RUN_PATH_STANDARD.md`
 
 This file is a readiness ledger and structured decision record. On 2026-10-26
-the operator froze `CARRY-D01`, `CARRY-D02`, `CARRY-D03`, and `CARRY-D05`
-through `CARRY-D11`, with the demo and black-corpus qualifications recorded in
-those items. `CARRY-D04` remains open. The matching authoritative decisions
-are in `docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`.
+the operator froze `CARRY-D01`, `CARRY-D02`, and `CARRY-D06` through
+`CARRY-D08`, `CARRY-D10`, and `CARRY-D11`. The operator also froze earlier
+wording for D03, D05, and D09, but the subsequent operator clarification and
+two-agent review established that those items require corrected replacement
+text. Corrected D03, D04, D05, and D09 are now `Ready to freeze`; they are not
+implementation authority until the operator approves them. The matching
+authoritative decisions are in
+`docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`.
 
 ## Current review boundary
 
-Freezing these decisions authorizes their bounded local implementation after
-`CARRY-D04` is resolved. It does not itself authorize target contact,
-black-corpus access, service or database mutation, credential handling, or
-package promotion. Leave the accepted attended v1.3 runtime on EmceeDanko
-unchanged until an operator-facing qualification action is separately
-authorized.
+Implementation remains paused until corrected D03, D04, D05, and D09 are
+operator-frozen. No current decision authorizes target contact, black-corpus
+access, service or database mutation, credential handling, or package
+promotion. Leave the accepted attended v1.3 runtime on EmceeDanko unchanged
+until an operator-facing qualification action is separately authorized.
 
 The desired carry time is a target, not a reason to waive a mandatory gate. If
 any blocking item below remains incomplete, the package does not travel.
@@ -120,13 +123,11 @@ These findings prevent a carry-ready declaration today:
 
 ## Carry decisions
 
-The following items use the required decision-list shape. Ten are frozen by
-operator direction on 2026-10-26. `CARRY-D04` is the sole open package-design
-item. A post-freeze consistency review also found that `CARRY-D05`, as written,
-would replace the previously accepted Tech home-directory/user-unit design;
-that conflict requires operator reconciliation before implementation. Exact
-target facts remain preflight inputs rather than new architecture decisions
-unless inventory conflicts with a frozen posture.
+The following items use the required decision-list shape. Seven remain frozen
+by operator direction on 2026-10-26. Corrected D03, D04, D05, and D09 are
+`Ready to freeze` after operator clarification and previous-agent/current-agent
+agreement. Exact target facts remain preflight inputs rather than new
+architecture decisions unless inventory conflicts with a frozen posture.
 
 ### CARRY-D01 — Release identity after security/runtime changes
 
@@ -166,57 +167,70 @@ from the frozen Node 24 or Next.js 16 lines.
 
 ### CARRY-D03 — Permanent web runtime
 
-Decision: Use `next build` plus `next start`, read-only runtime source, and
-checksum-bound production build output created by the exact reviewed image.
+Decision: For every permanent web start, launch one container from the exact
+generic runtime image, mount the external Ishikawa source read-only, give only
+`/opt/nextjs/.next` a bounded writable tmpfs, run `next build`, validate build
+success against the prevalidated source/config/image identities, and then
+`exec next start` in that same container. Removing the container removes the
+generated build state.
 
-Status: Frozen by operator direction on 2026-10-26.
+Status: Ready to freeze.
 
-Recommendation: Use `next build` plus `next start`, keep application source
-read-only at runtime, and package or persist only checksum-bound build output
-created by the exact reviewed image. Do not use `next dev` in the permanent
-deployment.
+Recommendation: Rebuild bounded ephemeral `.next` state on each start rather
+than publishing persistent build output. Keep `next dev` only as a separate
+local development/test action; never use it for the permanent demo runtime.
 
 Reason/Evidence: The attended proof intentionally used a development runtime
-and disposable `.next` tmpfs. Production build-output persistence and restart
-behavior have not been qualified.
+and disposable `.next` tmpfs. The previous agent determined that persistent
+`state/web-build` publication adds stale-build, replacement, and recovery
+machinery the attended demo does not need. Same-container build/start keeps the
+app outside the image, source read-only, generated state bounded and ephemeral,
+and production `next start` deterministic at the cost of accepted startup
+time. Build timeout, tmpfs capacity, progress, signals, failure cleanup,
+liveness, readiness, assets, and proxy behavior must be qualified end to end.
 
-### CARRY-D04 — Carryable AMD64 web image
+### CARRY-D04 — Generic AMD64 runtime-image handoff
 
-Decision: Decide the minimum exact web-container image file and identity record
-that Tech needs in order to load and run the frozen production web runtime in
-org-lab without rebuilding it or downloading a substitute.
+Decision: Carry one checksum-bound generic Linux AMD64 Node/Next runtime-image
+archive as a payload separate from Ishikawa. The image contains exact reviewed
+runtime dependencies but no Ishikawa source, configuration, corpus,
+credentials, database state, target state, or generated `.next` output.
 
-Status: Open.
+Status: Ready to freeze.
 
-Recommendation: Carry one Linux AMD64 Docker image archive containing the
-already-built production Ishikawa web app, its SHA-256 and image identity, and
-the Dockerfile/lockfile that produced it. Tech verifies the archive and runs
-`docker load`; Tech does not use a registry, rebuild the image, or download
-dependencies. Do not build or carry ARM64 for this deployment.
+Recommendation: Export the reviewed generic image to one Docker archive and
+carry its SHA-256, image identity, Dockerfile, exact base identity, lockfile,
+SBOM, license record, advisory disposition, and build receipt. Tech verifies
+and runs `docker load`; Tech does not use a registry, rebuild the image, or
+download dependencies. Do not build or carry ARM64 for this deployment.
 
-Reason/Evidence: This is the practical purpose of item 4. A Docker tag is only
-a name and cannot be carried by itself. The actual image archive is required
-so the tested bytes can be copied to Tech and loaded offline. The broader SBOM,
-license, and advisory records are already mandatory under `SEC-01` through
-`SEC-04`; they do not require a second image design.
+Reason/Evidence: The operator clarified that Tech must use the same reusable
+image/external-application architecture as EmceeDanko so application changes
+do not force an image rebuild. A Docker tag alone is not transferable byte
+identity; the generic image archive is the exact offline payload. D03 supplies
+application source and ephemeral build state only at container runtime.
 
 ### CARRY-D05 — Canonical target layout and service posture
 
-Decision: Use one stable product layout with function-based target names, one
-dedicated least-privilege service identity, explicit loopback listeners, the
-minimum service set, and boot-disabled first proof. Resolve exact target values
-through the package defaults and preflight inventory before mutation.
+Decision: Install at `$HOME/Documents/Ishikawa`; use the installing Tech
+operator as the native process and numeric web-container identity; use the
+packaged systemd user units; create no Linux user or group; use explicit
+loopback listeners resolved through inventory and validated configuration; and
+keep boot autostart and user lingering disabled for first proof.
 
-Status: Frozen by operator direction on 2026-10-26.
+Status: Ready to freeze.
 
-Recommendation: Use one stable product layout with function-based names, one
-dedicated least-privilege service identity, explicit loopback listeners, and
-the minimum service set. Keep autostart disabled for first proof and decide
-enablement only after the installed runtime is accepted.
+Recommendation: Preserve the accepted Tech home-directory and user-service
+posture rather than introducing a dedicated service account or `/opt`, `/etc`,
+or `/var/lib` application layout. Treat later unattended or boot-start
+operation as a separate post-acceptance decision.
 
-Reason/Evidence: The EmceeDanko attended layout is package-local and the
-packaged historical unit assumes a home-directory installation. Neither is an
-approved permanent org-lab topology.
+Reason/Evidence: `docs/operations/ISHIKAWA_V1_3_OPERATING_SURFACE.md` already
+defines `%h/Documents/Ishikawa`, the installing operator, and systemd user
+units as the accepted Tech design. A dedicated account would add provisioning,
+ownership, unit, install, removal, and operating work without benefiting this
+attended boot-disabled demo. User lingering is unnecessary while the operator
+is present and remains disabled.
 
 ### CARRY-D06 — PostgreSQL ownership and recovery
 
@@ -275,22 +289,26 @@ repository or carry-package access.
 
 ### CARRY-D09 — Final carry contents
 
-Decision: Carry the smallest authoritative final file set needed to install,
-configure, run, verify, and remove Ishikawa from a clean supported baseline,
-plus only inventory-required offline prerequisites.
+Decision: Carry the smallest authoritative final set with the external
+Ishikawa application archive and the generic AMD64 Node/Next runtime-image
+archive as separate primary payloads. Neither is nested in the other. Add only
+the deployment/verifier/operator/security identity records and any
+inventory-required offline prerequisites needed to install, configure, run,
+verify, and remove the demo.
 
-Status: Frozen by operator direction on 2026-10-26.
+Status: Ready to freeze.
 
-Recommendation: Carry one final application artifact, one final AMD64 runtime
-image archive, one consolidated deployment entrypoint, one verifier, one
-operator README/command sheet, and their identity, SBOM, license, advisory,
-and checksum records. Add a separately controlled native-prerequisite bundle
-only if `CARRY-D11` and target inventory prove it is needed. Keep corpus inputs
-in their separately controlled lane.
+Recommendation: Carry one final external application artifact, one app-free
+generic AMD64 runtime-image archive, one consolidated deployment entrypoint,
+one verifier, one operator README/command sheet, and their identity, SBOM,
+license, advisory, and checksum records. Add a separately controlled native
+prerequisite bundle only if D11 and target inventory prove it is needed. Carry
+no corpus input or generated `.next` output.
 
 Reason/Evidence: The coding standard forbids repair chains, superseded files,
 unclassified content, duplicate payloads, and repository history in a fresh
-deployment package.
+deployment package. The operator and previous agent confirmed that the image
+is a reusable dependency layer and that application source remains external.
 
 ### CARRY-D10 — Qualification, promotion, and supersession
 
@@ -329,19 +347,19 @@ operating-system packages, and the accepted EmceeDanko host already supplied
 them. That does not prove org-lab has compatible bytes or permit the target to
 download replacements during deployment.
 
-## Post-freeze discussion items
+## Two-agent review reconciliation
 
-- **RECON-01 — Unfrozen image handoff.** `CARRY-D04`/V13-82 is the only
-  unfrozen package-design decision. Its reduced scope is one already-built
-  Linux AMD64 Ishikawa web image archive that Tech verifies and loads offline,
-  plus the checksum and build identity needed to prove it is the tested image.
-- **RECON-02 — Tech layout conflict.** `CARRY-D05`/V13-83 currently selects a
-  dedicated service identity and new canonical layout. The existing accepted
-  Tech contract instead uses `%h/Documents/Ishikawa`, packaged user units, and
-  the installing operator account; Ishikawa creates no Linux user or group.
-  Confirming the new service-account posture would require package, unit,
-  permission, install, and removal changes. Amending D05 to the existing Tech
-  contract is the smaller path.
+- **RECON-01 — Ready amendments.** Corrected D03, D04, D05, and D09 now express
+  one coherent design: external application, app-free generic runtime image,
+  same-container production build/start with bounded ephemeral `.next`, the
+  accepted Tech operator/home-directory/user-unit layout, and separate primary
+  carry payloads. Both reviewing agents agree; operator freeze is the remaining
+  decision gate.
+- **RECON-02 — No persistent production build state.** The provisional
+  `state/web-build` design is rejected for the first demo. Rebuild `.next` on
+  every start and let container removal destroy it. Persistent generated-state
+  publication may be proposed later only if measured startup cost justifies
+  the extra lifecycle.
 - **RECON-03 — Implementation evidence, not new decisions.** Exact fixed patch
   versions under D02; exact Tech ports, capacity, and prerequisite versions;
   and the protected `black_corpus` source path are values resolved by local
@@ -382,9 +400,10 @@ download replacements during deployment.
   environments, caches, bytecode, logs, raw reports, editor files, temporary
   files, test output, source documents, vectors, database dumps, model weights,
   OS package caches, credentials, private keys, tokens, and environment files
-  from the application archive and carry directory. The single final web image
-  may contain only its exact pinned production runtime dependencies and
-  checksum-bound production build output under D02 through D04. Evidence: ___;
+  from the application archive and carry directory. The generic image may
+  contain only its exact pinned runtime dependencies; it contains no Ishikawa
+  source or application-specific build output. The ephemeral `.next` output
+  exists only in the bounded tmpfs of a running web container. Evidence: ___;
   reviewer/date: ___.
 - [ ] **SIZE-04 — MUST.** Include first-party tests only if the final verifier
   executes them from the installed layout; otherwise keep full regression
@@ -413,9 +432,10 @@ download replacements during deployment.
   `candidate`, `copy`, numeric-repair, or backup variants beside a canonical
   target. Evidence: ___; reviewer/date: ___.
 - [ ] **PATH-04 — MUST.** Materialize final patched source, configuration,
-  build output, image, and schema before packaging. The installer does not
-  replay development fixes to construct the intended baseline. Evidence: ___;
-  reviewer/date: ___.
+  generic runtime image, schema, and same-container build/start procedure
+  before packaging. Do not package application-specific `.next` output. The
+  installer does not replay development fixes to construct the intended
+  baseline. Evidence: ___; reviewer/date: ___.
 - [ ] **PATH-05 — MUST.** Keep upgrade or recovery deltas outside the clean
   baseline unless the operator explicitly selects a separately tested upgrade
   mode. Evidence: ___; reviewer/date: ___.
@@ -494,9 +514,10 @@ disposition.
   checkout and compare byte-for-byte identities, or document and eliminate
   every nondeterministic field before acceptance. Evidence: ___;
   reviewer/date: ___.
-- [ ] **BUILD-03 — MUST.** Build/export the final Linux AMD64 image, record its
-  image ID/config digest/platform, and verify the standalone archive after a
-  clean load. Evidence: ___; reviewer/date: ___.
+- [ ] **BUILD-03 — MUST.** Build/export the final app-free generic Linux AMD64
+  runtime image, record its image ID/config digest/platform, and verify the
+  standalone archive and absence of Ishikawa source/build output after a clean
+  load. Evidence: ___; reviewer/date: ___.
 - [ ] **BUILD-04 — MUST.** Verify every sidecar against the artifact from the
   final directory and independently recompute every SHA-256. Evidence: ___;
   reviewer/date: ___.
@@ -519,9 +540,10 @@ disposition.
   configuration validation, and checksum verification against exact final
   bytes. Evidence: ___; reviewer/date: ___.
 - [ ] **TEST-03 — MUST.** Prove the final production web workflow end to end:
-  build, start, liveness, readiness, home, static assets, Retrieval API proxy,
-  restart, stop, cleanup, and bounded writable-state behavior. Evidence: ___;
-  reviewer/date: ___.
+  same-container build/start, build timeout and failure, bounded tmpfs capacity,
+  liveness, readiness, home, static assets, Retrieval API proxy, restart with a
+  fresh build, stop, signal propagation, and complete tmpfs cleanup. Evidence:
+  ___; reviewer/date: ___.
 - [ ] **TEST-04 — MUST.** Exercise clean install, same-version replay,
   interrupted install, failure before and after each mutation boundary,
   cleanup, drift refusal, removal, and the frozen recovery/rollback posture.
@@ -568,11 +590,11 @@ disposition.
 ### 9. Final carry set and authorization
 
 - [ ] **FINAL-01 — MUST.** The final directory contains only the frozen carry
-  set: application artifact, runtime image archive, deployment entrypoint,
-  verifier, operator documentation, identity/receipt records, SBOM/license and
-  advisory records, one complete SHA-256 manifest, and any separately frozen
-  prerequisite artifact required by target inventory. Evidence: ___;
-  reviewer/date: ___.
+  set: separate external-application and app-free generic runtime-image
+  archives, deployment entrypoint, verifier, operator documentation,
+  identity/receipt records, SBOM/license and advisory records, one complete
+  SHA-256 manifest, and any separately frozen prerequisite artifact required
+  by target inventory. Evidence: ___; reviewer/date: ___.
 - [ ] **FINAL-02 — MUST.** A clean machine or clean isolated harness verifies
   the carry directory without relying on repository-relative files, network
   downloads, unrecorded tools, or developer state. Evidence: ___;
@@ -597,8 +619,8 @@ disposition.
 
 ### Morning review
 
-1. Resolve `CARRY-D04` and the `CARRY-D05` Tech-layout conflict.
-2. Reconcile any resulting decision amendment in the authoritative list.
+1. Review and freeze corrected D03, D04, D05, and D09.
+2. Confirm the authoritative decision list and this checklist agree.
 3. Reconcile release documentation and create the content-free human
    acceptance receipt.
 4. Front-load org-lab inventory, license, advisory, platform, and dependency
@@ -625,4 +647,4 @@ disposition.
 
 ## Final status
 
-`carry_ready=blocked;reason=image_handoff_and_tech_layout_reconciliation_pending`
+`carry_ready=blocked;reason=corrected_D03_D04_D05_D09_operator_freeze_pending`

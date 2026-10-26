@@ -458,9 +458,13 @@ corpus execution, independent final review, or stable-handoff promotion.
 Corrected Script 07 passed build, transfer, publication, independent return
 verification, and cleanup. Its evidence binds the exact archive tag, eight
 checksum-addressed layers, OCI config, canonical history, image ID, SBOM, and
-Node/npm/Yarn license records. Current next gate: run Script 08 to build the
-external application candidate against that retained native AMD64 image. The
-package remains **NOT CARRY-READY**.
+Node/npm/Yarn license records. Script 08 then passed all 486 native tests, all
+17 JavaScript tests, the exact-image production build, two clean deterministic
+assemblies, fresh installation, application SBOM/license, verified return,
+atomic candidate publication, and cleanup. Evidence:
+`deployment/evidence/ISHIKAWA_V1_3_1_APPLICATION_BUILD.md`. Current next gate:
+run Script 09 for exact-byte side-by-side production requalification and human
+acceptance on EmceeDanko. The package remains **NOT CARRY-READY**.
 
 ## Mandatory package checklist
 
@@ -613,10 +617,13 @@ disposition.
   package manifests, exact lockfiles, build command, build environment,
   normalized archive rules, and source revision for every final artifact.
   Evidence: ___; reviewer/date: ___.
-- [ ] **BUILD-02 — MUST.** Build the application package twice from a clean
+- [x] **BUILD-02 — MUST.** Build the application package twice from a clean
   checkout and compare byte-for-byte identities, or document and eliminate
-  every nondeterministic field before acceptance. Evidence: ___;
-  reviewer/date: ___.
+  every nondeterministic field before acceptance. Evidence: Script 08 and
+  `deployment/evidence/ISHIKAWA_V1_3_1_APPLICATION_BUILD.md`, application
+  archive SHA-256
+  `2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69`;
+  reviewer/date: Script 08 plus local independent artifact review, 2026-10-26.
 - [x] **BUILD-03 — MUST.** Build/export the final app-free generic Linux AMD64
   runtime image natively on EmceeDanko through Script 07, record its image
   ID/config digest/platform, and verify the standalone archive and absence of
@@ -639,9 +646,12 @@ disposition.
 
 ### 7. Executable qualification
 
-- [ ] **TEST-01 — MUST.** Run the complete native and web suites against the
+- [x] **TEST-01 — MUST.** Run the complete native and web suites against the
   final source and dependency set. Record exact counts without treating old
-  counts as proof for changed bytes. Evidence: ___; reviewer/date: ___.
+  counts as proof for changed bytes. Evidence: Script 08 ran 486 native tests
+  and 17 JavaScript tests against the exact Script 08 source and retained
+  Script 07 image; `ISHIKAWA_V1_3_1_APPLICATION_BUILD.md`; reviewer/date:
+  Script 08 plus local independent report review, 2026-10-26.
 - [ ] **TEST-02 — MUST.** Run package verification, clean extraction,
   fresh-install, installed-layout parity, canonical schema installation,
   configuration validation, and checksum verification against exact final

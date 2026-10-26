@@ -1,0 +1,679 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Purpose:
+#   Requalify the exact external Ishikawa v1.3.1 application and exact generic
+#   runtime image together on EmceeDanko without changing the accepted v1.3
+#   application, database, services, or boot posture.
+#
+# Mental model:
+#   Use the accepted corpus-v3 database read-only, run a package-local
+#   Retrieval API on a private qualification port, and build/start the external
+#   web source in one hardened container with only .next writable in a bounded
+#   tmpfs. Exercise the complete synthetic frontier and a fresh-container
+#   rebuild, then leave the exact candidate running only for attended review.
+#
+# This helper is transferred and invoked only by numbered Script 09.
+
+readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
+readonly expected_runtime_archive_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
+readonly expected_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
+readonly expected_image_reference='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
+readonly expected_frontier_cases_sha256='2ba5f61518ca17b0eaa26f024abe35418b050f9bd8d5b3e1677062c9d7a626a3'
+readonly expected_evaluator_sha256='9d03a2f257b5fee34bdb6683456bafba71a56338b220026394f04335f6db5a09'
+readonly candidate_root="$HOME/Documents/Ishikawa-v1.3.1-qualification"
+readonly accepted_root="$HOME/Documents/Ishikawa-v1.3-attended"
+readonly container_name='ishikawa-v1.3.1-qualification-web'
+readonly ui_port=3385
+readonly retrieval_port=8385
+readonly postgresql_port=5432
+readonly web_tmpfs_bytes=536870912
+
+mode="${1:-}"
+shift || true
+payload_root=''
+result_path=''
+expected_hostname='EmceeDanko'
+expected_os_version='24.04'
+expected_architecture='amd64'
+gemma_base_url='http://127.0.0.1:8000'
+nomic_base_url='http://127.0.0.1:8001'
+expected_helper_sha256=''
+stage='argument_validation'
+complete=false
+mutation_started=false
+candidate_created=false
+api_pid=''
+active_pid=''
+docker_command=()
+cleanup_failed=false
+gemma_key=''
+nomic_key=''
+postgresql_password=''
+
+emit() {
+  printf '[%s] %s\n' "$1" "$2"
+}
+
+write_result() {
+  local state="$1" reason="${2:-none}" detail="${3:-none}"
+  [[ -n "$result_path" ]] || return 0
+  {
+    printf 'schema=ishikawa.emceedanko-v1.3.1-action.v1\n'
+    printf 'mode=%s\n' "${mode#--}"
+    printf 'state=%s\n' "$state"
+    printf 'reason=%s\n' "$reason"
+    printf 'detail=%s\n' "$detail"
+    printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
+    printf 'runtime_archive_sha256=%s\n' "$expected_runtime_archive_sha256"
+    printf 'image_id=%s\n' "$expected_image_id"
+    printf 'ui_port=%s\nretrieval_api_port=%s\npostgresql_port=%s\n' \
+      "$ui_port" "$retrieval_port" "$postgresql_port"
+    printf 'accepted_v1_3_mutated=false\naccepted_database_mutated=false\nboot_autostart=false\n'
+  } >"$result_path"
+  chmod 0600 "$result_path"
+}
+
+container_exists() {
+  "${docker_command[@]}" inspect "$container_name" >/dev/null 2>&1
+}
+
+container_running() {
+  [[ "$("${docker_command[@]}" inspect --format '{{.State.Running}}' "$container_name" 2>/dev/null || true)" == true ]]
+}
+
+pid_is_candidate_api() {
+  local pid="$1" command_line=''
+  [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || return 1
+  command_line="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ "$command_line" == *"$candidate_root/scripts/ishikawa-retrieval-api --serve"* ]]
+}
+
+port_listening() {
+  ss -H -ltn "( sport = :$1 )" 2>/dev/null | grep -q .
+}
+
+http_status() {
+  curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --connect-timeout 2 --max-time 8 "$1" 2>/dev/null || printf 000
+}
+
+http_ready() {
+  [[ "$(http_status "$1")" == 200 ]]
+}
+
+wait_http() {
+  local url="$1" seconds="$2" label="$3" elapsed=0 next_heartbeat=25
+  while (( elapsed < seconds )); do
+    http_ready "$url" && return 0
+    sleep 1
+    elapsed=$((elapsed + 1))
+    if (( elapsed >= next_heartbeat )); then
+      emit "$label" "state=starting;elapsed_seconds=$elapsed"
+      next_heartbeat=$((next_heartbeat + 25))
+    fi
+  done
+  return 1
+}
+
+prepare_docker() {
+  if docker info >/dev/null 2>&1; then
+    docker_command=(docker)
+  else
+    sudo -v >/dev/null 2>&1 || return 1
+    docker_command=(sudo docker)
+    "${docker_command[@]}" info >/dev/null 2>&1
+  fi
+}
+
+stop_candidate() {
+  local pid_file="$candidate_root/state/run/v1.3.1-qualification.pid" pid=''
+  if [[ -n "$active_pid" ]] && kill -0 "$active_pid" 2>/dev/null; then
+    kill -TERM -- "-$active_pid" 2>/dev/null || kill -TERM "$active_pid" 2>/dev/null || true
+    for _attempt in {1..100}; do
+      kill -0 "$active_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$active_pid" 2>/dev/null \
+      && { kill -KILL -- "-$active_pid" 2>/dev/null || kill -KILL "$active_pid" 2>/dev/null || cleanup_failed=true; }
+    wait "$active_pid" 2>/dev/null || true
+  fi
+  active_pid=''
+  if (( ${#docker_command[@]} > 0 )) && container_exists; then
+    container_running && "${docker_command[@]}" stop --time 20 "$container_name" >/dev/null 2>&1 || true
+    "${docker_command[@]}" rm -f "$container_name" >/dev/null 2>&1 || cleanup_failed=true
+  fi
+  if [[ -f "$pid_file" && ! -L "$pid_file" ]]; then
+    IFS= read -r pid <"$pid_file" || pid=''
+    if pid_is_candidate_api "$pid"; then
+      kill -TERM "$pid" >/dev/null 2>&1 || true
+      for _attempt in {1..100}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -0 "$pid" 2>/dev/null && { kill -KILL "$pid" >/dev/null 2>&1 || cleanup_failed=true; }
+    elif [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      cleanup_failed=true
+    fi
+    rm -f -- "$pid_file" || cleanup_failed=true
+  fi
+  api_pid=''
+}
+
+safe_log_detail() {
+  local path="$1" label="$2" digest='missing' bytes=0
+  if [[ -f "$path" && ! -L "$path" ]]; then
+    digest="$(sha256sum -- "$path" | awk '{print $1}')"
+    bytes="$(stat -Lc %s -- "$path")"
+  fi
+  printf '%s_log_sha256=%s;%s_log_bytes=%s' "$label" "$digest" "$label" "$bytes"
+}
+
+fail() {
+  local reason="$1" detail="$2" action="$3" status="${4:-1}"
+  trap - ERR
+  if [[ "$mode" == --run && "$mutation_started" == true && "$complete" == false ]]; then
+    stop_candidate
+    if [[ "$candidate_created" == true && -d "$candidate_root" && ! -L "$candidate_root" ]]; then
+      rm -rf -- "$candidate_root" || cleanup_failed=true
+    fi
+    if port_listening "$ui_port" || port_listening "$retrieval_port" || container_exists; then
+      cleanup_failed=true
+    fi
+  fi
+  write_result blocked "$reason" "cleanup_failed=$cleanup_failed"
+  printf '%s\n' \
+    'FAILURE DETAIL' \
+    "stage=$stage" \
+    "reason=$reason" \
+    "detail=$detail" \
+    "cleanup_failed=$cleanup_failed" \
+    "operator_action=$action" >&2
+  exit "$status"
+}
+
+unexpected_error() {
+  local status="$1" line="$2"
+  fail unexpected_command_failure \
+    "An unhandled command failed at helper line ${line} with exit code ${status}." \
+    'Use the retained Script 09 report to correct the complete failing stage.' \
+    "$status"
+}
+
+trap 'unexpected_error "$?" "$LINENO"' ERR
+trap 'stage=interrupted; fail signal_hangup "The target qualification received SIGHUP." "Review automatic cleanup and rerun Script 09." 129' HUP
+trap 'stage=interrupted; fail signal_interrupt "The target qualification was interrupted." "Review automatic cleanup and rerun Script 09." 130' INT
+trap 'stage=interrupted; fail signal_termination "The target qualification received SIGTERM." "Review automatic cleanup and rerun Script 09." 143' TERM
+
+validate_loopback_url() {
+  python3 -B - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+value = urlsplit(sys.argv[1])
+if (
+    value.scheme != "http" or value.hostname != "127.0.0.1" or value.port is None
+    or value.path not in {"", "/"} or value.query or value.fragment
+    or value.username is not None or value.password is not None
+):
+    raise SystemExit(1)
+PY
+}
+
+read_secret() {
+  local label="$1" destination="$2" minimum="$3" maximum="$4" value='' bytes=''
+  [[ -r /dev/tty && -w /dev/tty ]] \
+    || fail interactive_terminal_unavailable \
+      'A controlling terminal is required for hidden credential entry.' \
+      'Run Script 09 from an interactive terminal.'
+  printf '\n[INPUT REQUIRED] %s\n' "$label" >/dev/tty
+  printf '[INPUT MODE] Hidden input is active. Paste or type the value, then press Enter.\n' >/dev/tty
+  IFS= read -r -s value </dev/tty || fail credential_input_failed \
+    "Protected input failed for ${label}." 'Rerun from an interactive terminal.'
+  printf '\n' >/dev/tty
+  bytes="${#value}"
+  [[ "$value" == "${value//$'\r'/}" && "$value" == "${value//$'\n'/}" \
+      && "$value" == "${value//$'\0'/}" && "$value" == "${value# }" \
+      && "$value" == "${value% }" && "$bytes" -ge "$minimum" \
+      && "$bytes" -le "$maximum" ]] \
+    || fail credential_invalid "The protected ${label} value is outside its accepted boundary." \
+      'Rerun and enter the exact credential.'
+  printf -v "$destination" '%s' "$value"
+  emit INPUT "state=accepted;name=${label// /_}"
+}
+
+if [[ "$mode" == --validate-only ]]; then
+  [[ $# -eq 0 ]] || exit 2
+  validate_loopback_url "$gemma_base_url"
+  validate_loopback_url "$nomic_base_url"
+  [[ "$ui_port" -ne "$retrieval_port" && "$retrieval_port" -ne "$postgresql_port" ]]
+  printf '%s\n' \
+    'v1_3_1_requalification_helper=ready' \
+    'qualification_ports=3385,8385;accepted_ports=3384,8384;database_mode=read_only_reuse' \
+    'web_runtime=exact_image,read_only_source,bounded_tmpfs,next_build_then_next_start'
+  exit 0
+fi
+
+case "$mode" in --run|--accept|--cleanup) ;; *) exit 2 ;; esac
+while (( $# > 0 )); do
+  case "$1" in
+    --payload-root) payload_root="$2"; shift 2 ;;
+    --result-path) result_path="$2"; shift 2 ;;
+    --expected-hostname) expected_hostname="$2"; shift 2 ;;
+    --expected-os-version) expected_os_version="$2"; shift 2 ;;
+    --expected-architecture) expected_architecture="$2"; shift 2 ;;
+    --gemma-base-url) gemma_base_url="$2"; shift 2 ;;
+    --nomic-base-url) nomic_base_url="$2"; shift 2 ;;
+    --expected-helper-sha256) expected_helper_sha256="$2"; shift 2 ;;
+    *) fail argument_invalid "Unsupported target argument: $1" 'Correct Script 09.' 2 ;;
+  esac
+done
+[[ "$payload_root" == /tmp/ishikawa-requalification-*'/payload' \
+    && -d "$payload_root" && ! -L "$payload_root" \
+    && "$result_path" == "$payload_root/"* && ! -e "$result_path" \
+    && "$expected_helper_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || fail target_paths_invalid 'The private payload or result path is outside the target contract.' 'Rerun through Script 09.'
+validate_loopback_url "$gemma_base_url" || fail gemma_url_invalid 'The Gemma base URL is not bounded loopback HTTP.' 'Correct the Script 09 model URL.'
+validate_loopback_url "$nomic_base_url" || fail nomic_url_invalid 'The Nomic base URL is not bounded loopback HTTP.' 'Correct the Script 09 model URL.'
+
+stage='target_preflight'
+for command_name in awk bash chmod cp curl date df docker dpkg find grep hostname id jq kill mkdir mktemp mv pg_isready psql python3 readlink rm sed setsid sha256sum sleep ss stat sudo systemctl tar timeout tr; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || fail "command_missing_${command_name}" "Required target command unavailable: ${command_name}." 'Restore the named prerequisite and rerun Script 09.'
+done
+[[ "$(sha256sum -- "$0" | awk '{print $1}')" == "$expected_helper_sha256" ]] \
+  || fail helper_identity_mismatch 'The transferred target helper does not match the wrapper-bound identity.' 'Rerun Script 09 from the reviewed repository.'
+[[ "$(hostname -s)" == "$expected_hostname" \
+    && "$(. /etc/os-release; printf '%s' "$VERSION_ID")" == "$expected_os_version" \
+    && "$(dpkg --print-architecture)" == "$expected_architecture" ]] \
+  || fail target_identity_mismatch 'The target hostname, Ubuntu release, or architecture differs from the frozen EmceeDanko host.' 'Use the frozen EmceeDanko target.'
+(cd -- "$payload_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail payload_checksum_failed 'The target qualification payload failed its complete checksum manifest.' 'Rerun Script 09 to replace the private transfer.'
+[[ "$(sha256sum -- "$payload_root/ishikawa-v1.3.1.tar.gz" | awk '{print $1}')" == "$expected_application_sha256" \
+    && "$(sha256sum -- "$payload_root/frontier-cases.json" | awk '{print $1}')" == "$expected_frontier_cases_sha256" \
+    && "$(sha256sum -- "$payload_root/evaluate-frontier.py" | awk '{print $1}')" == "$expected_evaluator_sha256" ]] \
+  || fail exact_input_identity_mismatch 'An exact v1.3.1 or frontier input identity changed.' 'Restore the Script 08 handoff and frozen synthetic qualification inputs.'
+jq -e --arg archive "$expected_runtime_archive_sha256" --arg image "$expected_image_id" --arg ref "$expected_image_reference" '
+  .archive_sha256 == $archive and .image_id == $image and .image_reference == $ref
+  and .architecture == "amd64" and .platform == "linux/amd64"
+  and .application_in_image == false and .generated_next_in_image == false
+  and .node == "24.22.1" and .next == "16.4.3"
+  and .react == "19.2.9" and .react_dom == "19.2.9"' \
+  "$payload_root/image-identity.json" >/dev/null \
+  || fail runtime_identity_record_invalid 'The transferred runtime identity record is not the exact Script 07 result.' 'Restore the exact Script 07 handoff.'
+prepare_docker || fail container_runtime_unavailable 'Docker is unavailable through the operator or attended sudo path.' 'Restore Docker access and rerun Script 09.'
+
+accepted_ready() {
+  [[ -d "$accepted_root" && ! -L "$accepted_root" ]] \
+    && http_ready 'http://127.0.0.1:8384/ready' \
+    && http_ready 'http://127.0.0.1:3384/api/ready' \
+    && pg_isready --quiet --host 127.0.0.1 --port "$postgresql_port"
+}
+
+check_boot_posture() {
+  [[ "$(systemctl --user is-enabled ishikawa-retrieval-api.service 2>/dev/null || true)" != enabled \
+      && "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled \
+      && "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]]
+}
+
+if [[ "$mode" == --accept ]]; then
+  stage='acceptance_preflight'
+  receipt="$candidate_root/state/reports/qualification/emceedanko-v1.3.1-qualification.txt"
+  pid_file="$candidate_root/state/run/v1.3.1-qualification.pid"
+  [[ -f "$receipt" && ! -L "$receipt" && -f "$pid_file" && ! -L "$pid_file" ]] \
+    || fail qualification_runtime_missing 'The exact qualification runtime or receipt is absent.' 'Run Script 09 --run first.'
+  grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt" \
+    && grep -Fxq "image_id=$expected_image_id" "$receipt" \
+    || fail qualification_receipt_identity_mismatch 'The running qualification receipt is not bound to the exact candidate.' 'Clean up the stale qualification and rerun Script 09.'
+  IFS= read -r api_pid <"$pid_file" || api_pid=''
+  pid_is_candidate_api "$api_pid" && container_running \
+    && http_ready "http://127.0.0.1:${retrieval_port}/ready" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/ready" \
+    && http_ready "http://127.0.0.1:${ui_port}/" \
+    && http_ready "http://127.0.0.1:${ui_port}/theme-init.js" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/dependencies" \
+    || fail qualification_runtime_not_ready 'The exact candidate is no longer completely ready.' 'Do not accept; run Script 09 --cleanup and requalify.'
+  accepted_ready || fail accepted_v1_3_baseline_lost 'The accepted v1.3 baseline is not ready during candidate acceptance.' 'Do not accept until the untouched baseline is reconciled.'
+  check_boot_posture || fail boot_posture_changed 'Boot autostart is enabled for an Ishikawa dependency.' 'Do not accept; restore the disabled boot posture.'
+  acceptance="$candidate_root/state/reports/qualification/emceedanko-v1.3.1-acceptance.txt"
+  [[ ! -e "$acceptance" && ! -L "$acceptance" ]] \
+    || fail acceptance_already_recorded 'An acceptance receipt already exists for this qualification runtime.' 'Review the existing receipt; do not replace it.'
+  accepted_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    printf 'schema=ishikawa.emceedanko-v1.3.1-acceptance.v1\n'
+    printf 'accepted_at_utc=%s\n' "$accepted_at"
+    printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
+    printf 'runtime_archive_sha256=%s\n' "$expected_runtime_archive_sha256"
+    printf 'image_id=%s\n' "$expected_image_id"
+    printf 'human_ui_acceptance=accepted\n'
+    printf 'production_build_start=pass\nfrontier_cases=60/60\n'
+    printf 'ui_port=%s\nretrieval_api_port=%s\npostgresql_port=%s\n' "$ui_port" "$retrieval_port" "$postgresql_port"
+    printf 'accepted_v1_3_mutated=false\naccepted_database_mutated=false\nboot_autostart=false\n'
+  } >"$acceptance"
+  chmod 0600 "$acceptance"
+  cp -- "$acceptance" "$result_path"
+  complete=true
+  emit SUMMARY 'state=pass;human_ui_acceptance=accepted;candidate_cleanup=pending'
+  printf '%s\n' 'v1_3_1_requalification_acceptance=pass'
+  exit 0
+fi
+
+if [[ "$mode" == --cleanup ]]; then
+  stage='qualification_cleanup'
+  mutation_started=true
+  stop_candidate
+  if [[ -e "$candidate_root" || -L "$candidate_root" ]]; then
+    [[ -d "$candidate_root" && ! -L "$candidate_root" \
+        && "$candidate_root" == "$HOME/Documents/Ishikawa-v1.3.1-qualification" ]] \
+      || fail candidate_root_unsafe 'The qualification root is not the exact safe directory.' 'Inspect it manually; do not remove it through Script 09.'
+    rm -rf -- "$candidate_root" || cleanup_failed=true
+  fi
+  if port_listening "$ui_port" || port_listening "$retrieval_port" || container_exists; then
+    cleanup_failed=true
+  fi
+  [[ "$cleanup_failed" == false ]] \
+    || fail cleanup_incomplete 'The exact candidate process, container, ports, or directory did not clean up.' 'Reconcile only the named v1.3.1 qualification objects.'
+  accepted_ready || fail accepted_v1_3_baseline_lost_after_cleanup 'The untouched accepted v1.3 baseline is not ready after cleanup.' 'Inspect the accepted runtime without recreating the candidate.'
+  check_boot_posture || fail boot_posture_changed 'Boot autostart changed during qualification cleanup.' 'Restore the disabled boot posture.'
+  complete=true
+  write_result pass none 'candidate_removed=true'
+  emit SUMMARY 'state=pass;candidate_removed=true;ports_3385_8385=free;accepted_v1_3=ready'
+  printf '%s\n' 'v1_3_1_requalification_cleanup=pass'
+  exit 0
+fi
+
+stage='run_preflight'
+accepted_ready || fail accepted_v1_3_baseline_not_ready \
+  'The accepted v1.3 API, UI, database, or installation is not ready before side-by-side qualification.' \
+  'Reconcile the accepted v1.3 baseline before running Script 09.'
+check_boot_posture || fail boot_posture_enabled 'Boot autostart is enabled for an Ishikawa dependency.' 'Restore the accepted disabled boot posture before qualification.'
+[[ ! -e "$candidate_root" && ! -L "$candidate_root" ]] \
+  || fail qualification_root_exists 'A prior v1.3.1 qualification root already exists.' 'Run Script 09 --cleanup, then rerun --run.'
+container_exists && fail qualification_container_exists 'The fixed qualification container already exists.' 'Run Script 09 --cleanup, then rerun --run.'
+for port in "$ui_port" "$retrieval_port"; do
+  ! port_listening "$port" || fail qualification_port_in_use "Qualification port ${port} is already listening." 'Free the named private qualification port without changing the accepted v1.3 ports.'
+done
+target_image_id="$("${docker_command[@]}" image inspect "$expected_image_reference" --format '{{.Id}}' 2>/dev/null || true)"
+[[ "$target_image_id" == "$expected_image_id" \
+    && "$("${docker_command[@]}" image inspect "$expected_image_reference" --format '{{.Architecture}}' 2>/dev/null || true)" == amd64 ]] \
+  || fail exact_runtime_image_missing "Expected image ${expected_image_id}; observed ${target_image_id:-missing}." 'Restore the exact Script 07 image before requalification.'
+"${docker_command[@]}" run --rm --network none --read-only \
+  --security-opt no-new-privileges --cap-drop ALL \
+  --entrypoint sh "$expected_image_reference" -c \
+  'test ! -e /opt/nextjs/app && test ! -e /opt/nextjs/components && test ! -e /opt/nextjs/lib && test ! -e /opt/nextjs/public && test ! -e /opt/nextjs/next.config.mjs && test ! -e /opt/nextjs/.next' \
+  >/dev/null 2>&1 || fail runtime_image_application_boundary_failed 'The exact runtime image is not application-free.' 'Rebuild Script 07; do not qualify this image.'
+emit PREFLIGHT 'state=pass;accepted_v1_3=ready;accepted_database=read_only;ports_3385_8385=free;boot_autostart=false'
+emit IMAGE "state=pass;reference=$expected_image_reference;image_id=$expected_image_id;application_in_image=false"
+
+read_secret 'Gemma API key' gemma_key 1 4096
+read_secret 'Nomic API key' nomic_key 32 1024
+read_secret 'v1.3 PostgreSQL retrieval password' postgresql_password 16 4096
+
+stage='database_and_model_readiness'
+database_counts="$(PGPASSWORD="$postgresql_password" \
+  PGOPTIONS='-c default_transaction_read_only=on' psql -X -A -t -q \
+  -h 127.0.0.1 -p "$postgresql_port" -U rag_retrieval -d rag_catalog \
+  -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  current_user::text || ';' || current_setting('transaction_read_only')::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_documents)::text || ';' ||
+  (SELECT sum(page_count) FROM rag_search.active_documents)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_chunks)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_retrieval_candidates)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_retrieval_candidates WHERE retrieval_scoring_only)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_retrieval_embeddings)::text || ';' ||
+  (SELECT count(*) FROM rag_search.active_relationships)::text || ';' ||
+  (SELECT count(*) FROM (SELECT DISTINCT source_document_id, target_identity FROM rag_search.active_relationships) AS pairs)::text;
+SQL
+)" || fail accepted_database_query_failed 'The read-only corpus-v3 inventory query failed.' 'Correct only the retrieval credential or accepted database readiness.'
+[[ "$database_counts" == 'rag_retrieval;on;30;150;786;943;157;943;240;90' ]] \
+  || fail accepted_database_inventory_mismatch "Expected corpus-v3 inventory 30;150;786;943;157;943;240;90; observed ${database_counts:-none}." 'Do not qualify against an unknown database state.'
+emit DATABASE 'state=pass;mode=read_only_reuse;documents=30;pages=150;authoritative_chunks=786;retrieval_candidates=943;retrieval_scoring_only=157;embeddings=943;relationship_records=240;relationship_pairs=90'
+
+stage='exact_application_install'
+mutation_started=true
+extract_root="$payload_root/extracted"
+mkdir -m 0700 -- "$extract_root"
+tar -xzf "$payload_root/ishikawa-v1.3.1.tar.gz" -C "$extract_root"
+bash "$extract_root/ishikawa-v1.3.1/verify-ishikawa-release" >/dev/null \
+  || fail application_archive_verification_failed 'The exact candidate failed its bundled verifier on EmceeDanko.' 'Restore the Script 08 application handoff.'
+bash "$extract_root/ishikawa-v1.3.1/application/install-ishikawa" \
+  --install-root "$candidate_root" >/dev/null \
+  || fail application_install_failed 'The exact application failed isolated installation.' 'Inspect the retained Script 09 detail and correct the package boundary.'
+candidate_created=true
+mkdir -m 0700 -p -- "$candidate_root/state/reports/qualification"
+
+python3 -B - "$candidate_root" "$gemma_base_url" "$nomic_base_url" "$ui_port" "$retrieval_port" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+root = Path(sys.argv[1]).resolve(strict=True)
+gemma, nomic = sys.argv[2:4]
+ui_port, retrieval_port = map(int, sys.argv[4:6])
+deployment_path = root / "config/deployment.yaml"
+runtime_path = root / "config/runtime_dependencies.yaml"
+service_path = root / "config/retrieval_service_profile.yaml"
+deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+deployment["web"]["port"] = ui_port
+deployment["web"]["retrieval_base_url"] = f"http://127.0.0.1:{retrieval_port}"
+deployment["retrieval"]["port"] = retrieval_port
+deployment["postgresql"]["port"] = 5432
+deployment_path.write_text(yaml.safe_dump(deployment, sort_keys=False), encoding="utf-8")
+runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+runtime["gemma"]["chat_endpoint_url"] = gemma + "/v1/chat/completions"
+runtime["gemma"]["tokenization_endpoint_url"] = gemma + "/tokenize"
+runtime["gemma"]["health_endpoint_url"] = gemma + "/health"
+runtime["nomic"]["embedding_endpoint_url"] = nomic + "/v1/embeddings"
+runtime["nomic"]["health_endpoint_url"] = nomic + "/health"
+runtime_path.write_text(yaml.safe_dump(runtime, sort_keys=False), encoding="utf-8")
+service = yaml.safe_load(service_path.read_text(encoding="utf-8"))
+service["network"]["default_port"] = retrieval_port
+service_path.write_text(yaml.safe_dump(service, sort_keys=False), encoding="utf-8")
+PY
+config_marker="$(ISHIKAWA_GEMMA_API_KEY="$gemma_key" \
+  ISHIKAWA_NOMIC_API_KEY="$nomic_key" \
+  ISHIKAWA_POSTGRESQL_PASSWORD="$postgresql_password" \
+  PYTHONDONTWRITEBYTECODE=1 "$candidate_root/scripts/ishikawa-retrieval-api" --check-readiness)" \
+  || fail candidate_readiness_preflight_failed 'The exact candidate rejected configuration, storage, database, Gemma, or Nomic readiness.' 'Correct the named external dependency and rerun Script 09.'
+grep -Fxq 'ishikawa_retrieval_api_readiness=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass' <<<"$config_marker" \
+  || fail candidate_readiness_marker_invalid 'The exact candidate omitted its complete readiness marker.' 'Treat the preflight as blocked.'
+emit READINESS 'state=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass'
+
+stage='retrieval_api_start'
+pid_file="$candidate_root/state/run/v1.3.1-qualification.pid"
+stdout_log="$candidate_root/state/logs/v1.3.1-qualification.stdout"
+stderr_log="$candidate_root/state/logs/v1.3.1-qualification.stderr"
+export ISHIKAWA_GEMMA_API_KEY="$gemma_key"
+export ISHIKAWA_NOMIC_API_KEY="$nomic_key"
+export ISHIKAWA_POSTGRESQL_PASSWORD="$postgresql_password"
+setsid bash -c '
+  set -Eeuo pipefail
+  umask 077
+  printf "%s\n" "$$" >"$1"
+  shift
+  exec "$@"
+' bash "$pid_file" env PYTHONDONTWRITEBYTECODE=1 \
+  "$candidate_root/scripts/ishikawa-retrieval-api" --serve \
+  </dev/null >>"$stdout_log" 2>>"$stderr_log" &
+api_pid="$!"
+unset ISHIKAWA_GEMMA_API_KEY ISHIKAWA_NOMIC_API_KEY ISHIKAWA_POSTGRESQL_PASSWORD
+for _attempt in {1..40}; do
+  [[ -s "$pid_file" ]] && break
+  kill -0 "$api_pid" 2>/dev/null || break
+  sleep 0.25
+done
+[[ -s "$pid_file" ]] || fail candidate_api_pid_missing "The API did not publish its PID;$(safe_log_detail "$stderr_log" api_stderr)." 'Correct the API startup boundary and rerun Script 09.'
+IFS= read -r api_pid <"$pid_file"
+pid_is_candidate_api "$api_pid" || fail candidate_api_process_missing "The exact candidate API exited;$(safe_log_detail "$stderr_log" api_stderr)." 'Correct the reported API startup boundary.'
+wait_http "http://127.0.0.1:${retrieval_port}/ready" 180 API \
+  || fail candidate_api_not_ready "The exact candidate API did not become ready;$(safe_log_detail "$stderr_log" api_stderr)." 'Correct the database/model/API boundary and rerun Script 09.'
+emit API "state=pass;bind=127.0.0.1:${retrieval_port};execution=package_local;autostart=false"
+
+web_values="$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$candidate_root/application/python" python3 -B - "$candidate_root/config/product.yaml" <<'PY'
+import sys
+from pathlib import Path
+from ishikawa.product import validate_product_profile
+from ishikawa.yaml_loader import load_restricted_yaml
+profile = validate_product_profile(load_restricted_yaml(Path(sys.argv[1]), label="product profile"))
+print(profile.display_name)
+print(profile.browser_configuration_base64())
+PY
+)"
+mapfile -t web_config <<<"$web_values"
+(( ${#web_config[@]} == 2 )) || fail web_configuration_invalid 'The exact product profile did not yield two web configuration values.' 'Correct the exact application package.'
+operator_uid="$(id -u)"; operator_gid="$(id -g)"
+web_build_seconds=''
+web_build_bytes=''
+
+start_web() {
+  local run_index="$1"
+  local log_path="$candidate_root/state/logs/v1.3.1-web-${run_index}.log"
+  local started elapsed=0 next_heartbeat=15 log_text='' build_bytes=''
+  local runtime_command='
+set -eu
+mkdir -p -- "$HOME" "$TMPDIR"
+printf "[RUNTIME] stage=build;state=start\n"
+node_modules/.bin/next build
+test -f .next/BUILD_ID
+test -d .next/server
+printf "[RUNTIME] stage=build;state=pass\n"
+printf "[RUNTIME] stage=server;state=start\n"
+exec node_modules/.bin/next start --hostname "$1" --port "$2"
+'
+  "${docker_command[@]}" run --detach --name "$container_name" --init \
+    --network host --read-only --restart no \
+    --security-opt no-new-privileges --cap-drop ALL --pids-limit 512 \
+    --user "$operator_uid:$operator_gid" \
+    --tmpfs "/opt/nextjs/.next:rw,nosuid,nodev,size=${web_tmpfs_bytes},mode=0700,uid=${operator_uid},gid=${operator_gid}" \
+    --env 'HOME=/opt/nextjs/.next/home' --env 'TMPDIR=/opt/nextjs/.next/tmp' \
+    --env 'TMP=/opt/nextjs/.next/tmp' --env 'TEMP=/opt/nextjs/.next/tmp' \
+    --env 'NEXT_TELEMETRY_DISABLED=1' --env 'NODE_ENV=production' \
+    --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=${web_config[0]}" \
+    --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=${web_config[1]}" \
+    --env "ISHIKAWA_RETRIEVAL_BASE_URL=http://127.0.0.1:${retrieval_port}" \
+    --mount "type=bind,src=$candidate_root/application/web/app,dst=/opt/nextjs/app,readonly" \
+    --mount "type=bind,src=$candidate_root/application/web/components,dst=/opt/nextjs/components,readonly" \
+    --mount "type=bind,src=$candidate_root/application/web/lib,dst=/opt/nextjs/lib,readonly" \
+    --mount "type=bind,src=$candidate_root/application/web/public,dst=/opt/nextjs/public,readonly" \
+    --mount "type=bind,src=$candidate_root/application/web/package.json,dst=/opt/nextjs/package.json,readonly" \
+    --mount "type=bind,src=$candidate_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly" \
+    "$expected_image_reference" sh -c "$runtime_command" runtime 127.0.0.1 "$ui_port" >/dev/null \
+    || fail candidate_web_container_start_failed 'Docker could not create the exact production web container.' 'Correct the reported container boundary and rerun Script 09.'
+  started="$(date +%s)"
+  emit WEB "state=building;run=$run_index;elapsed_seconds=0"
+  while (( elapsed < 300 )); do
+    log_text="$("${docker_command[@]}" logs --tail 160 "$container_name" 2>&1 || true)"
+    printf '%s\n' "$log_text" >"$log_path"
+    grep -Fxq '[RUNTIME] stage=build;state=pass' <<<"$log_text" && break
+    container_running || fail candidate_web_build_failed "The production build container exited;$(safe_log_detail "$log_path" web)." 'Inspect the protected web log digest and correct the exact build boundary.'
+    sleep 1
+    elapsed=$(( $(date +%s) - started ))
+    if (( elapsed >= next_heartbeat )); then
+      emit WEB "state=building;run=$run_index;elapsed_seconds=$elapsed"
+      next_heartbeat=$((next_heartbeat + 15))
+    fi
+  done
+  grep -Fxq '[RUNTIME] stage=build;state=pass' <<<"$log_text" \
+    || fail candidate_web_build_timeout "The production build exceeded 300 seconds;$(safe_log_detail "$log_path" web)." 'Correct the build capacity or application boundary before retrying.'
+  wait_http "http://127.0.0.1:${ui_port}/api/live" 160 WEB \
+    || fail candidate_web_liveness_failed "The production server did not become live;$(safe_log_detail "$log_path" web)." 'Correct the production start boundary.'
+  wait_http "http://127.0.0.1:${ui_port}/api/ready" 120 WEB \
+    || fail candidate_web_readiness_failed "The production server did not proxy ready;$(safe_log_detail "$log_path" web)." 'Correct the UI-to-API boundary.'
+  [[ "$(http_status "http://127.0.0.1:${ui_port}/")" == 200 \
+      && "$(http_status "http://127.0.0.1:${ui_port}/theme-init.js")" == 200 \
+      && "$(http_status "http://127.0.0.1:${ui_port}/api/dependencies")" == 200 ]] \
+    || fail candidate_web_surface_failed 'Home, static asset, or dependency proxy did not return HTTP 200.' 'Correct the exact production UI surface.'
+  build_bytes="$("${docker_command[@]}" exec "$container_name" du -sb /opt/nextjs/.next 2>/dev/null | awk '{print $1}' || true)"
+  [[ "$build_bytes" =~ ^[0-9]+$ && "$build_bytes" -gt 0 && "$build_bytes" -lt "$web_tmpfs_bytes" ]] \
+    || fail candidate_web_build_capacity_unverified 'The generated .next bytes did not fit the bounded tmpfs contract.' 'Correct the build footprint before qualification.'
+  [[ "$("${docker_command[@]}" inspect --format '{{index .HostConfig.Tmpfs "/opt/nextjs/.next"}}' "$container_name" 2>/dev/null || true)" == *"size=${web_tmpfs_bytes}"* ]] \
+    || fail candidate_web_tmpfs_contract_missing 'The running container omitted the exact bounded .next tmpfs.' 'Correct the production container contract.'
+  web_build_seconds="$(( $(date +%s) - started ))"
+  web_build_bytes="$build_bytes"
+}
+
+stage='production_web_first_build'
+start_web 1
+first_build_seconds="$web_build_seconds"; first_build_bytes="$web_build_bytes"
+emit WEB "state=pass;run=1;next_build=pass;next_start=pass;build_seconds=$first_build_seconds;build_bytes=$first_build_bytes;tmpfs_bytes=$web_tmpfs_bytes"
+
+stage='frontier_qualification'
+emit FRONTIER 'state=start;cases=60;r001_first=true;priority_canaries=7'
+frontier_result="$payload_root/frontier-result.json"
+frontier_stdout="$candidate_root/state/logs/v1.3.1-frontier.stdout"
+frontier_stderr="$candidate_root/state/logs/v1.3.1-frontier.stderr"
+timeout --foreground --signal=TERM --kill-after=30s 7200s \
+  python3 -B "$payload_root/evaluate-frontier.py" --run \
+    --cases "$payload_root/frontier-cases.json" \
+    --endpoint "http://127.0.0.1:${retrieval_port}/v1/chat" \
+    --output "$frontier_result" \
+    --expected-hostname "$expected_hostname" --expected-os-version "$expected_os_version" \
+    --expected-architecture "$expected_architecture" \
+    --priority-case-id R-028 --priority-case-id R-012 --priority-case-id R-016 \
+    --priority-case-id R-036 --priority-case-id R-048 --priority-case-id R-052 \
+    --priority-case-id R-054 >"$frontier_stdout" 2>"$frontier_stderr" &
+active_pid="$!"; frontier_started="$(date +%s)"; next_frontier_heartbeat=25
+while kill -0 "$active_pid" 2>/dev/null; do
+  sleep 1
+  frontier_elapsed="$(( $(date +%s) - frontier_started ))"
+  if (( frontier_elapsed >= next_frontier_heartbeat )); then
+    completed_cases="$(grep -Ec '^case_result=' "$frontier_stdout" 2>/dev/null || true)"
+    emit FRONTIER "state=running;elapsed_seconds=$frontier_elapsed;completed_cases=$completed_cases/60"
+    next_frontier_heartbeat=$((next_frontier_heartbeat + 25))
+  fi
+done
+if wait "$active_pid"; then
+  frontier_status=0
+else
+  frontier_status="$?"
+fi
+active_pid=''
+(( frontier_status == 0 )) \
+  || fail frontier_gate_failed "The exact candidate frontier evaluator exited ${frontier_status};$(safe_log_detail "$frontier_stdout" frontier_stdout);$(safe_log_detail "$frontier_stderr" frontier_stderr)." 'Review every failed synthetic case before retrying.'
+grep -Fxq 'v1_3_complete_api_evaluation=pass' "$frontier_stdout" \
+  && grep -Fxq 'complete_api_cases=60;expected_status_matches=60/60;required_evidence_returned=60/60;required_evidence_cited=60/60;dependency_failures=0' "$frontier_stdout" \
+  || fail frontier_summary_invalid 'The frontier evaluator omitted its complete 60/60 pass markers.' 'Treat the exact candidate as unqualified.'
+frontier_sha256="$(sha256sum -- "$frontier_result" | awk '{print $1}')"
+rm -f -- "$frontier_result"
+emit FRONTIER "state=pass;cases=60/60;synthetic_artifact_sha256=$frontier_sha256;detailed_artifact_retained=false"
+
+stage='fresh_container_rebuild'
+"${docker_command[@]}" stop --time 20 "$container_name" >/dev/null
+"${docker_command[@]}" rm "$container_name" >/dev/null
+! container_exists && ! port_listening "$ui_port" \
+  || fail first_web_cleanup_failed 'The first production container or its ephemeral .next state did not clean up.' 'Reconcile only the fixed qualification container and port.'
+emit WEB 'state=cleanup_pass;run=1;container_removed=true;tmpfs_removed=true'
+start_web 2
+second_build_seconds="$web_build_seconds"; second_build_bytes="$web_build_bytes"
+emit WEB "state=pass;run=2;fresh_container=true;next_build=pass;next_start=pass;build_seconds=$second_build_seconds;build_bytes=$second_build_bytes;tmpfs_bytes=$web_tmpfs_bytes"
+
+stage='final_invariants'
+accepted_ready || fail accepted_v1_3_baseline_lost 'The accepted v1.3 baseline lost readiness during side-by-side qualification.' 'Stop and clean only the v1.3.1 qualification runtime, then reconcile v1.3.'
+check_boot_posture || fail boot_posture_changed 'Boot autostart changed during qualification.' 'Stop and restore the disabled boot posture.'
+pid_is_candidate_api "$api_pid" && container_running \
+  && http_ready "http://127.0.0.1:${retrieval_port}/ready" \
+  && http_ready "http://127.0.0.1:${ui_port}/api/ready" \
+  || fail final_candidate_readiness_lost 'The exact candidate did not remain ready after its fresh-container rebuild.' 'Correct the exact production runtime before human review.'
+
+qualification_receipt="$candidate_root/state/reports/qualification/emceedanko-v1.3.1-qualification.txt"
+qualified_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+{
+  printf 'schema=ishikawa.emceedanko-v1.3.1-qualification.v1\n'
+  printf 'qualified_at_utc=%s\n' "$qualified_at"
+  printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
+  printf 'runtime_archive_sha256=%s\n' "$expected_runtime_archive_sha256"
+  printf 'image_id=%s\nimage_reference=%s\n' "$expected_image_id" "$expected_image_reference"
+  printf 'production_build_start=pass\nfirst_build_seconds=%s\nfirst_build_bytes=%s\n' "$first_build_seconds" "$first_build_bytes"
+  printf 'fresh_container_rebuild=pass\nsecond_build_seconds=%s\nsecond_build_bytes=%s\n' "$second_build_seconds" "$second_build_bytes"
+  printf 'web_tmpfs_bytes=%s\nfrontier_cases=60/60\nfrontier_artifact_sha256=%s\n' "$web_tmpfs_bytes" "$frontier_sha256"
+  printf 'documents=30\npages=150\nauthoritative_chunks=786\nretrieval_candidates=943\nretrieval_scoring_only=157\nembeddings=943\nrelationship_records=240\nrelationship_pairs=90\n'
+  printf 'gemma=pass\nnomic=pass\npostgresql=pass\nretrieval_api=pass\nweb=pass\n'
+  printf 'ui_port=%s\nretrieval_api_port=%s\npostgresql_port=%s\n' "$ui_port" "$retrieval_port" "$postgresql_port"
+  printf 'accepted_v1_3_mutated=false\naccepted_database_mutated=false\nboot_autostart=false\n'
+  printf 'human_ui_acceptance=pending\n'
+} >"$qualification_receipt"
+chmod 0600 "$qualification_receipt"
+cp -- "$qualification_receipt" "$result_path"
+complete=true
+emit SUMMARY "state=pass;candidate=ready;ui=http://127.0.0.1:${ui_port};accepted_v1_3=ready;database_mutated=false;next_gate=human_ui_acceptance"
+printf '%s\n' 'v1_3_1_requalification=pass'

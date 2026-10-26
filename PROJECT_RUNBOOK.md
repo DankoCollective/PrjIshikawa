@@ -96,9 +96,19 @@
     application-boundary, carry-builder, and portable-deployment branch
     harnesses. A mocked branch test supports failure coverage but does not
     replace a real AMD64 image build or production UI qualification.
-17. Repeat every affected exact-byte gate on EmceeDanko with the v1.3.1
-    application and generic image, then obtain new human UI acceptance. Do not
-    alter the accepted v1.3 evidence or treat it as acceptance of v1.3.1.
+17. Run Script 09 `--run` to repeat every affected exact-byte gate on
+    EmceeDanko with the v1.3.1 application and generic image. Script 09
+    verifies the exact Script 07/08 identities, installs v1.3.1 only at
+    `~/Documents/Ishikawa-v1.3.1-qualification`, reuses the accepted corpus-v3
+    database read-only on port `5432`, and starts only a package-local
+    candidate Retrieval API on `8385` and production UI on `3385`. It requires
+    the accepted v1.3 API/UI on `8384`/`3384` to remain ready, runs all 60
+    synthetic frontier cases, removes the first production container and its
+    bounded `.next` tmpfs, and performs a fresh second `next build`/`next
+    start` before attended review. Record human UI acceptance with Script 09
+    `--accept`, then remove only the isolated candidate with Script 09
+    `--cleanup`. Do not alter the accepted v1.3 evidence or treat it as
+    acceptance of v1.3.1.
 18. Assemble only the candidate carry directory with
     `build-carry-candidate.sh`. Promote to the stable
     `local/artifacts/ishikawa-deployment-current/` handoff only after exact-byte
@@ -119,6 +129,7 @@
 - `deployment/scripts/06_attended-v1.3-on-emceedanko.sh`
 - `deployment/scripts/07_build-node-next-runtime-on-emceedanko.sh`
 - `deployment/scripts/08_build-v1.3.1-application-on-emceedanko.sh`
+- `deployment/scripts/09_requalify-v1.3.1-on-emceedanko.sh`
 - `deployment/scripts/build-carry-candidate.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`
@@ -162,3 +173,10 @@ Its application archive remains external to, and separately checksum-bound
 from, the generic Linux AMD64 Node/Next runtime-image archive. Neither local
 candidate handoff becomes the stable org-lab carry until the v1.3.1 exact-byte
 requalification and promotion gates pass.
+
+Script 09's `--run` mode prompts at the target for the Gemma key, Nomic key,
+and existing v1.3 retrieval-role password. It does not request an ingestion
+password because its database access is read-only and it does not recreate or
+modify corpus v3. A passing run leaves the exact candidate on ports
+`3385`/`8385` for attended review and prints the `--accept` and `--cleanup`
+commands. The accepted v1.3 runtime remains on `3384`/`8384` throughout.

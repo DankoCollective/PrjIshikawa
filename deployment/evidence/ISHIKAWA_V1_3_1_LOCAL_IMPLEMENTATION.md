@@ -99,19 +99,31 @@ assembly step. A command-double gate rejects any builder execution that does
 not carry that locale into `sort`; the complete regression set passed after
 the correction.
 
+Script 08 subsequently passed and is recorded in
+`ISHIKAWA_V1_3_1_APPLICATION_BUILD.md`. The exact external application archive
+is SHA-256
+`2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69`.
+
+Numbered Script 09 now supplies the previously missing operator-facing
+exact-byte production requalification gate. Its isolated target and wrapper
+harnesses cover run, human acceptance, cleanup, returned evidence,
+database-inventory mismatch, production-web failure, frontier failure,
+automatic candidate cleanup, and preservation of accepted v1.3.
+After Script 09 implementation, the complete 486-test native suite and all 16
+deployment harnesses passed together, including the pre-existing release,
+staging, qualification, attended-runtime, image-build, application-build,
+production-stack, carry, and portable-deployment branches.
+
 The remaining ordered gates are:
 
-1. run Script 08 to build the exact v1.3.1 application candidate natively on
-   EmceeDanko and verify its application
-   SBOM, license record, deterministic archive, clean installation, and
-   production web build;
+1. run Script 09 to requalify the exact Script 07 image and Script 08
+   application together in production mode on EmceeDanko, obtain human UI
+   acceptance, and clean the isolated candidate;
 2. complete the exact-image and exact-application advisory disposition from
    their recorded SBOMs;
-3. requalify those exact bytes on EmceeDanko and obtain v1.3.1 human UI
-   acceptance;
-4. accept the read-only Tech inventory and resolve any required offline native
+3. accept the read-only Tech inventory and resolve any required offline native
    prerequisite payload;
-5. complete independent review and atomically promote the exact carry bytes to
+4. complete independent review and atomically promote the exact carry bytes to
    the stable handoff.
 
 Current disposition:

@@ -190,7 +190,16 @@ MOCK_IMAGE_MARKER="$MOCK_IMAGE_MARKER" \
 MOCK_BUILD_FAIL="${MOCK_BUILD_FAIL:-false}" \
 MOCK_BUILD_DELAY="${MOCK_BUILD_DELAY:-0}" \
 MOCK_REMOTE_HOST_FAIL="${MOCK_REMOTE_HOST_FAIL:-false}" \
-  bash -c "$remote_command"
+  setsid bash -c "$remote_command" &
+remote_pid="$!"
+terminate_remote() {
+  trap - HUP INT TERM
+  kill -TERM -- "-$remote_pid" 2>/dev/null || kill -TERM "$remote_pid" 2>/dev/null || true
+  wait "$remote_pid" 2>/dev/null || true
+  exit 143
+}
+trap terminate_remote HUP INT TERM
+wait "$remote_pid"
 MOCK
 chmod 0755 "$test_root/bin/ssh"
 

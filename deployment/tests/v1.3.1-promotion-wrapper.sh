@@ -130,7 +130,12 @@ for argument in "$@"; do
   if [[ "$argument" == "$MOCK_ARTIFACT_PARENT"* && " $* " == *" -m "* ]]; then exit 95; fi
 done
 exec /usr/bin/mkdir "$@"' >"$root/bin/mkdir"
-chmod 0755 "$root/bin/ssh" "$root/bin/scp" "$root/bin/mkdir"
+printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' '
+for argument in "$@"; do
+  [[ "$argument" != -R && "$argument" != --no-preserve=* ]] || exit 94
+done
+exec /usr/bin/cp "$@"' >"$root/bin/cp"
+chmod 0755 "$root/bin/ssh" "$root/bin/scp" "$root/bin/mkdir" "$root/bin/cp"
 
 run_wrapper() {
   local selected_mode="$1" output="$2" selected_artifact_parent
@@ -155,9 +160,10 @@ validation="$(PATH="$root/bin:$PATH" \
 grep -Fxq 'script_10_v1_3_1_promotion=ready' <<<"$validation"
 grep -Fq 'target_contact=false' <<<"$validation"
 
+primary_artifact_parent="${MOCK_SELECTED_ARTIFACT_PARENT:-$root/artifacts}"
 run_wrapper --run "$root/run.out"
 grep -Fxq 'script_10_v1_3_1_promotion=pass' "$root/run.out"
-evidence="$root/artifacts/emceedanko-v1.3.1-promotion-current"
+evidence="$primary_artifact_parent/emceedanko-v1.3.1-promotion-current"
 [[ -f "$evidence/promotion-receipt.txt" && ! -e "$evidence/acceptance-receipt.txt" ]]
 (cd -- "$evidence" && sha256sum --check --strict SHA256SUMS >/dev/null)
 

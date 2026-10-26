@@ -117,7 +117,12 @@ for argument in "$@"; do
   [[ "$argument" != "$MOCK_ARTIFACT_PARENT"* ]] || exit 96
 done
 exec /usr/bin/install "$@"' >"$root/bin/install"
-chmod 0755 "$root/bin/ssh" "$root/bin/scp" "$root/bin/mkdir" "$root/bin/install"
+printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' '
+for argument in "$@"; do
+  [[ "$argument" != -R && "$argument" != --no-preserve=* ]] || exit 94
+done
+exec /usr/bin/cp "$@"' >"$root/bin/cp"
+chmod 0755 "$root/bin/ssh" "$root/bin/scp" "$root/bin/mkdir" "$root/bin/install" "$root/bin/cp"
 
 run_wrapper() {
   local selected_mode="$1" output="$2" selected_artifact_parent
@@ -139,9 +144,10 @@ validation="$(PATH="$root/bin:$PATH" \
 grep -Fxq 'script_09_v1_3_1_requalification=ready' <<<"$validation"
 grep -Fq 'target_contact=false' <<<"$validation"
 
+primary_artifact_parent="${MOCK_SELECTED_ARTIFACT_PARENT:-$root/artifacts}"
 run_wrapper --run "$root/run.out"
 grep -Fxq 'script_09_v1_3_1_requalification=pass' "$root/run.out"
-evidence="$root/artifacts/emceedanko-v1.3.1-requalification-current"
+evidence="$primary_artifact_parent/emceedanko-v1.3.1-requalification-current"
 [[ -f "$evidence/qualification-receipt.txt" && ! -e "$evidence/acceptance-receipt.txt" ]]
 (cd -- "$evidence" && sha256sum --check --strict SHA256SUMS >/dev/null)
 

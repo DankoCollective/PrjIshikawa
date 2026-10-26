@@ -81,6 +81,20 @@ block() {
   exit "$status"
 }
 
+copy_flat_evidence() {
+  local source_root="$1" destination_root="$2" source_path destination_path
+  [[ -d "$source_root" && ! -L "$source_root" \
+      && -d "$destination_root" && ! -L "$destination_root" \
+      && -z "$(find "$source_root" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]] \
+    || return 1
+  while IFS= read -r -d '' source_path; do
+    destination_path="$destination_root/${source_path##*/}"
+    [[ ! -e "$destination_path" && ! -L "$destination_path" ]] || return 1
+    dd if="$source_path" of="$destination_path" bs=1M status=none || return 1
+    cmp -- "$source_path" "$destination_path" >/dev/null || return 1
+  done < <(find "$source_root" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+}
+
 cleanup() {
   local status="$?"
   trap - ERR EXIT INT TERM
@@ -149,7 +163,7 @@ if [[ -n "$identity_file" ]]; then
   [[ "$identity_file" == /* && -f "$identity_file" && ! -L "$identity_file" && -r "$identity_file" ]] \
     || block identity_unsafe 'SSH identity is not a readable regular file.' 'Correct the identity or use SSH configuration.'
 fi
-for required in awk bash cp date find grep jq kill mkdir mkfifo mktemp mv python3 rm rmdir scp sha256sum sleep sort ssh stat tar tee timeout tr; do
+for required in awk bash cmp cp date dd find grep jq kill mkdir mkfifo mktemp mv python3 rm rmdir scp sha256sum sleep sort ssh stat tar tee timeout tr; do
   command -v "$required" >/dev/null 2>&1 || block "command_missing_${required}" "Required local command unavailable: $required." 'Restore the named prerequisite.'
 done
 
@@ -363,8 +377,8 @@ if [[ -e "$artifact_current" || -L "$artifact_current" ]]; then
   (cd -- "$artifact_current" && sha256sum --check --strict SHA256SUMS >/dev/null) \
     || block current_evidence_checksum_failed 'Current evidence failed checksums.' 'Inspect it.'
   if [[ "$mode" != --run ]]; then
-    cp -R --no-preserve=mode,ownership -- "$artifact_current/." "$artifact_stage/" \
-      || block current_evidence_copy_failed 'Current evidence could not be staged.' 'Inspect the artifact lane.'
+    copy_flat_evidence "$artifact_current" "$artifact_stage" \
+      || block current_evidence_copy_failed 'The current flat promotion evidence could not be copied and verified byte-for-byte.' 'Inspect the artifact lane.'
   fi
 fi
 if [[ "$mode" != --run && ! -f "$artifact_stage/promotion-receipt.txt" ]]; then

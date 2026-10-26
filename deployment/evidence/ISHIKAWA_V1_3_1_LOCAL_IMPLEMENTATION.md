@@ -177,6 +177,20 @@ The acceptance receipt records production build/start pass, 60/60 frontier
 cases, explicit human acceptance, disabled boot autostart, and no mutation of
 accepted v1.3 or its database. The local `SHA256SUMS` verified both receipts.
 
+The first Script 09 cleanup invocation then passed on EmceeDanko: it removed
+the isolated qualification root and container, freed ports `3385`/`8385`, and
+revalidated accepted v1.3. Local evidence publication subsequently blocked
+because GNU `cp --no-preserve=mode,ownership` still attempted `chmod` on the
+Windows-backed WSL repository mount. The target cleanup result was not
+published, so the current checksum-bound evidence set correctly remains at
+qualification plus acceptance until cleanup is rerun. The bounded correction
+copies only the flat content-free evidence files, compares every destination
+byte-for-byte, and then regenerates and verifies `SHA256SUMS`; it never copies
+POSIX metadata. The same latent later-lifecycle publication path was corrected
+in Script 10 before promotion. Both wrapper lifecycle suites and an
+end-to-end publication exercise on the actual Windows-backed artifact lane
+pass after the correction.
+
 Frozen V13-91 authorizes one attended EmceeDanko promotion lifecycle after
 Script 09 cleanup. Numbered Script 10 now binds the exact Script 07 image,
 Script 08 application, and all three Script 09 lifecycle receipts before any

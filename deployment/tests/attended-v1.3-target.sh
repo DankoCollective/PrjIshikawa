@@ -155,6 +155,7 @@ cp -- "$release_root/database/README.md" "$release_root/database/install-schema"
 printf '%s\n' active >"$test_root/state/unit"
 printf '%s\n' active >"$test_root/state/postgres"
 printf '%s\n' ishikawa-web >"$test_root/state/containers"
+: >"$test_root/state/retained-containers"
 printf '%s\n' none >"$test_root/state/database"
 printf '%s\n' none >"$test_root/state/private-pg-port"
 schema_sha256="$(sha256sum "$test_root/payload/database/schema.sql" | awk '{print $1}')"
@@ -203,17 +204,59 @@ case "$action" in
     if [[ "$*" == *Architecture* ]]; then printf "amd64\n"; else printf "sha256:368f4381b61bf90ad27aa5a9dd4c10e1de0b4b4666006911e1b6cb4aafcfb8a6\n"; fi ;;
   inspect)
     name="${!#}"
-    if grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/containers"; then printf "true\n"; else exit 1; fi ;;
+    if grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/containers"; then
+      if [[ "$*" == *State.ExitCode* ]]; then printf "true;0;false\n"; else printf "true\n"; fi
+    elif grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/retained-containers"; then
+      if [[ "$*" == *State.ExitCode* ]]; then
+        if [[ "$name" == ishikawa-v1.3-web && "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" == 1 ]]; then
+          printf "false;1;false\n"
+        else
+          printf "false;0;false\n"
+        fi
+      else
+        printf "false\n"
+      fi
+    else
+      exit 1
+    fi ;;
+  logs)
+    name="${!#}"
+    grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/containers" \
+      || grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/retained-containers" || exit 1
+    if [[ "$name" == ishikawa-v1.3-web && "${ISHIKAWA_TEST_WEB_READINESS_FAIL:-0}" == 1 ]]; then
+      printf "%s\n" "Failed to compile: simulated attended readiness route failure"
+    elif [[ "$name" == ishikawa-v1.3-web && "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" == 1 ]]; then
+      printf "%s\n" "simulated attended web process exit"
+    else
+      printf "%s\n" "simulated bounded web log"
+    fi ;;
   stop)
     name="${!#}"
     grep -Fxv "$name" "$ISHIKAWA_TEST_STATE/containers" >"$ISHIKAWA_TEST_STATE/containers.next" || true
     mv "$ISHIKAWA_TEST_STATE/containers.next" "$ISHIKAWA_TEST_STATE/containers" ;;
+  rm)
+    name="${!#}"
+    grep -Fxv "$name" "$ISHIKAWA_TEST_STATE/containers" >"$ISHIKAWA_TEST_STATE/containers.next" || true
+    mv "$ISHIKAWA_TEST_STATE/containers.next" "$ISHIKAWA_TEST_STATE/containers"
+    grep -Fxv "$name" "$ISHIKAWA_TEST_STATE/retained-containers" >"$ISHIKAWA_TEST_STATE/retained-containers.next" || true
+    mv "$ISHIKAWA_TEST_STATE/retained-containers.next" "$ISHIKAWA_TEST_STATE/retained-containers" ;;
   run)
-    name=""
-    while (( $# )); do [[ "$1" == --name ]] && { name="$2"; break; }; shift; done
+    name=""; auto_remove=false
+    while (( $# )); do
+      [[ "$1" == --rm ]] && auto_remove=true
+      [[ "$1" == --name ]] && name="$2"
+      shift
+    done
     [[ -n "$name" ]] || exit 2
     if [[ "$name" == ishikawa-v1.3-web && "${ISHIKAWA_TEST_WEB_FAIL:-0}" == 1 ]]; then exit 1; fi
-    grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/containers" || printf "%s\n" "$name" >>"$ISHIKAWA_TEST_STATE/containers"
+    if [[ "$name" != ishikawa-v1.3-web || "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" != 1 ]]; then
+      grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/containers" \
+        || printf "%s\n" "$name" >>"$ISHIKAWA_TEST_STATE/containers"
+    fi
+    if [[ "$auto_remove" == false ]]; then
+      grep -Fxq "$name" "$ISHIKAWA_TEST_STATE/retained-containers" \
+        || printf "%s\n" "$name" >>"$ISHIKAWA_TEST_STATE/retained-containers"
+    fi
     printf "test-container-id\n" ;;
   *) exit 2 ;;
 esac'
@@ -235,6 +278,7 @@ if [[ "$url" == *:8384/* ]]; then
   if [[ -s "$ISHIKAWA_TEST_STATE/v13-api-pid" ]]; then pid="$(cat "$ISHIKAWA_TEST_STATE/v13-api-pid")"; kill -0 "$pid" 2>/dev/null && status=200 || true; fi
 fi
 if [[ "$url" == *:3384/* ]] && ! grep -Fxq ishikawa-v1.3-web "$ISHIKAWA_TEST_STATE/containers"; then status=503; fi
+if [[ "$url" == *:3384/api/ready && "${ISHIKAWA_TEST_WEB_READINESS_FAIL:-0}" == 1 ]]; then status=503; fi
 if [[ "$url" == *:1384/* && "$(cat "$ISHIKAWA_TEST_STATE/unit")" != active ]]; then status=503; fi
 if [[ "$url" == *:3000/* ]] && ! grep -Fxq ishikawa-web "$ISHIKAWA_TEST_STATE/containers"; then status=503; fi
 printf "%s" "$status"'
@@ -321,6 +365,7 @@ reset_fresh_state() {
   printf '%s\n' active >"$test_root/state/unit"
   printf '%s\n' active >"$test_root/state/postgres"
   printf '%s\n' ishikawa-web >"$test_root/state/containers"
+  : >"$test_root/state/retained-containers"
   printf '%s\n' none >"$test_root/state/database"
   printf '%s\n' none >"$test_root/state/private-pg-port"
   rm -f -- "$test_root/state/v13-api-pid"
@@ -334,6 +379,8 @@ run_target() {
   local secret_override="${9:-}"
   local v1_2_component_fail="${10:-none}"
   local waive_v1_2_rollback="${11:-0}"
+  local web_readiness_fail="${12:-0}"
+  local web_exit_after_start="${13:-0}"
   local output="$test_root/${name}.stdout" result_path="$test_root/payload/${name}-result.txt"
   local command secrets='' waiver_option=''
   rm -f -- "$result_path"
@@ -358,6 +405,8 @@ run_target() {
     ISHIKAWA_TEST_V12_COMPONENT_FAIL="$v1_2_component_fail" \
     ISHIKAWA_TEST_INGEST_FAIL="$ingest_fail" \
     ISHIKAWA_TEST_WEB_FAIL="$web_fail" \
+    ISHIKAWA_TEST_WEB_READINESS_FAIL="$web_readiness_fail" \
+    ISHIKAWA_TEST_WEB_EXIT_AFTER_START="$web_exit_after_start" \
     ISHIKAWA_TEST_MODEL_FAIL="$model_fail" \
     ISHIKAWA_TEST_RESTORE_FAIL="$restore_fail" \
     ISHIKAWA_TEST_DB_COUNT_FAIL="$database_count_fail" \
@@ -436,6 +485,37 @@ grep -Fxq '[READINESS] state=pass;v1_2_rollback=waived;v1_2_password_read=false;
     && "$(<"$test_root/state/unit")" == inactive \
     && -f "$test_root/home/Documents/Ishikawa-v1.3-attended/state/postgresql/data/PG_VERSION" ]] \
   || fail waived_failure_state_invalid
+
+run_target waived-web-readiness-failure --target-launch 4 0 0 0 0 0 '' gemma 1 1
+(( target_status != 0 )) || fail waived_web_readiness_failure_accepted
+grep -Fxq 'reason=v1_3_web_not_ready' "$last_result" \
+  || fail waived_web_readiness_failure_reason_missing
+grep -Fq 'root_cause=web_route_compile_failed;container_running=true;container_exit_code=0;container_oom_killed=false;web_live_http=200;web_ready_http=503;api_ready_http=200;protected_log_sha256=' "$last_result" \
+  || fail waived_web_readiness_failure_detail_missing
+grep -Fxq 'v1_2_restored=false;cleanup=pass' "$last_result" \
+  || fail waived_web_readiness_failure_cleanup_missing
+[[ -s "$last_result" ]] || fail waived_web_readiness_result_empty
+! grep -Fq 'simulated attended readiness route failure' "$last_result" \
+  || fail protected_web_log_leaked
+[[ "$(wc -l <"$test_root/home/Documents/Ishikawa-v1.3-attended/state/logs/attended-web.log")" -eq 1 ]] \
+  || fail protected_web_log_line_count_invalid
+grep -Fq 'simulated attended readiness route failure' \
+  "$test_root/home/Documents/Ishikawa-v1.3-attended/state/logs/attended-web.log" \
+  || fail protected_web_log_not_retained
+! grep -Fxq ishikawa-v1.3-web "$test_root/state/retained-containers" \
+  || fail retained_web_container_not_removed_after_failure
+
+run_target waived-web-exit --target-launch 4 0 0 0 0 0 '' gemma 1 0 1
+(( target_status != 0 )) || fail waived_web_exit_accepted
+grep -Fxq 'reason=v1_3_web_not_ready' "$last_result" \
+  || fail waived_web_exit_reason_missing
+grep -Fq 'root_cause=web_container_exited;container_running=false;container_exit_code=1;container_oom_killed=false;web_live_http=000;web_ready_http=000;api_ready_http=000;protected_log_sha256=' "$last_result" \
+  || fail waived_web_exit_detail_missing
+grep -Fq 'simulated attended web process exit' \
+  "$test_root/home/Documents/Ishikawa-v1.3-attended/state/logs/attended-web.log" \
+  || fail exited_web_log_not_retained
+! grep -Fxq ishikawa-v1.3-web "$test_root/state/retained-containers" \
+  || fail exited_web_container_not_removed
 
 run_target waived-reuse-launch --target-launch 4 0 0 0 0 0 '' gemma 1
 (( target_status == 0 )) || fail waived_reuse_launch_failed
@@ -539,6 +619,8 @@ grep -Fxq 'attended_runtime=stopped;v1_2_restored=true;durable_v1_3_database=pre
   || fail rollback_state_invalid
 grep -Fxq ishikawa-web "$test_root/state/containers" || fail v1_2_web_not_restored
 ! grep -Fxq ishikawa-v1.3-web "$test_root/state/containers" || fail v1_3_web_not_stopped
+! grep -Fxq ishikawa-v1.3-web "$test_root/state/retained-containers" \
+  || fail retained_v1_3_web_not_removed
 
 run_target reuse-database-failure --target-launch 5 0 0 0 0 1
 (( target_status != 0 )) || fail reuse_database_failure_accepted
@@ -587,7 +669,7 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
 
 printf '%s\n' \
   'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;credential_boundary_detail=pass;v1_2_readiness_component_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
-  'explicit_v1_2_rollback_waiver=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
+  'explicit_v1_2_rollback_waiver=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;web_supervision_diagnostics=pass;exited_web_log_retention=pass;protected_web_log_boundary=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

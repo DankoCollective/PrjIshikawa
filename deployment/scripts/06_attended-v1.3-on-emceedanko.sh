@@ -132,6 +132,15 @@ target_pg_config=''
 target_database_action=''
 target_acceptance_stage=''
 target_api_pid=''
+target_web_container_state='unknown'
+target_web_exit_code='unknown'
+target_web_oom_killed='unknown'
+target_web_live_status='000'
+target_web_ready_status='000'
+target_web_api_status='000'
+target_web_root_cause='unreported_failure'
+target_web_log_sha256='none'
+target_web_log_bytes='0'
 target_gemma_key=''
 target_nomic_key=''
 target_v1_2_database_password=''
@@ -195,7 +204,15 @@ target_read_secret() {
 
 target_http_ready() {
   local url="$1"
-  [[ "$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 5 "$url" 2>/dev/null || true)" == 200 ]]
+  [[ "$(target_http_status "$url")" == 200 ]]
+}
+
+target_http_status() {
+  local url="$1" status='000'
+  status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    --connect-timeout 1 --max-time 5 "$url" 2>/dev/null || true)"
+  [[ "$status" =~ ^[0-9]{3}$ ]] || status='000'
+  printf '%s' "$status"
 }
 
 target_port_listening() {
@@ -248,6 +265,105 @@ target_container_exists() {
   "${target_docker[@]}" inspect "$name" >/dev/null 2>&1
 }
 
+target_capture_web_diagnostic() {
+  local container_name="$1" state='' log_path=''
+  target_web_container_state='missing'
+  target_web_exit_code='unknown'
+  target_web_oom_killed='unknown'
+  target_web_root_cause='unreported_failure'
+  target_web_log_sha256='none'
+  target_web_log_bytes='0'
+  if target_container_exists "$container_name"; then
+    state="$("${target_docker[@]}" inspect \
+      --format '{{.State.Running}};{{.State.ExitCode}};{{.State.OOMKilled}}' \
+      "$container_name" 2>/dev/null || true)"
+    IFS=';' read -r target_web_container_state target_web_exit_code \
+      target_web_oom_killed <<<"$state"
+    [[ "$target_web_container_state" == true || "$target_web_container_state" == false ]] \
+      || target_web_container_state='unknown'
+    [[ "$target_web_exit_code" =~ ^[0-9]+$ ]] || target_web_exit_code='unknown'
+    [[ "$target_web_oom_killed" == true || "$target_web_oom_killed" == false ]] \
+      || target_web_oom_killed='unknown'
+    log_path="$runtime_root/state/logs/attended-web.log"
+    if [[ -d "$runtime_root/state/logs" && ! -L "$runtime_root/state/logs" \
+        && ( ( ! -e "$log_path" && ! -L "$log_path" ) \
+          || ( -f "$log_path" && ! -L "$log_path" ) ) ]] \
+        && : >"$log_path" && chmod 0600 "$log_path"; then
+      timeout 10 "${target_docker[@]}" logs --tail 400 "$container_name" \
+        >"$log_path" 2>&1 || true
+      if [[ -f "$log_path" && ! -L "$log_path" ]]; then
+        target_web_log_sha256="$(sha256sum "$log_path" | awk '{print $1}')"
+        target_web_log_bytes="$(wc -c <"$log_path" | tr -d ' ')"
+        if grep -Eqi 'EADDRINUSE|address already in use' "$log_path"; then
+          target_web_root_cause='web_port_in_use'
+        elif grep -Eqi 'ERR_MODULE_NOT_FOUND|Module not found|Cannot find module' "$log_path"; then
+          target_web_root_cause='web_module_missing'
+        elif grep -Eqi 'EACCES|permission denied' "$log_path"; then
+          target_web_root_cause='web_permission_denied'
+        elif grep -Eqi 'Failed to compile|Build Error' "$log_path"; then
+          target_web_root_cause='web_route_compile_failed'
+        elif grep -Eqi 'unknown option|Unknown or unexpected option' "$log_path"; then
+          target_web_root_cause='web_launch_option_invalid'
+        fi
+      fi
+    else
+      target_web_root_cause='web_diagnostic_log_path_unsafe'
+    fi
+  fi
+  if [[ "$target_web_root_cause" == unreported_failure ]]; then
+    if [[ "$target_web_oom_killed" == true ]]; then
+      target_web_root_cause='web_container_oom'
+    elif [[ "$target_web_container_state" == missing ]]; then
+      target_web_root_cause='web_container_missing'
+    elif [[ "$target_web_container_state" == false ]]; then
+      target_web_root_cause='web_container_exited'
+    elif [[ "$target_web_live_status" != 200 ]]; then
+      target_web_root_cause='web_liveness_unavailable'
+    elif [[ "$target_web_ready_status" == 503 && "$target_web_api_status" == 200 ]]; then
+      target_web_root_cause='web_proxy_readiness_failed'
+    elif [[ "$target_web_api_status" != 200 ]]; then
+      target_web_root_cause='retrieval_api_readiness_lost'
+    else
+      target_web_root_cause='web_readiness_unavailable'
+    fi
+  fi
+}
+
+target_wait_web() {
+  local attempts="$1" attempt=0 started next now consecutive_proxy_failures=0
+  target_web_live_status='000'
+  target_web_ready_status='000'
+  target_web_api_status='000'
+  started="$(date +%s)"
+  next=$(( started + 25 ))
+  for (( attempt = 0; attempt < attempts; attempt += 1 )); do
+    target_container_running "$v1_3_container" || return 1
+    target_web_live_status="$(target_http_status 'http://127.0.0.1:3384/api/live')"
+    target_web_ready_status="$(target_http_status 'http://127.0.0.1:3384/api/ready')"
+    [[ "$target_web_ready_status" == 200 ]] && return 0
+    if [[ "$target_web_live_status" == 200 && "$target_web_ready_status" == 503 ]]; then
+      target_web_api_status="$(target_http_status 'http://127.0.0.1:8384/ready')"
+      if [[ "$target_web_api_status" == 200 ]]; then
+        consecutive_proxy_failures=$(( consecutive_proxy_failures + 1 ))
+        (( consecutive_proxy_failures < 5 )) || return 1
+      else
+        consecutive_proxy_failures=0
+      fi
+    else
+      consecutive_proxy_failures=0
+    fi
+    now="$(date +%s)"
+    if (( now >= next )); then
+      target_emit WEB \
+        "state=starting;elapsed_seconds=$(( now - started ));container=running;liveness_http=${target_web_live_status};readiness_http=${target_web_ready_status}"
+      next=$(( now + 25 ))
+    fi
+    sleep 1
+  done
+  target_web_api_status="$(target_http_status 'http://127.0.0.1:8384/ready')"
+  return 1
+}
+
 target_pid_is_attended_api() {
   local pid="$1" command_line=''
   [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || return 1
@@ -260,9 +376,16 @@ target_stop_v1_3() {
   local pid='' remove_pid_file=true restore_errexit=false
   [[ "$-" == *e* ]] && restore_errexit=true
   set +e
-  if ((${#target_docker[@]} > 0)) && target_container_running "$v1_3_container"; then
-    "${target_docker[@]}" stop --time 20 "$v1_3_container" >/dev/null 2>&1 \
-      || target_cleanup_failed=true
+  if ((${#target_docker[@]} > 0)) && target_container_exists "$v1_3_container"; then
+    if target_container_running "$v1_3_container"; then
+      "${target_docker[@]}" stop --time 20 "$v1_3_container" >/dev/null 2>&1 \
+        || target_cleanup_failed=true
+    fi
+    if target_container_exists "$v1_3_container"; then
+      "${target_docker[@]}" rm --force "$v1_3_container" >/dev/null 2>&1 \
+        || target_cleanup_failed=true
+    fi
+    ! target_container_exists "$v1_3_container" || target_cleanup_failed=true
   fi
   if [[ -e "$runtime_root" || -L "$runtime_root" ]]; then
     if [[ ! -d "$runtime_root" || -L "$runtime_root" \
@@ -343,8 +466,9 @@ PY
 }
 
 target_start_web() {
-  local product_root="$1" container_name="$2" values=''
-  local -a parsed=() mounts=()
+  local product_root="$1" container_name="$2" retain_on_exit="${3:-false}" values=''
+  local -a parsed=() mounts=() lifecycle=(--rm)
+  [[ "$retain_on_exit" == true ]] && lifecycle=()
   values="$(target_web_values "$product_root")" || return 1
   mapfile -t parsed <<<"$values"
   (( ${#parsed[@]} == 5 )) || return 1
@@ -356,7 +480,7 @@ target_start_web() {
     --mount "type=bind,src=$product_root/application/web/package.json,dst=/opt/nextjs/package.json,readonly"
     --mount "type=bind,src=$product_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly"
   )
-  "${target_docker[@]}" run --detach --rm \
+  "${target_docker[@]}" run --detach "${lifecycle[@]}" \
     --name "$container_name" --network host --restart no \
     --security-opt no-new-privileges --cap-drop ALL \
     --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=${parsed[0]}" \
@@ -1535,14 +1659,16 @@ target_launch_v1_3() {
       "The package-local v1.3 Retrieval API did not become ready on port 8384;root_cause=$(target_safe_root_cause "$runtime_root/state/logs/attended-retrieval.stdout" "$runtime_root/state/logs/attended-retrieval.stderr")." \
       'Allow automatic v1.2 restoration and inspect its content-free readiness marker.'
   target_emit API 'state=pass;bind=127.0.0.1:8384;execution=package_local;autostart=false'
-  target_start_web "$runtime_root" "$v1_3_container" \
+  target_start_web "$runtime_root" "$v1_3_container" true \
     || target_fail v1_3_web_start_failed \
       'The distinct attended v1.3 web container failed to start.' \
       'Allow automatic v1.2 restoration and inspect bounded container state.'
-  target_wait_http 'http://127.0.0.1:3384/api/ready' 200 WEB \
-    || target_fail v1_3_web_not_ready \
-      'The attended v1.3 UI did not become ready on port 3384.' \
-      'Allow automatic v1.2 restoration and inspect bounded container state.'
+  if ! target_wait_web 200; then
+    target_capture_web_diagnostic "$v1_3_container"
+    target_fail v1_3_web_not_ready \
+      "The attended v1.3 UI did not become ready on port 3384;root_cause=${target_web_root_cause};container_running=${target_web_container_state};container_exit_code=${target_web_exit_code};container_oom_killed=${target_web_oom_killed};web_live_http=${target_web_live_status};web_ready_http=${target_web_ready_status};api_ready_http=${target_web_api_status};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Allow automatic v1.2 restoration and inspect the protected attended web log only if the content-safe detail is insufficient.'
+  fi
   [[ "$(systemctl --user is-enabled "$v1_2_unit" 2>/dev/null || true)" != enabled \
       && "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled \
       && "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] \

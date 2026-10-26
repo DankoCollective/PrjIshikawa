@@ -124,9 +124,14 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -Eeuo pipefail' \
   'if [[ "${1:-}" == --check-readiness ]]; then' \
-  '  [[ "${ISHIKAWA_TEST_V12_PASSWORD:-}" == "${ISHIKAWA_POSTGRESQL_PASSWORD:-}" ]] || exit 1' \
-  '  printf "%s\n" "ishikawa_retrieval_api_readiness=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass"' \
-  '  exit 0' \
+  '  postgresql=pass; gemma=pass; nomic=pass' \
+  '  [[ "${ISHIKAWA_TEST_V12_PASSWORD:-}" == "${ISHIKAWA_POSTGRESQL_PASSWORD:-}" ]] || postgresql=blocked' \
+  '  [[ "${ISHIKAWA_TEST_V12_COMPONENT_FAIL:-}" != gemma ]] || gemma=blocked' \
+  '  [[ "${ISHIKAWA_TEST_V12_COMPONENT_FAIL:-}" != nomic ]] || nomic=blocked' \
+  '  state=pass; [[ "$postgresql" == pass && "$gemma" == pass && "$nomic" == pass ]] || state=blocked' \
+  '  printf "%s\n" "ishikawa_retrieval_api_readiness=$state;configuration=pass;storage=pass;postgresql=$postgresql;gemma=$gemma;nomic=$nomic"' \
+  '  if [[ "$state" == pass ]]; then exit 0; fi' \
+  '  exit 1' \
   'fi' \
   'exec "$(dirname -- "$0")/ishikawa-retrieval-api.real" "$@"' \
   >"$active/scripts/ishikawa-retrieval-api"
@@ -321,6 +326,7 @@ run_target() {
   local ingest_fail="${4:-0}" web_fail="${5:-0}" model_fail="${6:-0}" restore_fail="${7:-0}"
   local database_count_fail="${8:-0}"
   local secret_override="${9:-}"
+  local v1_2_component_fail="${10:-none}"
   local output="$test_root/${name}.stdout" result_path="$test_root/payload/${name}-result.txt"
   local command secrets=''
   rm -f -- "$result_path"
@@ -340,6 +346,7 @@ run_target() {
     ISHIKAWA_TEST_ROOT="$test_root" \
     ISHIKAWA_TEST_SCHEMA_SHA="$schema_sha256" \
     ISHIKAWA_TEST_V12_PASSWORD='v12-test-password' \
+    ISHIKAWA_TEST_V12_COMPONENT_FAIL="$v1_2_component_fail" \
     ISHIKAWA_TEST_INGEST_FAIL="$ingest_fail" \
     ISHIKAWA_TEST_WEB_FAIL="$web_fail" \
     ISHIKAWA_TEST_MODEL_FAIL="$model_fail" \
@@ -382,6 +389,19 @@ grep -Fxq 'detail=The v1.3 PostgreSQL ingestion password must be between 16 and 
     && "$(<"$test_root/state/postgres")" == active \
     && ! -e "$test_root/home/Documents/Ishikawa-v1.3-attended" ]] \
   || fail credential_length_failure_mutated_state
+
+reset_fresh_state
+run_target v1-2-model-route-failure --target-launch 5 0 0 0 0 0 '' gemma
+(( target_status != 0 )) || fail v1_2_model_route_failure_accepted
+grep -Fxq 'reason=v1_2_restore_preflight_failed' "$last_result" \
+  || fail v1_2_model_route_failure_reason_missing
+grep -Fxq 'detail=The v1.2 real readiness path failed;readiness_marker=ishikawa_retrieval_api_readiness=blocked;configuration=pass;storage=pass;postgresql=pass;gemma=blocked;nomic=pass.' "$last_result" \
+  || fail v1_2_model_route_failure_detail_missing
+[[ "$(<"$test_root/state/database")" == none \
+    && "$(<"$test_root/state/unit")" == active \
+    && "$(<"$test_root/state/postgres")" == active \
+    && ! -e "$test_root/home/Documents/Ishikawa-v1.3-attended" ]] \
+  || fail v1_2_model_route_failure_mutated_state
 
 reset_fresh_state
 candidate_drift_path="$candidate/config/deployment.yaml"
@@ -511,7 +531,7 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
   || fail qualified_candidate_changed
 
 printf '%s\n' \
-  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;credential_boundary_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
+  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;credential_boundary_detail=pass;v1_2_readiness_component_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

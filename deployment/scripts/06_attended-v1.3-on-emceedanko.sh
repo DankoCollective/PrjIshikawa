@@ -853,16 +853,26 @@ PY
 }
 
 target_validate_v1_2_restore_credentials() {
-  local readiness=''
-  readiness="$(
+  local readiness='' readiness_marker='unavailable' readiness_status=0
+  if readiness="$(
     ISHIKAWA_GEMMA_API_KEY="$target_gemma_key" \
     ISHIKAWA_NOMIC_API_KEY="$target_nomic_key" \
     ISHIKAWA_POSTGRESQL_PASSWORD="$target_v1_2_database_password" \
     PYTHONDONTWRITEBYTECODE=1 \
       "$active_v1_2_root/scripts/ishikawa-retrieval-api" --check-readiness
-  )" || target_fail v1_2_restore_preflight_failed \
-    'The entered v1.2 credentials did not pass the real readiness path.' \
-    'Correct the v1.2 PostgreSQL retrieval password before any switchover.'
+  )"; then
+    readiness_status=0
+  else
+    readiness_status="$?"
+  fi
+  if (( readiness_status != 0 )); then
+    if [[ "$readiness" =~ ^ishikawa_retrieval_api_readiness=blocked\;configuration=(pass|blocked)\;storage=(pass|blocked)\;postgresql=(pass|blocked)\;gemma=(pass|blocked)\;nomic=(pass|blocked)$ ]]; then
+      readiness_marker="$readiness"
+    fi
+    target_fail v1_2_restore_preflight_failed \
+      "The v1.2 real readiness path failed;readiness_marker=${readiness_marker}." \
+      'Restore the configured v1.2 Gemma/Nomic forwards or correct its PostgreSQL retrieval password according to the blocked component before switchover.'
+  fi
   grep -Fxq 'ishikawa_retrieval_api_readiness=pass;configuration=pass;storage=pass;postgresql=pass;gemma=pass;nomic=pass' \
     <<<"$readiness" \
     || target_fail v1_2_restore_marker_invalid \

@@ -401,6 +401,15 @@ exact bytes for the next gate.
   facts and required runtime/package/capacity/listener compatibility without
   retaining hostname, account, address, device serial, credential, document,
   or other identifying/private values.
+- **RECON-07 — Native application-build execution.** Script 01's application
+  archive is platform-neutral, but its frozen JavaScript and production-build
+  gates execute the exact Linux AMD64 runtime image. DankoSurface is ARM64 and
+  has no approved AMD64 emulation. Script 08 therefore runs the unchanged
+  application builder inside a checksum-bound private transfer on EmceeDanko,
+  verifies the retained Script 07 image ID before execution, returns only the
+  application handoff, and removes the transfer. This applies D12's native
+  execution constraint without changing the external-application/image
+  architecture or coupling application bytes into the image.
 
 ## Implementation checkpoint — 2026-10-26
 
@@ -446,12 +455,11 @@ application build, exact-image advisory/license review, installed production
 UI, EmceeDanko requalification and human acceptance, Tech inventory, protected
 corpus execution, independent final review, or stable-handoff promotion.
 
-Script 07's first native execution passed build, transfer, publication, and
-cleanup, but post-run review found that its records did not yet bind the
-exported OCI config/history or enumerate npm and Yarn as runtime tools. The
-builder, wrapper, carry assembler, and portable verifier now enforce those
-bindings plus the exact archive tag and checksum-addressed layer graph. Current
-next gate: rerun corrected Script 07 on the approved AMD64 Docker host. The
+Corrected Script 07 passed build, transfer, publication, independent return
+verification, and cleanup. Its evidence binds the exact archive tag, eight
+checksum-addressed layers, OCI config, canonical history, image ID, SBOM, and
+Node/npm/Yarn license records. Current next gate: run Script 08 to build the
+external application candidate against that retained native AMD64 image. The
 package remains **NOT CARRY-READY**.
 
 ## Mandatory package checklist
@@ -609,11 +617,14 @@ disposition.
   checkout and compare byte-for-byte identities, or document and eliminate
   every nondeterministic field before acceptance. Evidence: ___;
   reviewer/date: ___.
-- [ ] **BUILD-03 — MUST.** Build/export the final app-free generic Linux AMD64
+- [x] **BUILD-03 — MUST.** Build/export the final app-free generic Linux AMD64
   runtime image natively on EmceeDanko through Script 07, record its image
   ID/config digest/platform, and verify the standalone archive and absence of
-  Ishikawa source/build output after a clean load. Evidence: ___;
-  reviewer/date: ___.
+  Ishikawa source/build output after a clean load. Evidence:
+  `deployment/evidence/ISHIKAWA_V1_3_1_RUNTIME_IMAGE_BUILD.md`, runtime archive
+  SHA-256
+  `af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f`;
+  reviewer/date: Script 07 plus local independent artifact review, 2026-10-26.
 - [ ] **BUILD-04 — MUST.** Verify every sidecar against the artifact from the
   final directory and independently recompute every SHA-256. Evidence: ___;
   reviewer/date: ___.

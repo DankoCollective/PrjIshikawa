@@ -87,9 +87,11 @@
 15. Run Script 07 to transfer the checksum-bound generic-image sources to the
     native Ubuntu 24.04 AMD64 EmceeDanko Docker host, build and verify the
     application-free Linux AMD64 runtime-image handoff there, and return it to
-    the local artifact lane. Then build the deterministic external Ishikawa
-    v1.3.1 application candidate with the revised Script 01. Keep the two
-    handoffs separate.
+    the local artifact lane. Script 08 then transfers the checksum-bound
+    external application source and revised Script 01 to the same native host,
+    proves the retained Script 07 image ID, runs every application build gate,
+    and returns only the verified deterministic application handoff. Keep the
+    two handoffs separate.
 16. Run the complete native suite plus the runtime-image, production-stack,
     application-boundary, carry-builder, and portable-deployment branch
     harnesses. A mocked branch test supports failure coverage but does not
@@ -116,6 +118,7 @@
 - `deployment/scripts/05_qualify-v1.3-on-emceedanko.sh`
 - `deployment/scripts/06_attended-v1.3-on-emceedanko.sh`
 - `deployment/scripts/07_build-node-next-runtime-on-emceedanko.sh`
+- `deployment/scripts/08_build-v1.3.1-application-on-emceedanko.sh`
 - `deployment/scripts/build-carry-candidate.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`

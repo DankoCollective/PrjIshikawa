@@ -31,6 +31,12 @@ The v1.3.1 source manifest contains 211 files and has SHA-256:
   artifact return, atomic publication, repeat supersession, nested build
   failure, returned-checksum refusal, host-identity refusal, current-handoff
   preservation, signal propagation, and remote cleanup passed.
+- Script 08 wrapper harness: validation-only, exact runtime-image binding,
+  checksum-bound application-source transfer, native application build,
+  verified return, atomic publication, repeat supersession, nested build
+  failure, runtime-image mismatch, returned checksum/receipt refusal,
+  host-identity refusal, signal propagation, current-handoff preservation, and
+  remote cleanup passed.
 - Permanent stack lifecycle harness: clean start/status/stop, restart with a
   fresh build, production-build failure cleanup, build timeout cleanup,
   liveness failure cleanup, stale-container preflight, PostgreSQL failure
@@ -74,21 +80,20 @@ is not a promotion input.
 This record does not claim that the corrected generic AMD64 image or v1.3.1
 application candidate has been scanned, requalified, accepted, or promoted.
 
-The remaining ordered gates are:
+Corrected Script 07 subsequently passed and is recorded in
+`ISHIKAWA_V1_3_1_RUNTIME_IMAGE_BUILD.md`. The remaining ordered gates are:
 
-1. rerun corrected Script 07 to build and export the exact generic Linux AMD64
-   runtime image natively on EmceeDanko;
-2. inspect the exact combined SBOM, license inventory, build receipt, image
-   identity, image history, and archive checksum and complete the fresh
-   advisory scan;
-3. build the exact v1.3.1 application candidate and verify its application
+1. run Script 08 to build the exact v1.3.1 application candidate natively on
+   EmceeDanko and verify its application
    SBOM, license record, deterministic archive, clean installation, and
    production web build;
-4. requalify those exact bytes on EmceeDanko and obtain v1.3.1 human UI
+2. complete the exact-image and exact-application advisory disposition from
+   their recorded SBOMs;
+3. requalify those exact bytes on EmceeDanko and obtain v1.3.1 human UI
    acceptance;
-5. accept the read-only Tech inventory and resolve any required offline native
+4. accept the read-only Tech inventory and resolve any required offline native
    prerequisite payload;
-6. complete independent review and atomically promote the exact carry bytes to
+5. complete independent review and atomically promote the exact carry bytes to
    the stable handoff.
 
 Current disposition:

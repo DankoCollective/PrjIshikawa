@@ -681,6 +681,7 @@ target_verify_identity_and_payload() {
 
 target_verify_candidate() {
   local expected_modes actual_modes candidate_checksum_output candidate_mismatch_paths
+  local candidate_mode_mismatches
   for path in "$candidate_root" "$corpus_input_root" "$active_v1_2_root" "$rollback_v1_2_root"; do
     [[ -d "$path" && ! -L "$path" ]] \
       || target_fail required_installation_unsafe "Required installation path is missing or unsafe: ${path}." \
@@ -712,10 +713,40 @@ if not expected or expected != actual or any(item.is_symlink() for item in root.
 PY
   expected_modes="$(<"$target_payload_root/candidate-MODES")"
   actual_modes="$(cd -- "$candidate_root" && find . -type f -printf '%m %P\n' | sort)"
-  [[ "$actual_modes" == "$expected_modes" ]] \
-    || target_fail staged_candidate_mode_mismatch \
-      'The staged v1.3 candidate file modes differ from the exact release payload.' \
+  if [[ "$actual_modes" != "$expected_modes" ]]; then
+    candidate_mode_mismatches="$(PYTHONDONTWRITEBYTECODE=1 python3 -B - \
+      "$target_payload_root/candidate-MODES" "$candidate_root" <<'PY'
+import pathlib
+import stat
+import sys
+
+manifest = pathlib.Path(sys.argv[1]).resolve(strict=True)
+root = pathlib.Path(sys.argv[2]).resolve(strict=True)
+expected = {}
+for line in manifest.read_text(encoding="utf-8").splitlines():
+    mode, separator, name = line.partition(" ")
+    if not separator or not mode.isdigit() or not name or name in expected:
+        raise SystemExit(1)
+    expected[name] = mode
+actual = {
+    item.relative_to(root).as_posix(): f"{stat.S_IMODE(item.stat().st_mode):o}"
+    for item in root.rglob("*")
+    if item.is_file()
+}
+differences = []
+for name in sorted(set(expected) | set(actual)):
+    if expected.get(name) != actual.get(name):
+        differences.append(
+            f"{name}:expected={expected.get(name, 'missing')},actual={actual.get(name, 'missing')}"
+        )
+print(",".join(differences[:10]))
+PY
+)" || candidate_mode_mismatches='unclassified'
+    [[ -n "$candidate_mode_mismatches" ]] || candidate_mode_mismatches='unclassified'
+    target_fail staged_candidate_mode_mismatch \
+      "The staged v1.3 candidate file modes differ from the exact release payload. Mode mismatches: ${candidate_mode_mismatches}." \
       'Restage the exact qualified candidate with Script 04.'
+  fi
   (cd -- "$corpus_input_root" \
     && sha256sum --check --strict qualification-corpus-v3.tar.gz.sha256 >/dev/null \
     && [[ "$(sha256sum qualification-corpus-v3.tar.gz | awk '{print $1}')" == "$expected_corpus_sha256" ]]) \

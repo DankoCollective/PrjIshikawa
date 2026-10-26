@@ -386,6 +386,22 @@ grep -Fxq 'detail=The staged v1.3 candidate no longer matches the exact Script 0
 mv -- "$candidate_drift_backup" "$candidate_drift_path"
 
 reset_fresh_state
+candidate_mode_drift_path="$candidate/scripts/ishikawa-retrieval-api"
+chmod 0755 "$candidate_mode_drift_path"
+run_target candidate-mode-failure --target-launch 5
+(( target_status != 0 )) || fail candidate_mode_failure_accepted
+grep -Fxq 'reason=staged_candidate_mode_mismatch' "$last_result" \
+  || fail candidate_mode_failure_reason_missing
+grep -Fxq 'detail=The staged v1.3 candidate file modes differ from the exact release payload. Mode mismatches: scripts/ishikawa-retrieval-api:expected=700,actual=755.' "$last_result" \
+  || fail candidate_mode_failure_detail_missing
+[[ "$(<"$test_root/state/database")" == none \
+    && "$(<"$test_root/state/unit")" == active \
+    && "$(<"$test_root/state/postgres")" == active \
+    && ! -e "$test_root/home/Documents/Ishikawa-v1.3-attended" ]] \
+  || fail candidate_mode_failure_mutated_state
+chmod 0700 "$candidate_mode_drift_path"
+
+reset_fresh_state
 run_target web-failure --target-launch 5 0 1
 (( target_status != 0 )) || fail web_failure_accepted
 grep -Fxq 'reason=v1_3_web_start_failed' "$last_result" || fail web_failure_reason_missing
@@ -479,7 +495,7 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
   || fail qualified_candidate_changed
 
 printf '%s\n' \
-  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;candidate_checksum_path_detail=pass;partial_state_rejection=pass' \
+  'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \
   'pre_switchover_reuse_failure_cleanup=pass' \

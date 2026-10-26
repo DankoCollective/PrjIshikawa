@@ -3,8 +3,8 @@ set -Eeuo pipefail
 umask 077
 
 # Purpose:
-#   Build, qualify, and atomically publish the corpus-agnostic Ishikawa v1.3
-#   application release.
+#   Build, qualify, and atomically publish the corpus-agnostic Ishikawa v1.3.1
+#   application candidate.
 #
 # Mental model:
 #   Validate frozen inputs, run native and browser tests, build twice, require
@@ -12,11 +12,11 @@ umask 077
 #   verified archive to the stable current handoff.
 #
 # Inputs or prerequisites:
-#   Frozen v1.3 source, local test/build dependencies, Docker, and attended sudo
+#   Frozen v1.3.1 source, local test/build dependencies, Docker, and attended sudo
 #   only when the local container test path requires it.
 #
 # Outputs or artifact lane:
-#   local/artifacts/ishikawa-v1.3-current and a detailed ignored local report.
+#   local/artifacts/ishikawa-v1.3.1-candidate-current and an ignored local report.
 #
 # Usage:
 #   bash ./deployment/scripts/01_build-ishikawa-release.sh --run
@@ -29,15 +29,17 @@ readonly web_root="$product_root/application/web"
 readonly config_root="$product_root/config/templates"
 readonly packaging_root="$product_root/packaging"
 readonly test_runner="$product_root/scripts/run-local-validation-tests.sh"
-readonly source_manifest="$repo_root/docs/releases/ISHIKAWA_V1_3_SOURCE_SHA256SUMS"
-readonly release_readme="$repo_root/deployment/assets/README-v1.3.md"
+readonly source_manifest="$repo_root/docs/releases/ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS"
+readonly license_file="$repo_root/LICENSE"
+readonly release_readme="$repo_root/deployment/assets/README-v1.3.1.md"
 readonly release_verifier="$repo_root/deployment/assets/verify-ishikawa-release"
 readonly decision_record="$repo_root/docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md"
-readonly freeze_record="$repo_root/docs/releases/ISHIKAWA_V1_3_RELEASE_FREEZE.md"
+readonly carry_record="$repo_root/docs/releases/ISHIKAWA_ORG_LAB_CARRY_READINESS_CHECKLIST.md"
 readonly report_root="$repo_root/local/reports/ishikawa-release-build"
 readonly artifact_root="$repo_root/local/artifacts"
-readonly application_current="$artifact_root/ishikawa-v1.3-current"
-readonly bundle_name='ishikawa-v1.3'
+readonly application_current="$artifact_root/ishikawa-v1.3.1-candidate-current"
+readonly bundle_name='ishikawa-v1.3.1'
+readonly web_image='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
 readonly expected_native_tests=486
 readonly expected_javascript_tests=17
 readonly frontier_artifact_sha256='1ccb7d59ed67073213051d28cd6142ab445b616e34a6ef7eecb22b174b52d972'
@@ -81,7 +83,7 @@ cleanup() {
   if [[ -n "$work_root" && "$work_root" == /tmp/ishikawa-release-build.* && -d "$work_root" ]]; then
     rm -rf -- "$work_root"
   fi
-  if [[ -n "$application_stage" && "$application_stage" == "$artifact_root"/.ishikawa-v1.3-current.* \
+  if [[ -n "$application_stage" && "$application_stage" == "$artifact_root"/.ishikawa-v1.3.1-candidate-current.* \
       && -d "$application_stage" && ! -L "$application_stage" ]]; then
     rm -rf -- "$application_stage"
   fi
@@ -98,7 +100,7 @@ if [[ "$#" -ne 1 || ( "$mode" != '--validate-only' && "$mode" != '--run' ) ]]; t
     'Rerun this command with one supported mode.'
 fi
 
-for command_name in awk bash cmp cp date diff docker dpkg find grep gzip install \
+for command_name in awk bash cmp cp date diff docker dpkg find grep gzip id install \
   kill mkdir mktemp mv python3 rm sed sha256sum sort stat sudo tar tee; do
   command -v "$command_name" >/dev/null 2>&1 \
     || { current_stage='preflight'; block "command_missing_${command_name}" \
@@ -106,8 +108,8 @@ for command_name in awk bash cmp cp date diff docker dpkg find grep gzip install
       'Restore the named command and rerun this script.'; }
 done
 
-for file in "$test_runner" "$source_manifest" "$release_readme" \
-  "$release_verifier" "$decision_record" "$freeze_record" \
+for file in "$test_runner" "$source_manifest" "$license_file" "$release_readme" \
+  "$release_verifier" "$decision_record" "$carry_record" \
   "$packaging_root/install-ishikawa" "$packaging_root/database/install-schema" \
   "$packaging_root/database/schema.sql"; do
   [[ -f "$file" && ! -L "$file" && -r "$file" ]] \
@@ -130,8 +132,8 @@ find "$product_root" -type l -print -quit | grep -q . \
   || { current_stage='preflight'; block python_inventory_mismatch \
     'The canonical Python module inventory is not 52 files.' \
     'Review source drift before rebuilding the release.'; }
-for decision in V13-60 V13-61 V13-62 V13-63 V13-64 V13-65 V13-66 V13-67 \
-  V13-68 V13-69 V13-70 V13-71 V13-72 V13-73 V13-74 V13-75 V13-76; do
+for decision_number in {60..89}; do
+  decision="V13-${decision_number}"
   decision_block="$(awk -v header="### ${decision} " '
     index($0, header) == 1 {capture=1}
     capture && /^### / && index($0, header) != 1 {exit}
@@ -183,7 +185,7 @@ PY
 
 if [[ "$mode" == '--validate-only' ]]; then
   printf '%s\n' \
-    'purpose=validate_frozen_ishikawa_v1_3_release_build' \
+    'purpose=validate_frozen_ishikawa_v1_3_1_candidate_build' \
     'source_manifest=pass;python_modules=52;source_documents=0;corpus_dependency=false;remote_contact=false;model_contact=false;database_contact=false' \
     'expected_prompts=at_most_one_attended_sudo_prompt_for_docker_during_run' \
     'expected_duration=about_2_to_5_minutes'
@@ -203,7 +205,7 @@ work_root="$(mktemp -d /tmp/ishikawa-release-build.XXXXXX)" \
     'Correct /tmp availability and rerun this script.'; }
 
 emit() { printf '%s\n' "$1" | tee -a "$report_path"; }
-emit 'purpose=build_and_publish_frozen_ishikawa_v1_3_release'
+emit 'purpose=build_and_publish_frozen_ishikawa_v1_3_1_candidate'
 emit "report_path=$report_path"
 emit 'authorized_actions=run_local_tests_use_existing_local_container_image_assemble_verify_and_publish_local_application_release'
 emit 'non_actions=no_remote_contact_no_model_contact_no_database_contact_no_credential_read_no_service_start_no_image_pull_no_black_corpus_access_no_boot_autostart_change'
@@ -221,20 +223,25 @@ if ! docker info >/dev/null 2>&1; then
       'Docker remained unavailable after attended sudo.' \
       'Restore local Docker access and rerun the same command.'
 fi
-architecture="$(dpkg --print-architecture)"
-case "$architecture" in arm64|amd64) ;; *) block unsupported_architecture \
-  "Unsupported host architecture: ${architecture}." \
-  'Use an accepted arm64 or amd64 release-build host.' ;; esac
-image="node-24-slim-nextjs-16-4-1:${architecture}"
-"${docker_command[@]}" image inspect "$image" >/dev/null 2>&1 \
+host_architecture="$(dpkg --print-architecture)"
+[[ "$host_architecture" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || block host_architecture_invalid \
+  'The local build-host architecture could not be identified.' \
+  'Correct the local package architecture metadata and rerun.'
+"${docker_command[@]}" image inspect "$web_image" >/dev/null 2>&1 \
   || block required_local_image_missing \
-    "The accepted local web image is missing: ${image}." \
+    "The accepted local web image is missing: ${web_image}." \
     'Restore the checksum-accepted image locally; this script will not pull it.'
-[[ "$("${docker_command[@]}" image inspect "$image" --format '{{.Architecture}}')" == "$architecture" ]] \
+[[ "$("${docker_command[@]}" image inspect "$web_image" --format '{{.Architecture}}')" == amd64 ]] \
   || block image_architecture_mismatch \
     'The accepted web image architecture does not match the build host.' \
     'Restore the correct architecture-tagged image.'
-emit "milestone=container_access;state=pass;architecture=$architecture;image=$image"
+emit "milestone=container_access;state=pass;host_architecture=$host_architecture;runtime_platform=linux/amd64;image=$web_image"
+operator_uid="$(id -u)"
+operator_gid="$(id -g)"
+[[ "$operator_uid" =~ ^[0-9]+$ && "$operator_gid" =~ ^[0-9]+$ ]] \
+  || block operator_identity_invalid \
+    'The build operator UID or primary GID is invalid.' \
+    'Run from the intended local build operator account.'
 
 current_stage='native_tests'
 emit 'milestone=native_tests;state=start'
@@ -266,8 +273,10 @@ declare -a web_mounts=(
 current_stage='javascript_tests'
 emit 'milestone=javascript_tests;state=start'
 javascript_result="$work_root/javascript-tests.txt"
-"${docker_command[@]}" run --rm --network none "${web_mounts[@]}" \
-  "$image" node --test --test-reporter=tap \
+"${docker_command[@]}" run --rm --platform linux/amd64 --network none --read-only \
+  --security-opt no-new-privileges --cap-drop ALL \
+  --user "$operator_uid:$operator_gid" "${web_mounts[@]}" \
+  "$web_image" node --test --test-reporter=tap \
   tests/chat-contract.test.mjs tests/presentation.test.mjs tests/runtime-config.test.mjs \
   >"$javascript_result" 2>&1 \
   || { tail -n 120 "$javascript_result" | tee -a "$report_path"; block javascript_tests_failed \
@@ -298,11 +307,19 @@ PY
 current_stage='next_build'
 emit 'milestone=next_build;state=start'
 build_result="$work_root/next-build.txt"
-"${docker_command[@]}" run --rm --network none \
+"${docker_command[@]}" run --rm --platform linux/amd64 --network none \
+  --security-opt no-new-privileges --cap-drop ALL \
+  --user "$operator_uid:$operator_gid" \
   -e ISHIKAWA_PRODUCT_DISPLAY_NAME=Ishikawa \
   -e "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=$product_ui_config_base64" \
   -e ISHIKAWA_RETRIEVAL_BASE_URL=http://127.0.0.1:1384 \
-  "${web_mounts[@]}" "$image" npm run build >"$build_result" 2>&1 &
+  --read-only \
+  --tmpfs "/opt/nextjs/.next:rw,nosuid,nodev,size=536870912,mode=0700,uid=${operator_uid},gid=${operator_gid}" \
+  --env 'HOME=/opt/nextjs/.next/home' \
+  --env 'TMPDIR=/opt/nextjs/.next/tmp' \
+  "${web_mounts[@]}" "$web_image" sh -eu -c \
+  'mkdir -p -- "$HOME" "$TMPDIR"; node_modules/.bin/next build; test -f .next/BUILD_ID; test -d .next/server' \
+  >"$build_result" 2>&1 &
 build_pid="$!"
 elapsed=0
 while kill -0 "$build_pid" 2>/dev/null; do
@@ -328,7 +345,7 @@ declare -a runtime_configs=(
   injection_profile.yaml logging_profile.yaml method_profile.yaml product.yaml
   query_resolution_profile.yaml reconstruction_profile.yaml relationship_types.yaml
   relevance_profile.yaml retrieval_service_profile.yaml runtime_dependencies.yaml
-  scope_profile.yaml sufficiency_profile.yaml
+  scope_profile.yaml sufficiency_profile.yaml corpus_metadata.csv
 )
 declare -a web_files=(
   app/api/dependencies/route.js app/api/live/route.js app/api/ready/route.js
@@ -344,7 +361,7 @@ declare -a product_docs=(
   PRODUCT_PRESENTATION_CONFIGURATION.md SERVICE_OPERATIONS.md STACK_CONTROL.md
 )
 declare -a product_commands=(
-  ishikawa-ingest ishikawa-log-control ishikawa-observability-retention
+  ishikawa-create-ingestion-config ishikawa-ingest ishikawa-log-control ishikawa-observability-retention
   ishikawa-produce-artifacts ishikawa-retrieval-api ishikawa-stack
   capture-pdf-extraction-observations.py normalize-pdf-extraction.py
   create-structural-chunk-candidates.py embed_document_candidates_via_endpoint.py
@@ -358,6 +375,17 @@ write_manifest() {
       find . -type f ! -path './SHA256SUMS' -printf '%P\n' | sort
     ) >SHA256SUMS
   )
+}
+
+verify_publication_language() {
+  local root="$1"
+  if grep -R -I -E -n \
+      '/mnt/|Prj|phase-|Script[[:space:]]+[0-9]|Codex|EmceeDanko|DankoSurface|local/artifacts|(^|[^[:alnum:]_])agent([^[:alnum:]_]|$)' \
+      "$root" --exclude=SHA256SUMS >/dev/null; then
+    block repository_reference_found \
+      'The assembled application contains repository, workstream, agent, or test-host terminology.' \
+      'Replace the leaking package text with product and operator language before publication.'
+  fi
 }
 
 assemble_application() {
@@ -417,6 +445,7 @@ assemble_bundle() {
   install -d -m 0755 -- "$bundle/application" "$bundle/database"
   assemble_application "$bundle/application"
   assemble_database "$bundle/database"
+  install -m 0644 -- "$license_file" "$bundle/LICENSE"
   install -m 0644 -- "$release_readme" "$bundle/README.md"
   install -m 0755 -- "$release_verifier" "$bundle/verify-ishikawa-release"
   python3 -B - "$bundle/release.json" "$source_manifest_sha256" \
@@ -433,7 +462,7 @@ record = {
     "historical_mutation_files": 0,
     "javascript_test_count": 17,
     "native_test_count": 486,
-    "release_name": "Ishikawa v1.3",
+    "release_name": "Ishikawa v1.3.1",
     "retrieval_mrr_at_20": 0.89545,
     "schema_version": 5,
     "source_document_count": 0,
@@ -450,6 +479,7 @@ mkdir -p -- "$work_root/build-a" "$work_root/build-b" "$work_root/extracted"
 assemble_bundle "$work_root/build-a"
 assemble_bundle "$work_root/build-b"
 for bundle in "$work_root/build-a/$bundle_name" "$work_root/build-b/$bundle_name"; do
+  verify_publication_language "$bundle"
   bash "$bundle/verify-ishikawa-release" >/dev/null \
     || block assembled_package_verification_failed \
       'An assembled package failed its own verifier.' \
@@ -465,7 +495,7 @@ archive_b="$work_root/$bundle_name-b.tar.gz"
 for build in a b; do
   archive_variable="archive_${build}"
   archive_path="${!archive_variable}"
-  tar --sort=name --format=posix --mtime='UTC 2026-10-24' --owner=0 --group=0 --numeric-owner \
+  tar --sort=name --format=posix --mtime='UTC 2026-10-26' --owner=0 --group=0 --numeric-owner \
     --pax-option=delete=atime,delete=ctime -C "$work_root/build-$build" -cf - "$bundle_name" \
     | gzip -n >"$archive_path"
 done
@@ -515,14 +545,14 @@ emit 'milestone=coding_standard;state=pass;deterministic=true;fresh_install=true
 
 current_stage='publication'
 emit 'milestone=publication;state=start'
-application_stage="$artifact_root/.ishikawa-v1.3-current.${timestamp}.$$"
+application_stage="$artifact_root/.ishikawa-v1.3.1-candidate-current.${timestamp}.$$"
 mkdir -p -- "$application_stage" "$artifact_root/superseded"
 cp -- "$archive_a" "$application_stage/$bundle_name.tar.gz"
 (
   cd -- "$application_stage"
   sha256sum "$bundle_name.tar.gz" >"$bundle_name.tar.gz.sha256"
 )
-cp -- "$source_manifest" "$application_stage/ISHIKAWA_V1_3_SOURCE_SHA256SUMS"
+cp -- "$source_manifest" "$application_stage/ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS"
 python3 -B - "$application_stage/release-receipt.json" "$application_archive_sha256" \
   "$source_manifest_sha256" "$frontier_artifact_sha256" "$frontier_report_sha256" <<'PY'
 import json
@@ -536,15 +566,76 @@ record = {
     "fresh_install": "pass",
     "frontier_artifact_sha256": frontier_artifact,
     "frontier_report_sha256": frontier_report,
-    "human_ui_validation": "accepted",
-    "release": "Ishikawa v1.3",
+    "human_ui_validation": "pending_exact_candidate_requalification",
+    "release": "Ishikawa v1.3.1 candidate",
     "source_manifest_sha256": source_manifest,
 }
 Path(output).write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
-(cd -- "$application_stage" && sha256sum --check --strict "$bundle_name.tar.gz.sha256" >/dev/null) \
+python3 -B - "$application_stage/application-sbom.cdx.json" \
+  "$application_archive_sha256" <<'PY'
+import json
+import sys
+import uuid
+from pathlib import Path
+
+output, archive_sha256 = sys.argv[1:]
+bom = {
+    "bomFormat": "CycloneDX",
+    "components": [],
+    "metadata": {
+        "component": {
+            "bom-ref": "pkg:generic/ishikawa@1.3.1",
+            "hashes": [{"alg": "SHA-256", "content": archive_sha256}],
+            "licenses": [{"license": {"id": "Apache-2.0"}}],
+            "name": "Ishikawa",
+            "type": "application",
+            "version": "1.3.1",
+        },
+        "properties": [
+            {"name": "ishikawa:application-archive", "value": "ishikawa-v1.3.1.tar.gz"},
+            {"name": "ishikawa:runtime-dependencies", "value": "separate-runtime-image-sbom"},
+            {"name": "ishikawa:native-dependencies", "value": "target-inventory"},
+            {"name": "ishikawa:source-documents", "value": "0"},
+        ],
+    },
+    "serialNumber": f"urn:uuid:{uuid.UUID(archive_sha256[:32])}",
+    "specVersion": "1.5",
+    "version": 1,
+}
+Path(output).write_text(
+    json.dumps(bom, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+python3 -B - "$application_stage/application-license.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = {
+    "application": "Ishikawa",
+    "application_license": "Apache-2.0",
+    "license_file_in_archive": "ishikawa-v1.3.1/LICENSE",
+    "native_dependencies": "resolved_by_target_inventory",
+    "runtime_dependencies": "covered_by_separate_runtime_image_license_inventory",
+    "schema": "ishikawa.application-license.v1",
+    "version": "1.3.1",
+}
+Path(sys.argv[1]).write_text(
+    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+(
+  cd -- "$application_stage"
+  while IFS= read -r name; do sha256sum -- "$name"; done < <(
+    find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\n' | sort
+  ) >SHA256SUMS
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) \
   || block application_publication_checksum_failed \
-    'The staged application handoff failed its sidecar verification.' \
+    'The staged application handoff failed its complete checksum manifest.' \
     'Do not publish the application handoff.'
 application_backup=''
 if [[ -e "$application_current" || -L "$application_current" ]]; then
@@ -552,7 +643,7 @@ if [[ -e "$application_current" || -L "$application_current" ]]; then
     || block application_current_unsafe \
       'The stable application handoff exists but is not a regular directory.' \
       'Inspect the path before publication.'
-  application_backup="$artifact_root/superseded/ishikawa-v1.3-current-$timestamp"
+  application_backup="$artifact_root/superseded/ishikawa-v1.3.1-candidate-current-$timestamp-$$"
   [[ ! -e "$application_backup" && ! -L "$application_backup" ]] \
     || block application_backup_exists \
       'The selected superseded application path already exists.' \
@@ -568,12 +659,12 @@ if ! mv -- "$application_stage" "$application_current"; then
 fi
 application_stage=''
 
-(cd -- "$application_current" && sha256sum --check --strict "$bundle_name.tar.gz.sha256" >/dev/null) \
+(cd -- "$application_current" && sha256sum --check --strict SHA256SUMS >/dev/null) \
   || block published_application_checksum_failed \
     'The published application handoff failed independent verification.' \
     'Stop and inspect the stable handoff path.'
 emit "milestone=publication;state=pass;application_current=$application_current"
 emit "application_archive_sha256=$application_archive_sha256;source_documents=0;corpus_dependency=false"
 emit 'target_contact=false;database_contact=false;model_contact=false;service_changed=false;boot_autostart_changed=false'
-emit 'next_gate=operator_run_emceedanko_inventory_and_disposable_qualification'
+emit 'next_gate=exact_candidate_production_lifecycle_and_emceedanko_requalification'
 result pass | tee -a "$report_path"

@@ -84,6 +84,26 @@
     package, and prove the small-footprint, portable-name, advisory, license,
     reproducibility, installed-layout, target-inventory, and carry gates. Do
     not publish or carry while any mandatory checklist item remains open.
+15. Build the application-free Linux AMD64 runtime-image handoff with
+    `build-node-next-runtime.sh`, then build the deterministic external
+    Ishikawa v1.3.1 application candidate with the revised Script 01. Keep the
+    two handoffs separate.
+16. Run the complete native suite plus the runtime-image, production-stack,
+    application-boundary, carry-builder, and portable-deployment branch
+    harnesses. A mocked branch test supports failure coverage but does not
+    replace a real AMD64 image build or production UI qualification.
+17. Repeat every affected exact-byte gate on EmceeDanko with the v1.3.1
+    application and generic image, then obtain new human UI acceptance. Do not
+    alter the accepted v1.3 evidence or treat it as acceptance of v1.3.1.
+18. Assemble only the candidate carry directory with
+    `build-carry-candidate.sh`. Promote to the stable
+    `local/artifacts/ishikawa-deployment-current/` handoff only after exact-byte
+    requalification, target-independent security and license review, complete
+    checklist closure, and independent final review.
+19. On Tech, run the portable verifier and read-only inventory before any
+    mutation. Install through the consolidated `deploy-ishikawa` entrypoint,
+    create the protected catalog and manifest inside org-lab, and derive every
+    corpus metric from that exact protected run.
 
 ## Active commands
 
@@ -93,6 +113,10 @@
 - `deployment/scripts/04_stage-v1.3-candidate-on-emceedanko.sh`
 - `deployment/scripts/05_qualify-v1.3-on-emceedanko.sh`
 - `deployment/scripts/06_attended-v1.3-on-emceedanko.sh`
+- `deployment/scripts/build-node-next-runtime.sh`
+- `deployment/scripts/build-carry-candidate.sh`
+- `deployment/carry/verify-deployment`
+- `deployment/carry/deploy-ishikawa`
 
 Script 05 prints a complete `[INPUT REQUIRED]` line before each hidden Gemma
 and Nomic API-key input. It does not log or retain either value. A clean Script
@@ -126,3 +150,10 @@ contains no source documents. `qualification-corpus-v3` is a separately built,
 separately transferred synthetic qualification fixture. Target-side chunking
 and ingestion publish that fixture to PostgreSQL; its transfer archive is not a
 runtime retrieval index.
+
+The accepted v1.3 bytes remain the historical behavioral baseline. The
+security and permanent-production-runtime correction is `Ishikawa v1.3.1`.
+Its application archive remains external to, and separately checksum-bound
+from, the generic Linux AMD64 Node/Next runtime-image archive. Neither local
+candidate handoff becomes the stable org-lab carry until the v1.3.1 exact-byte
+requalification and promotion gates pass.

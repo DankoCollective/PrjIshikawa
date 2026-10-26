@@ -30,7 +30,7 @@ Confirm all of the following:
 
 - the installation exists at `~/Documents/Ishikawa`;
 - the PostgreSQL cluster, Retrieval API, and web container are stopped;
-- the architecture-matching `node-24-slim-nextjs-16-4-1` image is local;
+- the exact `node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64` image is local;
 - the Retrieval API user unit is installed;
 - the configured Gemma endpoint on port `8000` is reachable;
 - the configured Nomic endpoint on port `8001` is reachable; and
@@ -75,10 +75,12 @@ ishikawa_stack=start;state=ready;boot_enabled=false
 ishikawa_stack=status;state=ready;boot_enabled=false
 ```
 
-The command validates configuration, ports, image architecture, service
-posture, and required credentials before starting the stack. It waits for
-readiness between layers. A failed start rolls back the components started by
-that attempt.
+The command validates configuration, ports, exact image identity, service
+posture, and required credentials before starting the stack. The web stage
+mounts source read-only, builds into a bounded ephemeral `.next` tmpfs, emits
+progress while building, and runs `next start`. It waits for readiness between
+layers. A failed start removes its container and rolls back every component
+started by that attempt.
 
 ## Use and verify the application
 
@@ -116,21 +118,41 @@ A clean stop ends with:
 ishikawa_stack=stop;state=stopped;boot_enabled=false
 ```
 
-The command stops the web container, Retrieval API, and PostgreSQL in reverse
-order. It also removes any named credential copies from the user service
-manager. Closing model forwarding remains the operator's external action.
+The command stops and removes the web container, then stops the Retrieval API
+and PostgreSQL in reverse order. Removing the container deletes generated web
+build state, so every later start performs a fresh build. The command also
+removes any named credential copies from the user service manager. Closing
+model forwarding remains the operator's external action.
 
 ## Ingest documents
 
-Prepare an ingestion run in this order:
+Prepare an initial protected-corpus ingestion run in this order:
 
 1. Place supported PDF files beneath `corpus/source/`.
-2. Add any new class identifiers to `config/document_classes.yaml`.
-3. Add or update logical document keys in `config/document_catalog.yaml`.
-4. Create a batch manifest directly under `config/ingestion/pending/`.
-5. Validate the batch.
-6. Review the terminal result and protected ingestion report.
-7. Publish the same batch only after validation passes.
+2. Add any approved class identifiers to `config/document_classes.yaml`.
+3. Fill `config/corpus_metadata.csv` with one reviewed row per PDF.
+4. Run the configuration creator in validation mode.
+5. Publish the catalog and pending manifest only after that validation passes.
+6. Validate the generated ingestion batch.
+7. Review the terminal result and protected ingestion report.
+8. Publish the same batch only after ingestion validation passes.
+
+```bash
+cd "$HOME/Documents/Ishikawa"
+./scripts/ishikawa-create-ingestion-config \
+  --validate-only \
+  --metadata "$PWD/config/corpus_metadata.csv" \
+  --manifest-name initial-corpus.yaml
+
+./scripts/ishikawa-create-ingestion-config \
+  --publish \
+  --metadata "$PWD/config/corpus_metadata.csv" \
+  --manifest-name initial-corpus.yaml
+```
+
+The metadata file and generated catalog/manifest stay inside the protected
+environment. The command reports only document count and SHA-256 identities;
+it does not print source paths, display names, or document content.
 
 The manifest lists only affected documents and explicit retirements. It does
 not restate the complete corpus. Source paths are relative to `corpus/source/`.

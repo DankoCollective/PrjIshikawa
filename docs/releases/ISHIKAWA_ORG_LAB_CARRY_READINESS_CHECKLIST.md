@@ -366,22 +366,76 @@ download replacements during deployment.
   Whether to enable startup after Tech acceptance is deliberately deferred and
   does not block assembling or carrying the package.
 
+## Implementation checkpoint — 2026-10-26
+
+No carry-design decision remains open. Exact Tech ports, hostname, capacity,
+native-package versions, PostgreSQL cluster facts, model routes, and protected
+corpus location remain inventory inputs under the frozen decisions; they are
+not new architecture choices unless the observed facts conflict with a frozen
+posture.
+
+The bounded local implementation now includes:
+
+- exact Node.js `24.22.1`, npm `11.19.1`, Next.js `16.4.3`, React/React DOM
+  `19.2.9`, sharp `0.35.5`, Linux AMD64, and official base-manifest pins;
+- the application-free runtime Dockerfile and exact npm lock;
+- a runtime-image builder with checksum, identity, archive-load, SBOM,
+  license, image-boundary, terminology, failure, and atomic-publication gates;
+- the v1.3.1 external application builder, source manifest, deterministic
+  archive, clean installer, application SBOM/license record, content-side
+  protected-corpus configuration command, and local publication-language gate;
+- the permanent read-only-source production lifecycle with a bounded
+  ephemeral `.next`, `next build`, `next start`, UID/GID identity, readiness,
+  timeout, capacity, stop, and failure cleanup;
+- a minimal carry-candidate assembler with separate application and image
+  archives, exact runtime build receipt, combined npm/Debian runtime SBOM,
+  runtime license inventory, purpose/consumer/mode/size/hash inventory, one
+  complete checksum manifest, portable verification, and no stable final
+  promotion;
+- one portable deployment entrypoint for inventory, exact-image load,
+  application/configuration/unit installation, clean least-privilege database
+  and schema-v5 initialization, start/status/stop, and guarded empty-install
+  removal; and
+- isolated executable branch harnesses for the runtime builder, production
+  stack, carry builder, and deployment entrypoint.
+
+The complete 486-test native suite passed on 2026-10-26, as did the current
+application-builder, runtime-builder, stack-lifecycle, carry-builder,
+deployment-entrypoint, and release-boundary harnesses. These are source and command-double results. They
+do not close the gates that require a real Linux AMD64 image build, exact
+application build, exact-image advisory/license review, installed production
+UI, EmceeDanko requalification and human acceptance, Tech inventory, protected
+corpus execution, independent final review, or stable-handoff promotion.
+
+Current next gate: build the exact generic AMD64 runtime image on the approved
+AMD64 Docker host. The package remains **NOT CARRY-READY**.
+
 ## Mandatory package checklist
 
 ### 1. Release and evidence reconciliation
 
-- [ ] **REL-01 — MUST.** Freeze every accepted `CARRY-Dxx` posture in the
-  authoritative release decision list. Evidence: ___; reviewer/date: ___.
-- [ ] **REL-02 — MUST.** Reconcile the release freeze, decision-list current
+- [x] **REL-01 — MUST.** Freeze every accepted `CARRY-Dxx` posture in the
+  authoritative release decision list. Evidence: commit `1abfb48`,
+  `docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md`, and this checklist;
+  reviewer/date: operator and two-agent reconciliation, 2026-10-26.
+- [x] **REL-02 — MUST.** Reconcile the release freeze, decision-list current
   status, repository sweep, runbook, runtime definition, and qualification
   receipt with the accepted UI state and selected release identity. Evidence:
-  ___; reviewer/date: ___.
-- [ ] **REL-03 — MUST.** Preserve a tracked, content-free human-acceptance
+  `ISHIKAWA_V1_3_RELEASE_FREEZE.md`,
+  `ISHIKAWA_V1_3_REPOSITORY_SWEEP.md`, `PROJECT_RUNBOOK.md`,
+  `node_nextjs_runtime_image.md`, and V13-79 through V13-89; reviewer/date:
+  current-agent reconciliation, 2026-10-26.
+- [x] **REL-03 — MUST.** Preserve a tracked, content-free human-acceptance
   receipt bound to the exact accepted launch and acceptance report hashes.
-  Evidence: ___; reviewer/date: ___.
-- [ ] **REL-04 — MUST.** State whether the accepted v1.3 artifact is retained,
-  superseded, or reused; never silently overwrite its identity. Evidence: ___;
-  reviewer/date: ___.
+  Evidence:
+  `deployment/evidence/ISHIKAWA_V1_3_EMCEEDANKO_UI_ACCEPTANCE.md`;
+  reviewer/date: operator acceptance reconciled 2026-10-26.
+- [x] **REL-04 — MUST.** State whether the accepted v1.3 artifact is retained,
+  superseded, or reused; never silently overwrite its identity. Evidence:
+  v1.3 is retained as the immutable historical behavioral baseline and v1.3.1
+  is a separate unpromoted patch candidate, as recorded in
+  `ISHIKAWA_V1_3_RELEASE_FREEZE.md`; reviewer/date: current-agent
+  reconciliation, 2026-10-26.
 
 ### 2. Small footprint and classified contents
 

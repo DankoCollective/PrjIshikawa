@@ -23,6 +23,8 @@ they are not stored in this package or in YAML.
 The current installed operator commands are:
 
 ```text
+scripts/ishikawa-create-ingestion-config --validate-only --metadata METADATA.csv
+scripts/ishikawa-create-ingestion-config --publish --metadata METADATA.csv
 scripts/ishikawa-ingest --validate-only --manifest BATCH.yaml
 scripts/ishikawa-ingest --publish --manifest BATCH.yaml
 scripts/ishikawa-retrieval-api --check-config
@@ -32,6 +34,13 @@ scripts/ishikawa-log-control status
 scripts/ishikawa-observability-retention --check-config
 scripts/ishikawa-observability-retention --apply
 ```
+
+The configuration-creation command is the content-side intake boundary. An
+authorized operator fills the installed header-only `config/corpus_metadata.csv`
+inside the protected environment. The command requires that metadata to cover
+the exact PDF inventory under `corpus/source`, validates class and identifier
+contracts, and creates the catalog plus one pending ingestion manifest. Its
+terminal output contains only counts and hashes.
 
 The logging-control command works only while the Retrieval API is running and
 uses the owner-only local socket under `state/run`. It opens no network port.
@@ -50,8 +59,12 @@ named runtime-secret environment variables, restarts after failure, and uses
 the installed foreground command's graceful `SIGTERM` cleanup.
 
 The host-mounted Next.js source and explicit `ishikawa-stack` lifecycle command
-are included. The unchanged architecture-matching Node 24/Next.js image remains
-an external prerequisite; the application source is never baked into it.
+are included. The exact generic Linux AMD64 Node 24/Next.js image remains a
+separate external prerequisite; the application source is never baked into it.
+Each permanent web start mounts the source read-only, creates a bounded
+ephemeral `.next` tmpfs, runs `next build`, and executes `next start` in that
+same container. Stopping the stack removes the container and its generated
+build state, so every restart performs a fresh build.
 
 This application package assumes the required native dependencies, the final
 PostgreSQL schema, the architecture-matching web image, and any required model

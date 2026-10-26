@@ -19,6 +19,9 @@ output directory that can be removed after its files have been carried back:
 bash ./inspect-native-prerequisites \
   --expected-os-version 26.04 \
   --expected-architecture amd64 \
+  --postgresql-port 5432 \
+  --retrieval-port 1384 \
+  --web-port 3000 \
   --output-dir /tmp/ishikawa-native-prerequisite-inventory
 ```
 
@@ -27,4 +30,7 @@ and candidate package facts, and a checksum manifest. Missing packages or
 inaccessible Docker metadata are recorded as inventory facts; they do not
 authorize a repair or installation. Review package provenance and security
 advisories before any package payload is downloaded.
+
+The three port values are planned target inputs, not fixed lab assumptions.
+Set them to the ports selected for the target deployment before inventory.
 

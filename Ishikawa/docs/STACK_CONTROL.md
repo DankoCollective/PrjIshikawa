@@ -27,9 +27,14 @@ container, and all three configured ports to be stopped and unused. It then:
 6. performs a content-free component readiness preflight that names
    configuration, storage, PostgreSQL, Gemma health, and Nomic health states;
 7. waits for Retrieval API liveness and complete readiness;
-8. starts the one web container with host networking and read-only source
-   bind mounts; and
-9. waits for web liveness and readiness before recording the stack as ready.
+8. starts one hardened web container as the installing operator's numeric
+   UID/GID, with a read-only root filesystem, host networking, read-only source
+   bind mounts, and one bounded writable tmpfs at `/opt/nextjs/.next`;
+9. runs `next build` in that container, emits bounded build heartbeats,
+   validates the generated build markers, and executes `next start` in the
+   same container; and
+10. waits for web liveness and readiness, records measured build size against
+    the tmpfs bound, and then records the stack as ready.
 
 Any failure rolls back every component started by that attempt. The owner-only
 state record contains only its schema, owner, and lifecycle state.
@@ -45,7 +50,9 @@ reports credential values, response bodies, document content, or exception
 text.
 
 `stop` requires a valid managed state record and proceeds in reverse order:
-web container, Retrieval API, then PostgreSQL. It removes any remaining named
+web container, Retrieval API, then PostgreSQL. The web container is removed,
+which deletes its ephemeral `.next` build so the next start rebuilds from the
+validated external source. The command removes any remaining named
 credential copies from the user service manager, verifies the components are
 stopped, removes the state record, and confirms the boot-disabled posture.
 

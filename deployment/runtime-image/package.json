@@ -1,0 +1,10 @@
+{
+  "name": "node-next-runtime",
+  "version": "24.22.1-16.4.3-19.2.9",
+  "private": true,
+  "dependencies": {
+    "next": "16.4.3",
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
+  }
+}

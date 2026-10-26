@@ -1,6 +1,6 @@
 {
   "name": "ishikawa-web",
-  "version": "1.0.0",
+  "version": "1.3.1",
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
@@ -9,8 +9,8 @@
     "test": "node --test tests/chat-contract.test.mjs tests/presentation.test.mjs tests/runtime-config.test.mjs"
   },
   "dependencies": {
-    "next": "16.4.1",
-    "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "next": "16.4.3",
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
   }
 }

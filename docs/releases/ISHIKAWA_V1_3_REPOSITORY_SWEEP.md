@@ -114,8 +114,36 @@ The operator must now perform attended human UI acceptance on EmceeDanko. Only
 that accepted outcome authorizes assembly of the unchanged Ishikawa v1.3
 archive with a separate org-lab deployment bundle.
 
-The org-lab bundle must carry its reviewed document catalog and ingestion
-manifest as separate checksum-verified inputs, then derive corpus-specific
-counts and acceptance expectations from that catalog, the ingestion run, and
-PostgreSQL. Synthetic corpus-v3 cardinalities are not portable acceptance
+The org-lab bundle must carry only content-blind catalog/manifest creation and
+validation tooling. Authorized operators create and checksum the protected
+catalog and ingestion manifest inside org-lab, then derive corpus-specific
+counts and acceptance expectations from those exact inputs, the ingestion run,
+and PostgreSQL. Synthetic corpus-v3 cardinalities are not portable acceptance
 constants for the black corpus.
+
+## 2026-10-26 carry reconciliation supplement
+
+The remaining-gate paragraph above is historical. The operator completed and
+accepted the attended v1.3 UI; the tracked content-free receipt is
+`deployment/evidence/ISHIKAWA_V1_3_EMCEEDANKO_UI_ACCEPTANCE.md`.
+
+The accepted v1.3 bytes remain the immutable behavioral baseline. Current
+org-lab work is the separately identified v1.3.1 security and production-web
+correction under frozen V13-79 through V13-89. Its architecture is the external
+application plus a separate application-free generic Linux AMD64 runtime
+image. Every permanent start uses read-only source, a bounded ephemeral
+`.next`, `next build`, and `next start`; no application or generated `.next`
+state is baked into the image.
+
+The protected organizational catalog and ingestion manifest are not carried.
+Only content-blind creation/validation tooling and empty metadata structure
+travel. Authorized operators create and review the exact catalog and manifest
+inside org-lab, and every corpus metric derives from those inputs and the
+resulting PostgreSQL state.
+
+Local implementation and command-double branch gates are recorded in
+`ISHIKAWA_ORG_LAB_CARRY_READINESS_CHECKLIST.md`. The package remains not
+carry-ready until the exact AMD64 image and application are built, security and
+license evidence is reviewed, the changed bytes pass EmceeDanko production
+qualification and human acceptance, Tech inventory is accepted, independent
+review completes, and the stable carry handoff is atomically promoted.

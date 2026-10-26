@@ -23,6 +23,8 @@ readonly manifest="$package_root/SHA256SUMS"
 readonly release_record="$package_root/release.json"
 readonly application_root="$package_root/application"
 readonly database_root="$package_root/database"
+readonly web_package="$application_root/payload/application/web/package.json"
+readonly stack_command="$application_root/payload/scripts/ishikawa-stack"
 
 for directory in "$package_root" "$application_root" "$database_root"; do
   [[ -d "$directory" && ! -L "$directory" ]] || fail package_directory_unsafe
@@ -30,7 +32,8 @@ done
 for file in \
   "$manifest" "$release_record" "$application_root/SHA256SUMS" \
   "$database_root/SHA256SUMS" "$database_root/schema.sql" \
-  "$application_root/install-ishikawa"; do
+  "$application_root/install-ishikawa" "$web_package" "$stack_command" \
+  "$package_root/LICENSE"; do
   [[ -f "$file" && ! -L "$file" && -r "$file" ]] || fail package_file_unsafe
 done
 find "$package_root" -type l -print -quit | grep -q . && fail package_symlink_found
@@ -100,7 +103,7 @@ expected = {
     "historical_mutation_files": 0,
     "javascript_test_count": 17,
     "native_test_count": 486,
-    "release_name": "Ishikawa v1.3",
+    "release_name": "Ishikawa v1.3.1",
     "schema_version": 5,
     "source_document_count": 0,
 }
@@ -115,7 +118,36 @@ for field in ("source_manifest_sha256", "frontier_artifact_sha256", "frontier_re
         raise SystemExit(1)
 PY
 
+python3 -B - "$web_package" <<'PY' || fail web_dependency_identity_invalid
+import json
+import sys
+from pathlib import Path
+
+package = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "next": "16.4.3",
+    "react": "19.2.9",
+    "react-dom": "19.2.9",
+}
+if package.get("version") != "1.3.1" or package.get("dependencies") != expected:
+    raise SystemExit(1)
+PY
+
+for runtime_contract in \
+  'node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64' \
+  'node_modules/.bin/next build' \
+  'exec node_modules/.bin/next start' \
+  '/opt/nextjs/.next:rw,nosuid,nodev,size=' \
+  '--user "$operator_uid:$operator_gid"' \
+  '--read-only' \
+  '--security-opt no-new-privileges' \
+  '--cap-drop ALL'; do
+  grep -Fq -- "$runtime_contract" "$stack_command" || fail production_runtime_contract_missing
+done
+grep -Eq 'npm run dev|next dev' "$stack_command" && fail development_runtime_found
+
 grep -Fq 'schema-version-5' "$database_root/schema.sql" || fail schema_version_mismatch
+grep -Fq 'Apache License' "$package_root/LICENSE" || fail application_license_invalid
 if find "$package_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q . \
   || find "$package_root" -type d -name __pycache__ -print -quit | grep -q .; then
   fail generated_python_file_found
@@ -126,10 +158,10 @@ fi
 if find "$package_root" -type f \( -name '*.key' -o -name '*.pem' -o -name '*.p12' -o -name '*.pfx' \) -print -quit | grep -q .; then
   fail secret_material_found
 fi
-if grep -R -I -E -n '/mnt/|Prj00DankoDeux|phase-28-apisachi-tokuli|local/artifacts' \
-  "$package_root" --exclude=SHA256SUMS --exclude=verify-ishikawa-release >/dev/null; then
-  fail repository_reference_found
+if find "$package_root" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.oci' \) \
+    -print -quit | grep -q .; then
+  fail nested_runtime_archive_found
 fi
 
 printf '%s\n' \
-  'ishikawa_release_verification=pass;release=v1.3;schema=5;native_tests=486;javascript_tests=17;frontier_cases=60;source_documents=0;boot_autostart=false'
+  'ishikawa_release_verification=pass;release=v1.3.1;schema=5;native_tests=486;javascript_tests=17;frontier_cases=60;source_documents=0;boot_autostart=false;production_web=true'

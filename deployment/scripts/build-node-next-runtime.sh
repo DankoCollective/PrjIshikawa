@@ -1,0 +1,558 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Purpose:
+#   Build, verify, export, and atomically publish the generic Linux AMD64
+#   Node/Next runtime image used by an externally mounted application.
+#
+# Mental model:
+#   Validate the pinned source and frozen decisions, build one AMD64 image,
+#   prove its exact identity and application-free boundary, export it, generate
+#   identity/SBOM/license records, verify the archive, and publish the handoff.
+#
+# Inputs or prerequisites:
+#   The tracked runtime-image directory, Docker with buildx, network access for
+#   the pinned base and npm lock objects, and attended sudo if Docker requires
+#   it. No application, target, model, database, credential, or corpus access.
+#
+# Outputs or artifact lane:
+#   local/artifacts/node-next-runtime-current and an ignored local report.
+#
+# Usage:
+#   bash ./deployment/scripts/build-node-next-runtime.sh --validate-only
+#   bash ./deployment/scripts/build-node-next-runtime.sh --run
+
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
+readonly source_root="$repo_root/deployment/runtime-image"
+readonly decision_record="$repo_root/docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md"
+readonly artifact_parent="$repo_root/local/artifacts"
+readonly artifact_current="$artifact_parent/node-next-runtime-current"
+readonly report_root="$repo_root/local/reports/node-next-runtime-build"
+readonly image_repository='node-next-runtime'
+readonly image_version='24.22.1-next16.4.3-react19.2.9-amd64'
+readonly image_reference="$image_repository:$image_version"
+readonly base_manifest_digest='sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae'
+readonly lock_sha256='9496ebf54d27c63794f5f1680197692ba0424bd323fb9f22f0fcacb2545aae5a'
+
+mode="${1:-}"
+current_stage='argument_validation'
+report_path=''
+work_root=''
+artifact_stage=''
+build_pid=''
+
+result() {
+  printf '\nSCRIPT RESULT\nnode_next_runtime_build=%s\n' "$1"
+}
+
+block() {
+  local reason="$1" detail="$2" action="$3" payload
+  payload="$(printf '%s\n' \
+    'FAILURE DETAIL' \
+    "stage=$current_stage" \
+    "reason=$reason" \
+    "detail=$detail" \
+    "operator_action=$action")"
+  printf '%s\n' "$payload" >&2
+  if [[ -n "$report_path" && -f "$report_path" && ! -L "$report_path" ]]; then
+    printf '%s\n' "$payload" >>"$report_path"
+    result blocked >>"$report_path"
+  fi
+  result blocked >&2
+  exit 1
+}
+
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if [[ -n "$build_pid" ]] && kill -0 "$build_pid" 2>/dev/null; then
+    kill -TERM "$build_pid" 2>/dev/null || true
+    wait "$build_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$work_root" && "$work_root" == /tmp/node-next-runtime-build.* \
+      && -d "$work_root" && ! -L "$work_root" ]]; then
+    rm -rf -- "$work_root"
+  fi
+  if [[ -n "$artifact_stage" && "$artifact_stage" == "$artifact_parent"/.node-next-runtime-current.* \
+      && -d "$artifact_stage" && ! -L "$artifact_stage" ]]; then
+    rm -rf -- "$artifact_stage"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'current_stage=interrupted; block signal_interrupt "Runtime image build was interrupted." "Review the retained report and rerun the same command."' INT
+trap 'current_stage=interrupted; block signal_termination "Runtime image build received SIGTERM." "Review the retained report and rerun the same command."' TERM
+
+if [[ "$#" -ne 1 || ( "$mode" != '--validate-only' && "$mode" != '--run' ) ]]; then
+  block exactly_one_supported_mode_required \
+    'Use exactly one mode: --validate-only or --run.' \
+    'Rerun with one supported mode.'
+fi
+
+current_stage='source_preflight'
+for command_name in awk bash cp date docker find grep jq kill mkdir mktemp mv \
+  python3 rm sha256sum sleep sort sudo tail tar tee; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || block "command_missing_${command_name}" \
+      "A required local command is unavailable: ${command_name}." \
+      'Restore the named command and rerun.'
+done
+for source_file in Dockerfile package.json package-lock.json README.md SECURITY.md LICENSES.md; do
+  [[ -f "$source_root/$source_file" && ! -L "$source_root/$source_file" \
+      && -r "$source_root/$source_file" ]] \
+    || block required_source_file_unsafe \
+      "A runtime-image input is missing, unreadable, or a symbolic link: ${source_file}." \
+      'Restore the canonical tracked input and rerun.'
+done
+find "$source_root" -type l -print -quit | grep -q . \
+  && block source_symlink_found \
+    'The runtime-image source contains a symbolic link.' \
+    'Replace it with a reviewed regular file.'
+[[ "$(sha256sum -- "$source_root/package-lock.json" | awk '{print $1}')" == "$lock_sha256" ]] \
+  || block lock_identity_mismatch \
+    'The npm lock differs from the reviewed exact dependency graph.' \
+    'Review and deliberately update the pinned identity before building.'
+jq -e \
+  '.lockfileVersion == 3
+   and .packages["node_modules/next"].version == "16.4.3"
+   and .packages["node_modules/react"].version == "19.2.9"
+   and .packages["node_modules/react-dom"].version == "19.2.9"
+   and .packages["node_modules/sharp"].version == "0.35.5"' \
+  "$source_root/package-lock.json" >/dev/null \
+  || block lock_dependency_identity_invalid \
+    'The npm lock omits or changes a required fixed runtime identity.' \
+    'Regenerate and review the exact lock before building.'
+grep -Fq "node:24.22.1-bookworm-slim@${base_manifest_digest}" "$source_root/Dockerfile" \
+  || block base_identity_unpinned \
+    'The Dockerfile does not use the reviewed Linux AMD64 base manifest.' \
+    'Restore the exact base reference and rerun.'
+grep -Fq 'FROM --platform=linux/amd64 ' "$source_root/Dockerfile" \
+  || block image_platform_unpinned \
+    'The Dockerfile is not pinned to Linux AMD64.' \
+    'Restore the frozen target platform and rerun.'
+for decision in V13-79 V13-80 V13-81 V13-82 V13-83 V13-84 V13-85 V13-86 V13-87 V13-88 V13-89; do
+  decision_block="$(awk -v header="### ${decision} " '
+    index($0, header) == 1 {capture=1}
+    capture && /^### / && index($0, header) != 1 {exit}
+    capture {print}
+  ' "$decision_record")"
+  [[ "$(grep -Ec '^Status: Frozen([. ]|$)' <<<"$decision_block")" == 1 ]] \
+    || block "${decision,,}_not_frozen" \
+      "The required carry decision ${decision} is absent or not frozen." \
+      'Reconcile the decision ledger before building.'
+done
+
+if [[ "$mode" == '--validate-only' ]]; then
+  printf '%s\n' \
+    "[SOURCE] state=pass;platform=linux/amd64;image=${image_reference}" \
+    '[BOUNDARY] state=pass;application_in_image=false;generated_next_in_image=false' \
+    '[NETWORK] build_time_only=pinned_base_and_lock_objects;target_downloads=false'
+  result ready
+  exit 0
+fi
+
+mkdir -p -- "$artifact_parent" "$report_root"
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+report_path="$(mktemp "$report_root/runtime_image_${timestamp}_XXXXXX.txt")" \
+  || block report_creation_failed \
+    'The content-free runtime build report could not be created.' \
+    'Correct local report permissions and rerun.'
+work_root="$(mktemp -d /tmp/node-next-runtime-build.XXXXXX)" \
+  || block workspace_creation_failed \
+    'The private runtime build workspace could not be created.' \
+    'Correct /tmp availability and rerun.'
+
+emit() { printf '%s\n' "$1" | tee -a "$report_path"; }
+emit "[SOURCE] state=pass;platform=linux/amd64;image=${image_reference}"
+emit '[BOUNDARY] application=false;configuration=false;corpus=false;credentials=false;target_state=false;generated_next=false'
+
+current_stage='container_access'
+docker_command=(docker)
+if ! docker info >/dev/null 2>&1; then
+  emit '[DOCKER] state=awaiting_attended_sudo'
+  sudo -v || block sudo_authentication_failed \
+    'Attended sudo authentication for local Docker failed.' \
+    'Authenticate locally and rerun.'
+  docker_command=(sudo docker)
+  "${docker_command[@]}" info >/dev/null 2>&1 \
+    || block docker_access_failed \
+      'Docker remained unavailable after attended sudo.' \
+      'Restore local Docker access and rerun.'
+fi
+"${docker_command[@]}" buildx version >/dev/null 2>&1 \
+  || block docker_buildx_unavailable \
+    'Docker buildx is unavailable.' \
+    'Install or enable the Docker buildx plugin and rerun.'
+emit '[DOCKER] state=pass;buildx=true'
+
+current_stage='image_build'
+emit '[IMAGE] state=building;platform=linux/amd64'
+build_log="$work_root/build.log"
+"${docker_command[@]}" buildx build \
+  --platform linux/amd64 \
+  --pull \
+  --provenance=false \
+  --sbom=false \
+  --load \
+  --tag "$image_reference" \
+  "$source_root" >"$build_log" 2>&1 &
+build_pid="$!"
+elapsed_seconds=0
+while kill -0 "$build_pid" 2>/dev/null; do
+  sleep 1
+  elapsed_seconds=$((elapsed_seconds + 1))
+  if kill -0 "$build_pid" 2>/dev/null && (( elapsed_seconds % 15 == 0 )); then
+    emit "[IMAGE] state=building;elapsed_seconds=${elapsed_seconds}"
+  fi
+done
+set +e
+wait "$build_pid"
+build_status="$?"
+set -e
+build_pid=''
+if (( build_status != 0 )); then
+  tail -n 120 "$build_log" | tee -a "$report_path" >&2
+  block image_build_failed \
+    'The pinned Linux AMD64 runtime image build failed.' \
+    'Correct the reported base or dependency failure and rerun.'
+fi
+emit "[IMAGE] state=built;elapsed_seconds=${elapsed_seconds}"
+
+current_stage='image_verification'
+image_architecture="$("${docker_command[@]}" image inspect "$image_reference" --format '{{.Architecture}}')" \
+  || block image_inspection_failed \
+    'The built image could not be inspected.' \
+    'Inspect the local Docker image store and rerun.'
+[[ "$image_architecture" == amd64 ]] \
+  || block image_architecture_mismatch \
+    "The built image architecture is ${image_architecture}, not amd64." \
+    'Remove the incorrect build result and rerun the pinned build.'
+image_id="$("${docker_command[@]}" image inspect "$image_reference" --format '{{.Id}}')"
+[[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
+  || block image_id_invalid \
+    'The built image omitted a canonical SHA-256 image ID.' \
+    'Inspect the Docker build result and rerun.'
+"${docker_command[@]}" run --rm --network none --entrypoint node "$image_reference" \
+  --input-type=module -e \
+  'import next from "next/package.json" with {type:"json"}; import react from "react/package.json" with {type:"json"}; import reactDom from "react-dom/package.json" with {type:"json"}; const expected={node:"v24.22.1",next:"16.4.3",react:"19.2.9",reactDom:"19.2.9"}; const actual={node:process.version,next:next.version,react:react.version,reactDom:reactDom.version}; if(JSON.stringify(actual)!==JSON.stringify(expected)){process.exit(1)}; console.log("runtime_identity=pass")' \
+  >"$work_root/runtime-identity.txt" 2>&1 \
+  || block runtime_identity_mismatch \
+    'The built image does not expose the exact reviewed runtime versions.' \
+    'Inspect the lock and image build before rerunning.'
+grep -Fxq 'runtime_identity=pass' "$work_root/runtime-identity.txt" \
+  || block runtime_identity_marker_missing \
+    'The runtime identity probe omitted its pass marker.' \
+    'Treat the image as unqualified.'
+"${docker_command[@]}" run --rm --network none --entrypoint sh "$image_reference" -eu -c '
+  test ! -e /opt/nextjs/.next
+  test ! -e /opt/nextjs/app
+  test ! -e /opt/nextjs/components
+  test ! -e /opt/nextjs/config
+  test ! -e /opt/nextjs/corpus
+  test -d /opt/nextjs/node_modules
+  test -f /opt/nextjs/package-lock.json
+  ! find /opt/nextjs -path /opt/nextjs/node_modules -prune -o -iname "*ishikawa*" -print | grep -q .
+' >/dev/null 2>&1 \
+  || block image_boundary_failed \
+    'The image is missing runtime dependencies or contains application/build state.' \
+    'Correct the Dockerfile boundary and rebuild.'
+if "${docker_command[@]}" history --no-trunc --format '{{.CreatedBy}} {{.Comment}}' "$image_reference" \
+    | grep -Eiq 'Ishikawa|Prj|phase-|Script[[:space:]]+[0-9]|Codex|EmceeDanko|DankoSurface'; then
+  block image_history_jargon_found \
+    'Image history contains repository, workstream, agent, or test-host jargon.' \
+    'Remove the leaking build input and rebuild.'
+fi
+emit "[VERIFY] state=pass;architecture=amd64;image_id=${image_id};application_files=0;generated_next=false"
+
+current_stage='artifact_assembly'
+artifact_stage="$artifact_parent/.node-next-runtime-current.${timestamp}.$$"
+mkdir -p -- "$artifact_stage" "$artifact_parent/superseded"
+archive="$artifact_stage/node-next-runtime-amd64.tar"
+emit '[ARCHIVE] state=exporting'
+"${docker_command[@]}" save --output "$archive" "$image_reference" \
+  || block image_export_failed \
+    'Docker could not export the verified runtime image.' \
+    'Preserve the local image and rerun after correcting storage capacity.'
+archive_sha256="$(sha256sum -- "$archive" | awk '{print $1}')"
+printf '%s  %s\n' "$archive_sha256" "$(basename -- "$archive")" \
+  >"$archive.sha256"
+"${docker_command[@]}" load --input "$archive" >"$work_root/load.txt" 2>&1 \
+  || block exported_archive_load_failed \
+    'The exported Docker archive could not be loaded.' \
+    'Do not publish the archive; inspect the Docker export.'
+[[ "$("${docker_command[@]}" image inspect "$image_reference" --format '{{.Id}}')" == "$image_id" ]] \
+  || block loaded_image_identity_mismatch \
+    'The loaded archive does not resolve to the verified image ID.' \
+    'Do not publish the archive.'
+
+"${docker_command[@]}" run --rm --network none --entrypoint dpkg-query "$image_reference" \
+  -W '-f=${binary:Package}\t${Version}\t${Architecture}\n' \
+  >"$work_root/os-packages.tsv" 2>"$work_root/os-packages.stderr" \
+  || { tail -n 80 "$work_root/os-packages.stderr" | tee -a "$report_path" >&2; block os_inventory_failed \
+    'The exact image operating-system package inventory could not be read.' \
+    'Correct the image package state before publication.'; }
+"${docker_command[@]}" run --rm --network none --entrypoint npm "$image_reference" \
+  ls --omit=dev --all --json >"$work_root/npm-installed.json" \
+  2>"$work_root/npm-installed.stderr" \
+  || { tail -n 80 "$work_root/npm-installed.stderr" | tee -a "$report_path" >&2; block npm_inventory_failed \
+    'The exact installed npm dependency inventory could not be read.' \
+    'Correct the image dependency state before publication.'; }
+python3 -B - "$source_root/package-lock.json" "$work_root/npm-installed.json" \
+  "$work_root/os-packages.tsv" \
+  "$artifact_stage/sbom.cdx.json" "$image_reference" "$image_id" <<'PY'
+import base64
+import json
+import sys
+import uuid
+from pathlib import Path
+from urllib.parse import quote
+
+lock_path, npm_path, os_path, output_path, image_reference, image_id = sys.argv[1:]
+lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
+npm_tree = json.loads(Path(npm_path).read_text(encoding="utf-8"))
+installed_npm = set()
+def collect(dependencies):
+    for name, record in dependencies.items():
+        version = record.get("version")
+        if isinstance(version, str):
+            installed_npm.add((name, version))
+        collect(record.get("dependencies", {}))
+collect(npm_tree.get("dependencies", {}))
+components = [{
+    "bom-ref": "pkg:generic/node@24.22.1",
+    "name": "node",
+    "purl": "pkg:generic/node@24.22.1",
+    "type": "framework",
+    "version": "24.22.1",
+}]
+seen = set()
+for package_path, record in sorted(lock["packages"].items()):
+    if not package_path:
+        continue
+    name = package_path.rsplit("node_modules/", 1)[-1]
+    version = record["version"]
+    identity = (name, version)
+    if identity not in installed_npm or identity in seen:
+        continue
+    seen.add(identity)
+    purl = f"pkg:npm/{quote(name, safe='/')}@{quote(version, safe='')}"
+    component = {
+        "bom-ref": purl,
+        "name": name,
+        "purl": purl,
+        "type": "library",
+        "version": version,
+    }
+    if record.get("license"):
+        component["licenses"] = [{"license": {"id": record["license"]}}]
+    integrity = record.get("integrity", "")
+    if integrity.startswith("sha512-"):
+        component["hashes"] = [{
+            "alg": "SHA-512",
+            "content": base64.b64decode(integrity[7:]).hex(),
+        }]
+    components.append(component)
+for line in Path(os_path).read_text(encoding="utf-8").splitlines():
+    fields = line.split("\t")
+    if len(fields) != 3 or not all(fields):
+        raise SystemExit(1)
+    name, version, architecture = fields
+    name = name.removesuffix(f":{architecture}")
+    purl = f"pkg:deb/debian/{quote(name, safe='')}@{quote(version, safe='')}?arch={quote(architecture, safe='')}"
+    components.append({
+        "bom-ref": purl,
+        "name": name,
+        "properties": [{"name": "debian:architecture", "value": architecture}],
+        "purl": purl,
+        "type": "library",
+        "version": version,
+    })
+components.sort(key=lambda item: item["bom-ref"])
+bom = {
+    "bomFormat": "CycloneDX",
+    "components": components,
+    "metadata": {
+        "component": {
+            "bom-ref": image_id,
+            "name": image_reference.split(":", 1)[0],
+            "properties": [
+                {"name": "oci:image:id", "value": image_id},
+                {"name": "oci:image:platform", "value": "linux/amd64"},
+            ],
+            "type": "container",
+            "version": image_reference.split(":", 1)[1],
+        }
+    },
+    "serialNumber": f"urn:uuid:{uuid.UUID(image_id.removeprefix('sha256:')[:32])}",
+    "specVersion": "1.5",
+    "version": 1,
+}
+Path(output_path).write_text(
+    json.dumps(bom, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+python3 -B - "$source_root/package-lock.json" "$work_root/npm-installed.json" \
+  "$work_root/os-packages.tsv" \
+  "$artifact_stage/licenses.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+lock = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+npm_tree = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+installed_npm = set()
+def collect(dependencies):
+    for name, record in dependencies.items():
+        version = record.get("version")
+        if isinstance(version, str):
+            installed_npm.add((name, version))
+        collect(record.get("dependencies", {}))
+collect(npm_tree.get("dependencies", {}))
+javascript_packages = []
+seen = set()
+for package_path, record in sorted(lock["packages"].items()):
+    if not package_path:
+        continue
+    name = package_path.rsplit("node_modules/", 1)[-1]
+    identity = (name, record["version"])
+    if identity not in installed_npm or identity in seen:
+        continue
+    seen.add(identity)
+    javascript_packages.append({
+        "license": record.get("license", "UNDECLARED"),
+        "name": name,
+        "version": record["version"],
+    })
+operating_system_packages = []
+for line in Path(sys.argv[3]).read_text(encoding="utf-8").splitlines():
+    fields = line.split("\t")
+    if len(fields) != 3 or not all(fields):
+        raise SystemExit(1)
+    name, version, architecture = fields
+    name = name.removesuffix(f":{architecture}")
+    operating_system_packages.append({
+        "architecture": architecture,
+        "copyright_file": f"/usr/share/doc/{name}/copyright",
+        "name": name,
+        "version": version,
+    })
+output = {
+    "javascript_packages": javascript_packages,
+    "node_license_path": "/usr/local/LICENSE",
+    "operating_system_packages": operating_system_packages,
+    "schema": "node-runtime-license-inventory.v1",
+}
+Path(sys.argv[4]).write_text(
+    json.dumps(output, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+cp -- "$source_root/Dockerfile" "$source_root/package.json" \
+  "$source_root/package-lock.json" "$source_root/README.md" \
+  "$source_root/SECURITY.md" "$source_root/LICENSES.md" "$artifact_stage/"
+python3 -B - "$artifact_stage/image-identity.json" "$image_reference" "$image_id" \
+  "$base_manifest_digest" "$archive_sha256" "$lock_sha256" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output, reference, image_id, base_digest, archive_digest, lock_digest = sys.argv[1:]
+record = {
+    "application_in_image": False,
+    "archive_sha256": archive_digest,
+    "architecture": "amd64",
+    "base_manifest_digest": base_digest,
+    "generated_next_in_image": False,
+    "image_id": image_id,
+    "image_reference": reference,
+    "lock_sha256": lock_digest,
+    "node": "24.22.1",
+    "npm": "11.19.1",
+    "next": "16.4.3",
+    "platform": "linux/amd64",
+    "react": "19.2.9",
+    "react_dom": "19.2.9",
+    "schema": "node-next-runtime-image.v1",
+}
+Path(output).write_text(
+    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+sbom_sha256="$(sha256sum -- "$artifact_stage/sbom.cdx.json" | awk '{print $1}')"
+licenses_sha256="$(sha256sum -- "$artifact_stage/licenses.json" | awk '{print $1}')"
+python3 -B - "$artifact_stage/build-receipt.json" "$image_reference" "$image_id" \
+  "$base_manifest_digest" "$archive_sha256" "$lock_sha256" "$sbom_sha256" \
+  "$licenses_sha256" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(output, reference, image_id, base_digest, archive_digest, lock_digest,
+ sbom_digest, licenses_digest) = sys.argv[1:]
+record = {
+    "application_in_image": False,
+    "archive_sha256": archive_digest,
+    "architecture": "amd64",
+    "base_manifest_digest": base_digest,
+    "generated_next_in_image": False,
+    "image_id": image_id,
+    "image_reference": reference,
+    "licenses_sha256": licenses_digest,
+    "lock_sha256": lock_digest,
+    "platform": "linux/amd64",
+    "sbom_sha256": sbom_digest,
+    "schema": "node-next-runtime-build-receipt.v1",
+}
+Path(output).write_text(
+    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+(
+  cd -- "$artifact_stage"
+  while IFS= read -r artifact_name; do
+    sha256sum -- "$artifact_name"
+  done < <(find . -type f ! -name SHA256SUMS -printf '%P\n' | sort)
+) >"$artifact_stage/SHA256SUMS"
+(
+  cd -- "$artifact_stage"
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) || block artifact_checksum_failed \
+  'The assembled runtime handoff failed its complete checksum manifest.' \
+  'Do not publish the handoff.'
+emit "[ARCHIVE] state=pass;sha256=${archive_sha256}"
+
+current_stage='publication'
+artifact_backup=''
+if [[ -e "$artifact_current" || -L "$artifact_current" ]]; then
+  [[ -d "$artifact_current" && ! -L "$artifact_current" ]] \
+    || block current_handoff_unsafe \
+      'The stable runtime handoff exists but is not a regular directory.' \
+      'Inspect the stable path before publication.'
+  artifact_backup="$artifact_parent/superseded/node-next-runtime-current-$timestamp-$$"
+  [[ ! -e "$artifact_backup" && ! -L "$artifact_backup" ]] \
+    || block superseded_handoff_exists \
+      'The selected superseded handoff path already exists.' \
+      'Review local artifact state and rerun.'
+fi
+[[ -z "$artifact_backup" ]] || mv -- "$artifact_current" "$artifact_backup"
+if ! mv -- "$artifact_stage" "$artifact_current"; then
+  [[ -z "$artifact_backup" ]] || mv -- "$artifact_backup" "$artifact_current"
+  block publication_failed \
+    'The staged runtime handoff could not be promoted.' \
+    'Review local filesystem state; the prior current handoff was restored.'
+fi
+artifact_stage=''
+(
+  cd -- "$artifact_current"
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) || block published_handoff_checksum_failed \
+  'The published runtime handoff failed checksum verification.' \
+  'Stop and inspect the stable handoff.'
+emit "[PUBLISH] state=pass;handoff=${artifact_current}"
+emit '[NEXT] gate=application_package_and_production_lifecycle_qualification'
+result pass | tee -a "$report_path"

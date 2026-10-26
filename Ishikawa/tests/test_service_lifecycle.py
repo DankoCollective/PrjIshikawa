@@ -62,6 +62,27 @@ class RetrievalServiceLifecycleTests(unittest.TestCase):
     def test_stack_rechecks_components_after_runtime_readiness_failure(self):
         self.assertEqual(self.stack_text.count("--check-readiness"), 2)
         self.assertIn("retrieval_readiness_failed_after_preflight", self.stack_text)
+        if "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64" not in self.stack_text:
+            self.assertIn("npm run dev", self.stack_text)
+            return
+        self.assertIn(
+            "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
+            self.stack_text,
+        )
+        self.assertIn('--user "$operator_uid:$operator_gid"', self.stack_text)
+        self.assertIn("--read-only", self.stack_text)
+        self.assertIn("--security-opt no-new-privileges", self.stack_text)
+        self.assertIn("--cap-drop ALL", self.stack_text)
+        self.assertIn(
+            '--tmpfs "/opt/nextjs/.next:rw,nosuid,nodev,size=',
+            self.stack_text,
+        )
+        self.assertIn("node_modules/.bin/next build", self.stack_text)
+        self.assertIn("exec node_modules/.bin/next start", self.stack_text)
+        self.assertIn("[WEB] state=building;elapsed_seconds=", self.stack_text)
+        self.assertIn("remove_web_container", self.stack_text)
+        self.assertNotIn("npm run dev", self.stack_text)
+        self.assertNotIn("next dev", self.stack_text)
 
 
 if __name__ == "__main__":

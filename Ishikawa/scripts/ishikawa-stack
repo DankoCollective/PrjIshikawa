@@ -5,13 +5,15 @@ set -Eeuo pipefail
 #   Start, inspect, or stop the complete local Ishikawa application stack.
 #
 # Mental model:
-#   Start native PostgreSQL, then the native Retrieval API, then the
-#   host-mounted Next.js container. Require readiness between layers and stop
-#   them in reverse order. Nothing is enabled at boot.
+#   Start native PostgreSQL, then the native Retrieval API, then one production
+#   Next.js container. The container mounts application source read-only,
+#   builds into bounded ephemeral state, and starts from that build. Require
+#   readiness between layers and stop them in reverse order. Nothing is
+#   enabled at boot.
 #
 # Inputs or prerequisites:
 #   A complete installed Ishikawa directory, the final systemd user unit, the
-#   architecture-matching Node image, and the three protected credential
+#   exact Linux AMD64 Node/Next image, and the three protected credential
 #   variables named by the service contract. Required model forwarding is an
 #   external operator action and must already exist.
 #
@@ -56,13 +58,18 @@ readonly POSTGRESQL_UNIT='postgresql@16-main.service'
 readonly POSTGRESQL_META_UNIT='postgresql.service'
 readonly RETRIEVAL_UNIT='ishikawa-retrieval-api.service'
 readonly WEB_CONTAINER='ishikawa-web'
+readonly WEB_IMAGE='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
+readonly WEB_IMAGE_VERSION='24.22.1-next16.4.3-react19.2.9'
+readonly WEB_BUILD_TMPFS_BYTES=536870912
+readonly WEB_BUILD_TIMEOUT_SECONDS=300
 readonly -a SECRET_NAMES=(
   ISHIKAWA_GEMMA_API_KEY
   ISHIKAWA_NOMIC_API_KEY
   ISHIKAWA_POSTGRESQL_PASSWORD
 )
 
-for required in curl docker dpkg grep id mkdir mv pg_isready python3 rm sleep ss sudo systemctl; do
+for required in curl docker dpkg find grep id mkdir mv pg_isready python3 rm \
+  sha256sum sleep ss sudo systemctl tail; do
   command -v "$required" >/dev/null 2>&1 || fail 'required_command_missing'
 done
 for required_path in \
@@ -77,6 +84,8 @@ for required_path in \
   "$WEB_ROOT/next.config.mjs"; do
   [[ -e "$required_path" && ! -L "$required_path" ]] || fail 'installed_input_unsafe'
 done
+find "$WEB_ROOT/app" "$WEB_ROOT/components" "$WEB_ROOT/lib" "$WEB_ROOT/public" \
+  -type l -print -quit | grep -q . && fail 'installed_input_symlink_found'
 [[ -d "$STATE_ROOT" && ! -L "$STATE_ROOT" ]] || fail 'runtime_directory_unsafe'
 
 if ! stack_config_text="$(
@@ -135,11 +144,29 @@ readonly postgresql_host="${stack_config[7]}"
 readonly postgresql_port="${stack_config[8]}"
 
 readonly architecture="$(dpkg --print-architecture)"
-case "$architecture" in
-  amd64|arm64) ;;
-  *) fail 'host_architecture_unsupported' ;;
-esac
-readonly web_image="node-24-slim-nextjs-16-4-1:$architecture"
+[[ "$architecture" == amd64 ]] || fail 'host_architecture_unsupported'
+
+web_source_sha256="$({
+  cd -- "$WEB_ROOT"
+  while IFS= read -r source_path; do
+    printf '%s\0' "$source_path"
+    sha256sum -- "$source_path"
+  done < <(find app components lib public -type f -printf '%p\n' | sort)
+  for source_path in next.config.mjs package.json; do
+    printf '%s\0' "$source_path"
+    sha256sum -- "$source_path"
+  done
+} | sha256sum | awk '{print $1}')"
+readonly web_source_sha256
+configuration_sha256="$({
+  cd -- "$CONFIG_ROOT"
+  for config_path in deployment.yaml product.yaml; do
+    printf '%s\0' "$config_path"
+    sha256sum -- "$config_path"
+  done
+} | sha256sum | awk '{print $1}')"
+readonly configuration_sha256
+web_image_id=''
 
 declare -a docker_command=(docker)
 docker_ready=false
@@ -168,6 +195,19 @@ unit_state() {
 container_running() {
   prepare_docker
   [[ "$("${docker_command[@]}" inspect --format '{{.State.Running}}' "$WEB_CONTAINER" 2>/dev/null || true)" == true ]]
+}
+
+container_exists() {
+  prepare_docker
+  "${docker_command[@]}" inspect "$WEB_CONTAINER" >/dev/null 2>&1
+}
+
+remove_web_container() {
+  container_exists || return 0
+  if container_running; then
+    "${docker_command[@]}" stop --time 20 "$WEB_CONTAINER" >/dev/null 2>&1 || return 1
+  fi
+  "${docker_command[@]}" rm "$WEB_CONTAINER" >/dev/null 2>&1
 }
 
 http_ready() {
@@ -208,15 +248,15 @@ state_is_valid() {
   [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || return 1
   local line
   IFS= read -r line <"$STATE_FILE" || return 1
-  [[ "$line" == 'schema=ishikawa.stack-state.v1;owner=ishikawa-stack;state=starting' || \
-     "$line" == 'schema=ishikawa.stack-state.v1;owner=ishikawa-stack;state=running' ]]
+  grep -Eq '^schema=ishikawa\.stack-state\.v2;owner=ishikawa-stack;state=(starting|running);web_source_sha256=[0-9a-f]{64};configuration_sha256=[0-9a-f]{64};image_id=sha256:[0-9a-f]{64}$' <<<"$line"
 }
 
 write_state() {
   local state="$1"
   local temporary="$STATE_ROOT/.stack.state.$$"
   umask 077
-  printf 'schema=ishikawa.stack-state.v1;owner=ishikawa-stack;state=%s\n' "$state" >"$temporary"
+  printf 'schema=ishikawa.stack-state.v2;owner=ishikawa-stack;state=%s;web_source_sha256=%s;configuration_sha256=%s;image_id=%s\n' \
+    "$state" "$web_source_sha256" "$configuration_sha256" "$web_image_id" >"$temporary"
   mv -- "$temporary" "$STATE_FILE"
 }
 
@@ -226,7 +266,9 @@ if [[ "$action" == status ]]; then
   retrieval_state="$(unit_state user "$RETRIEVAL_UNIT")"
   web_state=inactive
   container_running && web_state=active
-  if [[ "$postgresql_state" != active && "$retrieval_state" != active && "$web_state" != active && ! -e "$STATE_FILE" ]]; then
+  if [[ "$postgresql_state" != active && "$retrieval_state" != active \
+      && "$web_state" != active && ! -e "$STATE_FILE" ]] \
+      && ! container_exists; then
     printf 'ishikawa_stack=status;state=stopped;boot_enabled=false\n'
     exit 0
   fi
@@ -246,9 +288,7 @@ if [[ "$action" == stop ]]; then
   prepare_docker
   sudo -v >/dev/null 2>&1 || fail 'privilege_authorization_failed'
   stop_failed=false
-  if container_running; then
-    "${docker_command[@]}" stop --time 20 "$WEB_CONTAINER" >/dev/null 2>&1 || stop_failed=true
-  fi
+  remove_web_container || stop_failed=true
   if [[ "$(unit_state user "$RETRIEVAL_UNIT")" == active ]]; then
     systemctl --user stop "$RETRIEVAL_UNIT" >/dev/null 2>&1 || stop_failed=true
   fi
@@ -261,7 +301,7 @@ if [[ "$action" == stop ]]; then
   fi
   [[ "$(unit_state user "$RETRIEVAL_UNIT")" != active ]] || fail 'retrieval_stop_unconfirmed'
   [[ "$(unit_state system "$POSTGRESQL_UNIT")" != active ]] || fail 'postgresql_stop_unconfirmed'
-  container_running && fail 'web_stop_unconfirmed'
+  container_exists && fail 'web_stop_unconfirmed'
   rm -f -- "$STATE_FILE"
   check_boot_posture
   printf 'ishikawa_stack=stop;state=stopped;boot_enabled=false\n'
@@ -273,15 +313,29 @@ check_boot_posture
 [[ "$(unit_state system "$POSTGRESQL_UNIT")" != active ]] || fail 'postgresql_already_active'
 [[ "$(unit_state user "$RETRIEVAL_UNIT")" != active ]] || fail 'retrieval_already_active'
 prepare_docker
-container_running && fail 'web_container_already_active'
+container_exists && fail 'web_container_already_exists'
 for occupied_port in "$postgresql_port" "$retrieval_port" "$web_port"; do
   if ss -H -ltn "( sport = :$occupied_port )" | grep -q .; then
     fail 'configured_port_in_use'
   fi
 done
-"${docker_command[@]}" image inspect "$web_image" >/dev/null 2>&1 || fail 'web_image_missing'
-[[ "$("${docker_command[@]}" image inspect "$web_image" --format '{{.Architecture}}' 2>/dev/null || true)" == "$architecture" ]] || \
+"${docker_command[@]}" image inspect "$WEB_IMAGE" >/dev/null 2>&1 || fail 'web_image_missing'
+[[ "$("${docker_command[@]}" image inspect "$WEB_IMAGE" --format '{{.Architecture}}' 2>/dev/null || true)" == amd64 ]] || \
   fail 'web_image_architecture_mismatch'
+[[ "$("${docker_command[@]}" image inspect "$WEB_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)" == "$WEB_IMAGE_VERSION" ]] || \
+  fail 'web_image_version_mismatch'
+web_image_id="$("${docker_command[@]}" image inspect "$WEB_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+[[ "$web_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'web_image_identity_invalid'
+operator_uid="$(id -u)"
+operator_gid="$(id -g)"
+[[ "$operator_uid" =~ ^[0-9]+$ && "$operator_gid" =~ ^[0-9]+$ ]] \
+  || fail 'operator_identity_invalid'
+"${docker_command[@]}" run --rm --network none --read-only \
+  --security-opt no-new-privileges --cap-drop ALL \
+  --user "$operator_uid:$operator_gid" --entrypoint node "$WEB_IMAGE" \
+  --input-type=module -e \
+  'import next from "next/package.json" with {type:"json"}; import react from "react/package.json" with {type:"json"}; import reactDom from "react-dom/package.json" with {type:"json"}; const expected={node:"v24.22.1",next:"16.4.3",react:"19.2.9",reactDom:"19.2.9"}; const actual={node:process.version,next:next.version,react:react.version,reactDom:reactDom.version}; if(JSON.stringify(actual)!==JSON.stringify(expected)){process.exit(1)}' \
+  >/dev/null 2>&1 || fail 'web_runtime_identity_mismatch'
 systemctl --user cat "$RETRIEVAL_UNIT" >/dev/null 2>&1 || fail 'retrieval_unit_missing'
 for secret_name in "${SECRET_NAMES[@]}"; do
   [[ -n "${!secret_name-}" ]] || fail 'required_credential_missing'
@@ -290,15 +344,15 @@ done
 write_state starting
 postgresql_started=false
 retrieval_started=false
-web_started=false
+web_created=false
 environment_imported=false
 start_complete=false
 rollback_start() {
   local status="$?"
   trap - EXIT INT TERM
   if [[ "$start_complete" != true ]]; then
-    if [[ "$web_started" == true ]]; then
-      "${docker_command[@]}" stop --time 10 "$WEB_CONTAINER" >/dev/null 2>&1 || true
+    if [[ "$web_created" == true ]]; then
+      remove_web_container || true
     fi
     if [[ "$retrieval_started" == true ]]; then
       systemctl --user stop "$RETRIEVAL_UNIT" >/dev/null 2>&1 || true
@@ -359,20 +413,77 @@ declare -a web_mounts=(
   --mount "type=bind,src=$WEB_ROOT/package.json,dst=/opt/nextjs/package.json,readonly"
   --mount "type=bind,src=$WEB_ROOT/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly"
 )
-"${docker_command[@]}" run --detach --rm \
+readonly web_runtime_command='
+set -eu
+mkdir -p -- "$HOME" "$TMPDIR"
+printf "[RUNTIME] stage=build;state=start\n"
+node_modules/.bin/next build
+test -f .next/BUILD_ID
+test -d .next/server
+printf "[RUNTIME] stage=build;state=pass\n"
+printf "[RUNTIME] stage=server;state=start\n"
+exec node_modules/.bin/next start --hostname "$1" --port "$2"
+'
+"${docker_command[@]}" run --detach \
   --name "$WEB_CONTAINER" \
+  --init \
   --network host \
+  --read-only \
   --security-opt no-new-privileges \
   --cap-drop ALL \
+  --pids-limit 512 \
+  --user "$operator_uid:$operator_gid" \
+  --tmpfs "/opt/nextjs/.next:rw,nosuid,nodev,size=${WEB_BUILD_TMPFS_BYTES},mode=0700,uid=${operator_uid},gid=${operator_gid}" \
+  --env "HOME=/opt/nextjs/.next/home" \
+  --env 'TMPDIR=/opt/nextjs/.next/tmp' \
+  --env 'TMP=/opt/nextjs/.next/tmp' \
+  --env 'TEMP=/opt/nextjs/.next/tmp' \
+  --env 'NEXT_TELEMETRY_DISABLED=1' \
+  --env 'NODE_ENV=production' \
   --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=$product_name" \
   --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=$product_ui_config_base64" \
   --env "ISHIKAWA_RETRIEVAL_BASE_URL=$retrieval_base_url" \
   "${web_mounts[@]}" \
-  "$web_image" npm run dev -- --hostname "$web_host" --port "$web_port" \
+  "$WEB_IMAGE" sh -c "$web_runtime_command" runtime "$web_host" "$web_port" \
   >/dev/null 2>&1 || fail 'web_start_failed'
-web_started=true
-wait_http "http://$web_host:$web_port/api/live" 160 || fail 'web_liveness_failed'
-wait_http "http://$web_host:$web_port/api/ready" 120 || fail 'web_readiness_failed'
+web_created=true
+printf '[WEB] state=building;elapsed_seconds=0\n'
+web_build_elapsed=0
+web_build_complete=false
+while (( web_build_elapsed < WEB_BUILD_TIMEOUT_SECONDS )); do
+  web_log_tail="$("${docker_command[@]}" logs --tail 120 "$WEB_CONTAINER" 2>&1 || true)"
+  if grep -Fxq '[RUNTIME] stage=build;state=pass' <<<"$web_log_tail"; then
+    web_build_complete=true
+    break
+  fi
+  if ! container_running; then
+    printf '%s\n' "$web_log_tail" >&2
+    fail 'web_build_or_start_failed'
+  fi
+  sleep 1
+  web_build_elapsed=$((web_build_elapsed + 1))
+  if (( web_build_elapsed % 15 == 0 )); then
+    printf '[WEB] state=building;elapsed_seconds=%s\n' "$web_build_elapsed"
+  fi
+done
+[[ "$web_build_complete" == true ]] || {
+  "${docker_command[@]}" logs --tail 120 "$WEB_CONTAINER" >&2 2>/dev/null || true
+  fail 'web_build_timeout'
+}
+printf '[WEB] state=build_pass;elapsed_seconds=%s\n' "$web_build_elapsed"
+if ! wait_http "http://$web_host:$web_port/api/live" 160; then
+  "${docker_command[@]}" logs --tail 120 "$WEB_CONTAINER" >&2 2>/dev/null || true
+  fail 'web_liveness_failed'
+fi
+if ! wait_http "http://$web_host:$web_port/api/ready" 120; then
+  "${docker_command[@]}" logs --tail 120 "$WEB_CONTAINER" >&2 2>/dev/null || true
+  fail 'web_readiness_failed'
+fi
+web_build_bytes="$("${docker_command[@]}" exec "$WEB_CONTAINER" du -sb /opt/nextjs/.next 2>/dev/null | awk '{print $1}' || true)"
+[[ "$web_build_bytes" =~ ^[0-9]+$ && "$web_build_bytes" -lt "$WEB_BUILD_TMPFS_BYTES" ]] \
+  || fail 'web_build_capacity_unverified'
+printf '[WEB] state=ready;build_bytes=%s;tmpfs_bytes=%s\n' \
+  "$web_build_bytes" "$WEB_BUILD_TMPFS_BYTES"
 
 write_state running
 start_complete=true

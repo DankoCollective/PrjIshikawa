@@ -14,6 +14,10 @@
 - `deployment/evidence/` contains sanitized, content-free accepted summaries.
 - `deployment/assets/` contains release verifiers and bounded remote helpers;
   helpers must remain content-free and portable.
+- `deployment/runtime-image/` contains the application-free generic Linux
+  AMD64 Node/Next image definition and exact dependency lock.
+- `deployment/carry/` contains only the portable operator README, verifier,
+  and consolidated deployment entrypoint used to assemble the final handoff.
 - `history/phase-28/` preserves development decisions, scripts, references, and
   evidence. It is historical and must not be used as the normal fresh-install
   path.

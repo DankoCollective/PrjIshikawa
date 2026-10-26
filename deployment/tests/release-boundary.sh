@@ -23,9 +23,9 @@ readonly release_builder="$repo_root/deployment/scripts/01_build-ishikawa-releas
 readonly corpus_exporter="$repo_root/deployment/scripts/03_export-qualification-corpus.sh"
 readonly release_verifier="$repo_root/deployment/assets/verify-ishikawa-release"
 readonly corpus_handoff="$repo_root/local/artifacts/qualification-corpus-v3-current"
-readonly application_handoff="$repo_root/local/artifacts/ishikawa-v1.3-current"
-readonly source_manifest="$repo_root/docs/releases/ISHIKAWA_V1_3_SOURCE_SHA256SUMS"
-readonly application_archive="$application_handoff/ishikawa-v1.3.tar.gz"
+readonly application_handoff="$repo_root/local/artifacts/ishikawa-v1.3.1-candidate-current"
+readonly source_manifest="$repo_root/docs/releases/ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS"
+readonly application_archive="$application_handoff/ishikawa-v1.3.1.tar.gz"
 
 fail() {
   printf '\nSCRIPT RESULT\nrelease_boundary_test=blocked;reason=%s\n' "$1" >&2
@@ -44,8 +44,8 @@ grep -Fxq 'script_01_build_ishikawa_release=ready' <<<"$release_validation" \
   || fail release_ready_marker_missing
 grep -Fq 'source_documents=0;corpus_dependency=false' <<<"$release_validation" \
   || fail release_independence_marker_missing
-grep -Fq 'V13-76' "$release_builder" \
-  || fail rollback_waiver_decision_gate_missing
+grep -Fq 'for decision_number in {60..89}' "$release_builder" \
+  || fail carry_decision_gate_missing
 
 corpus_validation="$(bash "$corpus_exporter" --validate-only 2>&1)" \
   || fail corpus_validation_failed
@@ -57,11 +57,11 @@ grep -Fq 'application_build_dependency=false' <<<"$corpus_validation" \
 if grep -Eq 'qualification/corpus-v3|corpus_root|ishikawa-corpus|synthetic-corpus-v3-current' "$release_builder"; then
   fail application_builder_contains_corpus_dependency
 fi
-grep -Fq "readonly application_current=\"\$artifact_root/ishikawa-v1.3-current\"" "$release_builder" \
+grep -Fq "readonly application_current=\"\$artifact_root/ishikawa-v1.3.1-candidate-current\"" "$release_builder" \
   || fail application_handoff_name_invalid
-grep -Fq "readonly bundle_name='ishikawa-v1.3'" "$release_builder" \
+grep -Fq "readonly bundle_name='ishikawa-v1.3.1'" "$release_builder" \
   || fail application_archive_name_invalid
-grep -Fq '"release_name": "Ishikawa v1.3"' "$release_builder" \
+grep -Fq '"release_name": "Ishikawa v1.3.1"' "$release_builder" \
   || fail application_release_identity_invalid
 
 if [[ -d "$application_handoff" && ! -L "$application_handoff" ]]; then
@@ -74,31 +74,31 @@ if [[ -d "$application_handoff" && ! -L "$application_handoff" ]]; then
     || fail application_handoff_checksum_failed
   current_source_manifest_sha256="$(sha256sum -- "$source_manifest" | awk '{print $1}')"
   packaged_source_manifest_sha256="$(
-    tar -xOf "$application_archive" ishikawa-v1.3/release.json \
+    tar -xOf "$application_archive" ishikawa-v1.3.1/release.json \
       | python3 -c 'import json, sys; print(json.load(sys.stdin)["source_manifest_sha256"])'
   )" || fail application_release_record_invalid
   [[ "$packaged_source_manifest_sha256" == "$current_source_manifest_sha256" ]] \
     || fail application_handoff_source_identity_stale
   expected_yaml_inventory="$(printf '%s\n' \
-    ishikawa-v1.3/application/payload/config/api_profile.yaml \
-    ishikawa-v1.3/application/payload/config/deployment.yaml \
-    ishikawa-v1.3/application/payload/config/document_catalog.yaml \
-    ishikawa-v1.3/application/payload/config/document_classes.yaml \
-    ishikawa-v1.3/application/payload/config/examples/document_catalog.yaml \
-    ishikawa-v1.3/application/payload/config/examples/ingestion_manifest.yaml \
-    ishikawa-v1.3/application/payload/config/ingestion_dependencies.yaml \
-    ishikawa-v1.3/application/payload/config/injection_profile.yaml \
-    ishikawa-v1.3/application/payload/config/logging_profile.yaml \
-    ishikawa-v1.3/application/payload/config/method_profile.yaml \
-    ishikawa-v1.3/application/payload/config/product.yaml \
-    ishikawa-v1.3/application/payload/config/query_resolution_profile.yaml \
-    ishikawa-v1.3/application/payload/config/reconstruction_profile.yaml \
-    ishikawa-v1.3/application/payload/config/relationship_types.yaml \
-    ishikawa-v1.3/application/payload/config/relevance_profile.yaml \
-    ishikawa-v1.3/application/payload/config/retrieval_service_profile.yaml \
-    ishikawa-v1.3/application/payload/config/runtime_dependencies.yaml \
-    ishikawa-v1.3/application/payload/config/scope_profile.yaml \
-    ishikawa-v1.3/application/payload/config/sufficiency_profile.yaml)"
+    ishikawa-v1.3.1/application/payload/config/api_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/deployment.yaml \
+    ishikawa-v1.3.1/application/payload/config/document_catalog.yaml \
+    ishikawa-v1.3.1/application/payload/config/document_classes.yaml \
+    ishikawa-v1.3.1/application/payload/config/examples/document_catalog.yaml \
+    ishikawa-v1.3.1/application/payload/config/examples/ingestion_manifest.yaml \
+    ishikawa-v1.3.1/application/payload/config/ingestion_dependencies.yaml \
+    ishikawa-v1.3.1/application/payload/config/injection_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/logging_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/method_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/product.yaml \
+    ishikawa-v1.3.1/application/payload/config/query_resolution_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/reconstruction_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/relationship_types.yaml \
+    ishikawa-v1.3.1/application/payload/config/relevance_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/retrieval_service_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/runtime_dependencies.yaml \
+    ishikawa-v1.3.1/application/payload/config/scope_profile.yaml \
+    ishikawa-v1.3.1/application/payload/config/sufficiency_profile.yaml)"
   actual_yaml_inventory="$(tar -tzf "$application_archive" | grep -E '\.yaml$' | sort)"
   [[ "$actual_yaml_inventory" == "$expected_yaml_inventory" ]] \
     || fail application_yaml_inventory_mismatch
@@ -119,12 +119,12 @@ if [[ -d "$corpus_handoff" && ! -L "$corpus_handoff" ]]; then
   tar -xOf "$archive" qualification-corpus-v3/transfer.json \
     | grep -Fq '"configuration_generation":"target_per_ingestion_run"' \
     || fail corpus_target_configuration_contract_missing
-  if tar -tzf "$archive" | grep -Eq '/application/|install-ishikawa|ishikawa-v1\.3'; then
+  if tar -tzf "$archive" | grep -Eq '/application/|install-ishikawa|ishikawa-v1\.3(\.1)?'; then
     fail corpus_handoff_contains_application
   fi
 fi
 
 printf '%s\n' \
-  'release_identity=Ishikawa_v1.3;application_handoff=ishikawa-v1.3-current;corpus_dependency=false' \
+  'release_identity=Ishikawa_v1.3.1;application_handoff=ishikawa-v1.3.1-candidate-current;corpus_dependency=false' \
   'qualification_transfer=qualification-corpus-v3-current;application_dependency=false;runtime_flat_file_index=false'
 printf '\nSCRIPT RESULT\nrelease_boundary_test=pass\n'

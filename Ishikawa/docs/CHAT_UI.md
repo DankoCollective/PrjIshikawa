@@ -3,8 +3,10 @@
 ## Purpose
 
 The Ishikawa Chat UI is the browser-facing part of the application. It runs
-from host-resident source bind-mounted into the unchanged Node 24 and Next.js
-16.4.1 runtime image. The source is not baked into that image.
+from host-resident source bind-mounted read-only into the exact generic Linux
+AMD64 Node 24 and Next.js 16 runtime image. The source is not baked into that
+image. Every permanent start creates bounded ephemeral `.next` state, runs
+`next build`, and then runs `next start` in the same container.
 
 The browser communicates only with the Next.js server. The Next.js server
 proxies versioned chat requests to the loopback Ishikawa Retrieval API. The

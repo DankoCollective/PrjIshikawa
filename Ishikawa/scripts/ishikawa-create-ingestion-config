@@ -1,0 +1,371 @@
+#!/usr/bin/env python3
+"""Create a catalog and pending manifest from protected operator metadata.
+
+The command runs inside an installed Ishikawa directory. It validates an exact
+CSV inventory against corpus/source, validates document classes and generated
+configuration through the application contracts, and writes no content-bearing
+detail to stdout. Validation mode is read-only; publish mode replaces only the
+initial empty catalog and creates one new pending manifest.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+
+
+PRODUCT_ROOT = Path(__file__).resolve().parents[1]
+PYTHON_ROOT = PRODUCT_ROOT / "application" / "python"
+sys.path.insert(0, str(PYTHON_ROOT))
+
+from ishikawa.errors import IshikawaValidationError  # noqa: E402
+from ishikawa.validators import (  # noqa: E402
+    validate_class_registry,
+    validate_document_catalog,
+    validate_ingestion_manifest,
+)
+from ishikawa.yaml_loader import load_restricted_yaml  # noqa: E402
+
+
+DOCUMENT_KEY = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
+CLASS_ID = re.compile(r"[a-z][a-z0-9._-]{0,127}\Z")
+MANIFEST_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}\.yaml\Z")
+EXPECTED_FIELDS = ("source_path", "document_key", "display_name", "class_id")
+
+
+class ConfigurationCreationError(ValueError):
+    """A protected input or generated target violated the closed contract."""
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataRecord:
+    source_path: str
+    document_key: str
+    display_name: str
+    class_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedConfiguration:
+    catalog_text: str
+    manifest_text: str
+    document_count: int
+    metadata_sha256: str
+
+
+def fail(reason: str) -> None:
+    raise ConfigurationCreationError(reason)
+
+
+def file_sha256(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
+def safe_directory(path: Path, reason: str) -> Path:
+    if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+        fail(reason)
+    return path.resolve(strict=True)
+
+
+def safe_file(path: Path, reason: str) -> Path:
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        fail(reason)
+    return path.resolve(strict=True)
+
+
+def strict_text(value: str | None, reason: str, maximum: int) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > maximum
+        or any(character in value for character in ("\x00", "\r", "\n"))
+    ):
+        fail(reason)
+    return value
+
+
+def punctuation_key(value: str) -> str:
+    return re.sub(r"[._-]+", "", value)
+
+
+def load_active_classes(config_root: Path) -> frozenset[str]:
+    try:
+        registry = validate_class_registry(
+            load_restricted_yaml(
+                safe_file(config_root / "document_classes.yaml", "class_registry_unsafe"),
+                label="document-class registry",
+            )
+        )
+    except IshikawaValidationError as error:
+        raise ConfigurationCreationError("class_registry_invalid") from error
+    return frozenset(item.class_id for item in registry.classes if item.status == "active")
+
+
+def load_metadata(metadata_path: Path, active_classes: frozenset[str]) -> tuple[MetadataRecord, ...]:
+    metadata = safe_file(metadata_path, "metadata_file_unsafe")
+    try:
+        with metadata.open("r", encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            if reader.fieldnames != list(EXPECTED_FIELDS):
+                fail("metadata_fields_invalid")
+            rows = list(reader)
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise ConfigurationCreationError("metadata_file_invalid") from error
+    if not rows:
+        fail("metadata_empty")
+
+    records: list[MetadataRecord] = []
+    source_paths: set[str] = set()
+    document_keys: set[str] = set()
+    punctuation_keys: set[str] = set()
+    for row in rows:
+        if None in row or set(row) != set(EXPECTED_FIELDS):
+            fail("metadata_record_invalid")
+        source_path = strict_text(row["source_path"], "source_path_invalid", 1024)
+        parsed_path = PurePosixPath(source_path)
+        if (
+            parsed_path.is_absolute()
+            or "\\" in source_path
+            or parsed_path.suffix.lower() != ".pdf"
+            or any(part in {"", ".", ".."} for part in parsed_path.parts)
+        ):
+            fail("source_path_invalid")
+        document_key = strict_text(row["document_key"], "document_key_invalid", 128)
+        if DOCUMENT_KEY.fullmatch(document_key) is None:
+            fail("document_key_invalid")
+        display_name = strict_text(row["display_name"], "display_name_invalid", 512)
+        class_id = strict_text(row["class_id"], "class_id_invalid", 128)
+        if CLASS_ID.fullmatch(class_id) is None or class_id not in active_classes:
+            fail("class_id_invalid")
+        normalized_key = punctuation_key(document_key)
+        if (
+            source_path in source_paths
+            or document_key in document_keys
+            or normalized_key in punctuation_keys
+        ):
+            fail("metadata_identity_duplicate")
+        source_paths.add(source_path)
+        document_keys.add(document_key)
+        punctuation_keys.add(normalized_key)
+        records.append(MetadataRecord(source_path, document_key, display_name, class_id))
+    return tuple(records)
+
+
+def validate_source_inventory(source_root: Path, records: tuple[MetadataRecord, ...]) -> None:
+    source = safe_directory(source_root, "source_root_unsafe")
+    actual_paths: set[str] = set()
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            fail("source_symlink_found")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(source).as_posix()
+        if path.suffix.lower() != ".pdf":
+            fail("source_non_pdf_found")
+        safe_file(path, "source_file_unsafe")
+        actual_paths.add(relative)
+    expected_paths = {record.source_path for record in records}
+    if actual_paths != expected_paths:
+        fail("source_inventory_mismatch")
+
+
+def render_yaml(records: tuple[MetadataRecord, ...]) -> tuple[str, str]:
+    ordered = sorted(records, key=lambda record: record.document_key)
+    catalog_lines = ["schema_version: 1", "", "documents:"]
+    manifest_lines = ["schema_version: 1", "", "documents:"]
+    for record in ordered:
+        catalog_lines.extend(
+            (
+                f"  - document_key: {json.dumps(record.document_key, ensure_ascii=False)}",
+                f"    display_name: {json.dumps(record.display_name, ensure_ascii=False)}",
+                "    status: active",
+            )
+        )
+        manifest_lines.extend(
+            (
+                f"  - source_path: {json.dumps(record.source_path, ensure_ascii=False)}",
+                f"    document_key: {json.dumps(record.document_key, ensure_ascii=False)}",
+                f"    class_id: {json.dumps(record.class_id, ensure_ascii=False)}",
+            )
+        )
+    manifest_lines.extend(("", "retirements: []"))
+    return "\n".join(catalog_lines) + "\n", "\n".join(manifest_lines) + "\n"
+
+
+def validate_generated(catalog_text: str, manifest_text: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="ishikawa-config-validation.") as temporary:
+        temporary_root = Path(temporary)
+        catalog_path = temporary_root / "catalog.yaml"
+        manifest_path = temporary_root / "manifest.yaml"
+        catalog_path.write_text(catalog_text, encoding="utf-8")
+        manifest_path.write_text(manifest_text, encoding="utf-8")
+        try:
+            validate_document_catalog(
+                load_restricted_yaml(catalog_path, label="generated document catalog")
+            )
+            validate_ingestion_manifest(
+                load_restricted_yaml(manifest_path, label="generated ingestion manifest")
+            )
+        except IshikawaValidationError as error:
+            raise ConfigurationCreationError("generated_configuration_invalid") from error
+
+
+def generate(metadata_path: Path, source_root: Path, config_root: Path) -> GeneratedConfiguration:
+    config = safe_directory(config_root, "config_root_unsafe")
+    active_classes = load_active_classes(config)
+    records = load_metadata(metadata_path, active_classes)
+    validate_source_inventory(source_root, records)
+    catalog_text, manifest_text = render_yaml(records)
+    validate_generated(catalog_text, manifest_text)
+    return GeneratedConfiguration(
+        catalog_text,
+        manifest_text,
+        len(records),
+        file_sha256(metadata_path),
+    )
+
+
+def create_staged_file(parent: Path, name: str, content: str) -> Path:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, 0o600)
+        return temporary
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def publish(generated: GeneratedConfiguration, config_root: Path, manifest_name: str) -> tuple[Path, Path]:
+    config = safe_directory(config_root, "config_root_unsafe")
+    pending = safe_directory(config / "ingestion" / "pending", "pending_root_unsafe")
+    if MANIFEST_NAME.fullmatch(manifest_name) is None or "/" in manifest_name:
+        fail("manifest_name_invalid")
+    catalog_path = safe_file(config / "document_catalog.yaml", "catalog_target_unsafe")
+    manifest_path = pending / manifest_name
+    if manifest_path.exists() or manifest_path.is_symlink():
+        fail("manifest_target_exists")
+    try:
+        current_catalog = validate_document_catalog(
+            load_restricted_yaml(catalog_path, label="current document catalog")
+        )
+    except IshikawaValidationError as error:
+        raise ConfigurationCreationError("catalog_target_invalid") from error
+    if current_catalog.documents:
+        fail("catalog_target_not_empty")
+
+    staged_catalog = create_staged_file(config, "document_catalog.yaml", generated.catalog_text)
+    staged_manifest = create_staged_file(pending, manifest_name, generated.manifest_text)
+    try:
+        os.replace(staged_manifest, manifest_path)
+        try:
+            os.replace(staged_catalog, catalog_path)
+        except Exception:
+            manifest_path.unlink(missing_ok=True)
+            raise
+    finally:
+        staged_catalog.unlink(missing_ok=True)
+        staged_manifest.unlink(missing_ok=True)
+    return catalog_path, manifest_path
+
+
+def self_test() -> None:
+    with tempfile.TemporaryDirectory(prefix="ishikawa-create-config-test.") as temporary:
+        test_root = Path(temporary)
+        source_root = test_root / "corpus" / "source"
+        config_root = test_root / "config"
+        pending_root = config_root / "ingestion" / "pending"
+        source_root.mkdir(parents=True)
+        pending_root.mkdir(parents=True)
+        (source_root / "policy.pdf").write_bytes(b"%PDF-1.4\ncontent-blind-test\n")
+        (config_root / "document_classes.yaml").write_text(
+            "schema_version: 1\n\nclasses:\n"
+            "  - class_id: policy_sop\n"
+            "    display_name: Policy or SOP\n"
+            "    status: active\n",
+            encoding="utf-8",
+        )
+        (config_root / "document_catalog.yaml").write_text(
+            "schema_version: 1\n\ndocuments: []\n", encoding="utf-8"
+        )
+        metadata_path = test_root / "metadata.csv"
+        metadata_path.write_text(
+            "source_path,document_key,display_name,class_id\n"
+            "policy.pdf,policy.sample,Sample Policy,policy_sop\n",
+            encoding="utf-8",
+        )
+        generated = generate(metadata_path, source_root, config_root)
+        catalog_path, manifest_path = publish(generated, config_root, "initial.yaml")
+        if generated.document_count != 1 or not catalog_path.is_file() or not manifest_path.is_file():
+            fail("self_test_success_path_failed")
+        try:
+            publish(generated, config_root, "second.yaml")
+        except ConfigurationCreationError as error:
+            if str(error) != "catalog_target_not_empty":
+                raise
+        else:
+            fail("self_test_nonempty_catalog_branch_failed")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--validate-only", action="store_true")
+    mode.add_argument("--publish", action="store_true")
+    mode.add_argument("--self-test", action="store_true")
+    parser.add_argument("--metadata")
+    parser.add_argument("--manifest-name", default="initial-corpus.yaml")
+    arguments = parser.parse_args()
+    try:
+        if arguments.self_test:
+            if arguments.metadata:
+                fail("self_test_arguments_invalid")
+            self_test()
+            print("ishikawa_ingestion_config_self_test=pass")
+            return 0
+        if not arguments.metadata:
+            fail("metadata_argument_missing")
+        metadata_path = Path(arguments.metadata)
+        generated = generate(
+            metadata_path,
+            PRODUCT_ROOT / "corpus" / "source",
+            PRODUCT_ROOT / "config",
+        )
+        catalog_sha256 = hashlib.sha256(generated.catalog_text.encode("utf-8")).hexdigest()
+        manifest_sha256 = hashlib.sha256(generated.manifest_text.encode("utf-8")).hexdigest()
+        if arguments.publish:
+            publish(generated, PRODUCT_ROOT / "config", arguments.manifest_name)
+            state = "pass"
+        else:
+            state = "ready"
+        print(
+            f"ishikawa_ingestion_config={state};documents={generated.document_count};"
+            f"metadata_sha256={generated.metadata_sha256};catalog_sha256={catalog_sha256};"
+            f"manifest_sha256={manifest_sha256};content_output=false"
+        )
+        return 0
+    except (ConfigurationCreationError, OSError) as error:
+        reason = str(error) if isinstance(error, ConfigurationCreationError) else "filesystem_operation_failed"
+        print(f"ishikawa_ingestion_config=blocked;reason={reason}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -19,7 +19,9 @@ set -Eeuo pipefail
 #
 # Usage:
 #   bash ./inspect-native-prerequisites --expected-os-version 26.04 \
-#     --expected-architecture amd64 --output-dir /tmp/ishikawa-native-prerequisite-inventory
+#     --expected-architecture amd64 --postgresql-port 5432 \
+#     --retrieval-port 1384 --web-port 3000 \
+#     --output-dir /tmp/ishikawa-native-prerequisite-inventory
 
 usage() {
   sed -n '3,21p' "${BASH_SOURCE[0]}"
@@ -28,6 +30,9 @@ usage() {
     '  --expected-hostname NAME       Optional exact target short hostname.' \
     '  --expected-os-version VERSION  Exact Ubuntu major.minor version.' \
     '  --expected-architecture ARCH    Exact Debian architecture.' \
+    '  --postgresql-port PORT           Planned loopback PostgreSQL port.' \
+    '  --retrieval-port PORT            Planned loopback Retrieval API port.' \
+    '  --web-port PORT                  Planned loopback web UI port.' \
     '  --output-dir PATH               New absolute output directory under /tmp.'
 }
 
@@ -39,12 +44,18 @@ fail() {
 expected_hostname=''
 expected_os_version='26.04'
 expected_architecture='amd64'
+postgresql_port='5432'
+retrieval_port='1384'
+web_port='3000'
 output_dir=''
 while (( $# > 0 )); do
   case "$1" in
     --expected-hostname) expected_hostname="${2:-}"; shift 2 ;;
     --expected-os-version) expected_os_version="${2:-}"; shift 2 ;;
     --expected-architecture) expected_architecture="${2:-}"; shift 2 ;;
+    --postgresql-port) postgresql_port="${2:-}"; shift 2 ;;
+    --retrieval-port) retrieval_port="${2:-}"; shift 2 ;;
+    --web-port) web_port="${2:-}"; shift 2 ;;
     --output-dir) output_dir="${2:-}"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) fail argument_invalid ;;
@@ -55,6 +66,12 @@ done
 [[ -z "$expected_hostname" || "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail expected_hostname_invalid
 [[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail expected_os_version_invalid
 [[ "$expected_architecture" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || fail expected_architecture_invalid
+for selected_port in "$postgresql_port" "$retrieval_port" "$web_port"; do
+  [[ "$selected_port" =~ ^[0-9]+$ && "$selected_port" -ge 1 && "$selected_port" -le 65535 ]] \
+    || fail planned_port_invalid
+done
+[[ "$postgresql_port" != "$retrieval_port" && "$postgresql_port" != "$web_port" \
+    && "$retrieval_port" != "$web_port" ]] || fail planned_ports_collide
 [[ "$output_dir" == /tmp/* && "$output_dir" != /tmp/ && ! -e "$output_dir" && ! -L "$output_dir" ]] || fail output_directory_invalid
 
 for required in apt-cache apt-get awk date df dpkg dpkg-query find grep hostname mkdir python3 rm sed sha256sum sort ss stat systemctl uname; do
@@ -154,7 +171,8 @@ if command -v docker >/dev/null 2>&1; then
   if docker version --format '{{.Server.Version}}' >"$output_dir/.docker-version" 2>/dev/null; then
     docker_accessible=true
     docker_server_version="$(sed -n '1p' "$output_dir/.docker-version")"
-    if docker image inspect node-24-slim-nextjs-16-4-1:amd64 --format '{{.Id}}' >"$output_dir/.node-image" 2>/dev/null; then
+    if docker image inspect node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64 \
+        --format '{{.Id}}' >"$output_dir/.node-image" 2>/dev/null; then
       node_image_present=true
       node_image_id="$(sed -n '1p' "$output_dir/.node-image")"
     fi
@@ -173,9 +191,9 @@ grep -Fq '0 upgraded, 0 newly installed, 0 to remove' <<<"$apt_check_output" && 
 apt_lists_latest_epoch="$(find /var/lib/apt/lists -maxdepth 1 -type f -printf '%T@\n' 2>/dev/null | sort -nr | sed -n '1s/\..*//p' || true)"
 root_available_bytes="$(df -B1 --output=avail / | awk 'NR == 2 {print $1}')"
 home_available_bytes="$(df -B1 --output=avail "$HOME" | awk 'NR == 2 {print $1}')"
-listening_5432="$(ss -H -ltn 'sport = :5432' 2>/dev/null | awk 'NF {count++} END {print count+0}')"
-listening_1384="$(ss -H -ltn 'sport = :1384' 2>/dev/null | awk 'NF {count++} END {print count+0}')"
-listening_3000="$(ss -H -ltn 'sport = :3000' 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+listening_postgresql="$(ss -H -ltn "sport = :$postgresql_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+listening_retrieval="$(ss -H -ltn "sport = :$retrieval_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+listening_web="$(ss -H -ltn "sport = :$web_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
 postgresql_service_enabled="$(systemctl is-enabled postgresql.service 2>/dev/null || true)"
 postgresql_service_active="$(systemctl is-active postgresql.service 2>/dev/null || true)"
 
@@ -209,9 +227,12 @@ started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'apt_lists_latest_epoch=%s\n' "${apt_lists_latest_epoch:-0}"
   printf 'root_available_bytes=%s\n' "$root_available_bytes"
   printf 'home_available_bytes=%s\n' "$home_available_bytes"
-  printf 'listener_5432_count=%s\n' "$listening_5432"
-  printf 'listener_1384_count=%s\n' "$listening_1384"
-  printf 'listener_3000_count=%s\n' "$listening_3000"
+  printf 'postgresql_port=%s\n' "$postgresql_port"
+  printf 'retrieval_port=%s\n' "$retrieval_port"
+  printf 'web_port=%s\n' "$web_port"
+  printf 'listener_postgresql_count=%s\n' "$listening_postgresql"
+  printf 'listener_retrieval_count=%s\n' "$listening_retrieval"
+  printf 'listener_web_count=%s\n' "$listening_web"
   printf 'postgresql_service_enabled=%s\n' "${postgresql_service_enabled:-unknown}"
   printf 'postgresql_service_active=%s\n' "${postgresql_service_active:-unknown}"
 } >"$summary_path"

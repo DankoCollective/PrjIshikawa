@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Verify every portable deployment byte without changing the host.
+
+fail() {
+  printf 'ishikawa_deployment_verification=blocked;reason=%s\n' "$1" >&2
+  exit 1
+}
+
+[[ $# == 0 ]] || fail arguments_invalid
+for required in awk cmp find grep jq mktemp python3 rm sha256sum sort tar; do
+  command -v "$required" >/dev/null 2>&1 || fail "command_missing_${required}"
+done
+
+readonly carry_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly checksum_file="$carry_root/SHA256SUMS"
+readonly application_archive="$carry_root/ishikawa-v1.3.1.tar.gz"
+readonly image_archive="$carry_root/node-next-runtime-amd64.tar"
+readonly image_identity="$carry_root/runtime-image-identity.json"
+readonly carry_receipt="$carry_root/carry-receipt.json"
+readonly temporary_base="${TMPDIR:-/tmp}"
+
+[[ -d "$carry_root" && ! -L "$carry_root" ]] || fail carry_directory_unsafe
+[[ "$temporary_base" == /tmp || "$temporary_base" == /tmp/* ]] \
+  || fail temporary_directory_invalid
+[[ -d "$temporary_base" && ! -L "$temporary_base" && -w "$temporary_base" ]] \
+  || fail temporary_directory_unsafe
+find "$carry_root" -type l -print -quit | grep -q . && fail carry_symlink_found
+for required_file in \
+  README.md SHA256SUMS application-release.json carry-inventory.json carry-receipt.json \
+  application-license.json application-sbom.cdx.json deploy-ishikawa \
+  inspect-native-prerequisites ishikawa-v1.3.1.tar.gz \
+  ishikawa-v1.3.1.tar.gz.sha256 ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS \
+  node-next-runtime-amd64.tar node-next-runtime-amd64.tar.sha256 \
+  runtime-build-receipt.json runtime-Dockerfile runtime-image-identity.json runtime-licenses.json \
+  runtime-package-lock.json runtime-package.json runtime-sbom.cdx.json \
+  RUNTIME_LICENSES.md RUNTIME_README.md RUNTIME_SECURITY.md \
+  verify-deployment; do
+  [[ -f "$carry_root/$required_file" && ! -L "$carry_root/$required_file" \
+      && -r "$carry_root/$required_file" ]] || fail carry_inventory_incomplete
+done
+
+temporary_root="$(mktemp -d "$temporary_base/ishikawa-deployment-verification.XXXXXX")"
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM
+  [[ "$temporary_root" == "$temporary_base"/ishikawa-deployment-verification.* \
+      && -d "$temporary_root" ]] && rm -rf -- "$temporary_root"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+printf '%s\n' \
+  ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS README.md RUNTIME_LICENSES.md \
+  RUNTIME_README.md RUNTIME_SECURITY.md application-release.json \
+  application-license.json application-sbom.cdx.json carry-inventory.json carry-receipt.json \
+  deploy-ishikawa inspect-native-prerequisites \
+  ishikawa-v1.3.1.tar.gz ishikawa-v1.3.1.tar.gz.sha256 \
+  node-next-runtime-amd64.tar node-next-runtime-amd64.tar.sha256 \
+  runtime-build-receipt.json runtime-Dockerfile runtime-image-identity.json runtime-licenses.json \
+  runtime-package-lock.json runtime-package.json runtime-sbom.cdx.json \
+  verify-deployment | sort >"$temporary_root/expected-files"
+(cd -- "$carry_root" && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\n' | sort) \
+  >"$temporary_root/actual-files"
+cmp -s "$temporary_root/expected-files" "$temporary_root/actual-files" \
+  || fail carry_inventory_mismatch
+(cd -- "$carry_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail carry_checksum_failed
+(cd -- "$carry_root" && sha256sum --check --strict ishikawa-v1.3.1.tar.gz.sha256 >/dev/null) \
+  || fail application_archive_checksum_failed
+(cd -- "$carry_root" && sha256sum --check --strict node-next-runtime-amd64.tar.sha256 >/dev/null) \
+  || fail runtime_archive_checksum_failed
+
+python3 -B - "$application_archive" "$image_archive" <<'PY' \
+  || fail archive_path_contract_failed
+import sys
+import tarfile
+from pathlib import PurePosixPath
+
+for index, archive_name in enumerate(sys.argv[1:]):
+    mode = "r:gz" if archive_name.endswith(".gz") else "r:"
+    with tarfile.open(archive_name, mode) as archive:
+        members = archive.getmembers()
+    if not members:
+        raise SystemExit(1)
+    for member in members:
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts or not member.name:
+            raise SystemExit(1)
+        if not (member.isfile() or member.isdir()):
+            raise SystemExit(1)
+        if index == 0 and (not path.parts or path.parts[0] != "ishikawa-v1.3.1"):
+            raise SystemExit(1)
+PY
+
+tar -tzf "$application_archive" >"$temporary_root/application-files" \
+  || fail application_archive_invalid
+grep -Fxq 'ishikawa-v1.3.1/verify-ishikawa-release' \
+  "$temporary_root/application-files" || fail application_verifier_missing
+mkdir -- "$temporary_root/application"
+tar --no-same-owner --no-same-permissions -xzf "$application_archive" \
+  -C "$temporary_root/application" \
+  || fail application_extraction_failed
+bash "$temporary_root/application/ishikawa-v1.3.1/verify-ishikawa-release" >/dev/null \
+  || fail application_verification_failed
+
+tar -tf "$image_archive" >"$temporary_root/image-files" \
+  || fail runtime_archive_invalid
+grep -Fxq 'manifest.json' "$temporary_root/image-files" \
+  || fail runtime_archive_manifest_missing
+
+python3 -B - "$image_identity" "$carry_root/runtime-build-receipt.json" \
+  "$carry_root/application-sbom.cdx.json" "$carry_root/application-license.json" \
+  "$carry_receipt" "$application_archive" "$image_archive" <<'PY' \
+  || fail identity_record_invalid
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+identity_path, build_receipt_path, application_sbom_path, application_license_path, receipt_path, application_path, image_path = map(Path, sys.argv[1:])
+identity = json.loads(identity_path.read_text(encoding="utf-8"))
+build_receipt = json.loads(build_receipt_path.read_text(encoding="utf-8"))
+application_sbom = json.loads(application_sbom_path.read_text(encoding="utf-8"))
+application_license = json.loads(application_license_path.read_text(encoding="utf-8"))
+receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
+
+expected_identity = {
+    "application_in_image": False,
+    "architecture": "amd64",
+    "generated_next_in_image": False,
+    "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
+    "next": "16.4.3",
+    "node": "24.22.1",
+    "platform": "linux/amd64",
+    "react": "19.2.9",
+    "react_dom": "19.2.9",
+    "schema": "node-next-runtime-image.v1",
+}
+if any(identity.get(key) != value for key, value in expected_identity.items()):
+    raise SystemExit(1)
+if identity.get("archive_sha256") != digest(image_path):
+    raise SystemExit(1)
+if build_receipt.get("schema") != "node-next-runtime-build-receipt.v1":
+    raise SystemExit(1)
+for field in ("image_id", "image_reference", "archive_sha256", "architecture", "platform"):
+    if build_receipt.get(field) != identity.get(field):
+        raise SystemExit(1)
+if application_sbom.get("bomFormat") != "CycloneDX":
+    raise SystemExit(1)
+component = application_sbom.get("metadata", {}).get("component", {})
+if component.get("name") != "Ishikawa" or component.get("version") != "1.3.1":
+    raise SystemExit(1)
+if application_license.get("schema") != "ishikawa.application-license.v1":
+    raise SystemExit(1)
+if application_license.get("application_license") != "Apache-2.0":
+    raise SystemExit(1)
+expected_receipt = {
+    "application_archive_sha256": digest(application_path),
+    "application_release": "Ishikawa v1.3.1 candidate",
+    "architecture": "amd64",
+    "boot_autostart": False,
+    "image_archive_sha256": digest(image_path),
+    "image_reference": expected_identity["image_reference"],
+    "platform": "linux/amd64",
+    "schema": "ishikawa.carry-receipt.v1",
+}
+if any(receipt.get(key) != value for key, value in expected_receipt.items()):
+    raise SystemExit(1)
+if receipt.get("promotion_state") not in {
+    "candidate_pending_exact_byte_requalification",
+    "final_exact_byte_requalified",
+}:
+    raise SystemExit(1)
+PY
+
+if find "$carry_root" -type f \( -name '*.key' -o -name '*.pem' -o -name '*.p12' \
+    -o -name '*.pfx' -o -name '*.env' \) -print -quit | grep -q .; then
+  fail prohibited_secret_file_found
+fi
+
+promotion_state="$(jq -r '.promotion_state' "$carry_receipt")"
+python3 -B - "$carry_root" "$carry_root/carry-inventory.json" <<'PY' \
+  || fail carry_inventory_record_invalid
+import hashlib
+import json
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+record = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+if record.get("schema") != "ishikawa.carry-inventory.v1":
+    raise SystemExit(1)
+files = record.get("files")
+if not isinstance(files, list) or record.get("file_count") != len(files):
+    raise SystemExit(1)
+expected_paths = {
+    item.name for item in root.iterdir()
+    if item.is_file() and item.name not in {"carry-inventory.json", "SHA256SUMS"}
+}
+observed_paths = {item.get("path") for item in files}
+if observed_paths != expected_paths or len(observed_paths) != len(files):
+    raise SystemExit(1)
+total = 0
+for item in files:
+    path = root / item["path"]
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    mode = format(stat.S_IMODE(path.stat().st_mode), "04o")
+    if item.get("type") != "file" or item.get("sha256") != digest:
+        raise SystemExit(1)
+    if item.get("size_bytes") != path.stat().st_size or item.get("mode") != mode:
+        raise SystemExit(1)
+    if not item.get("purpose") or not item.get("consumer"):
+        raise SystemExit(1)
+    total += item["size_bytes"]
+if record.get("total_bytes") != total:
+    raise SystemExit(1)
+PY
+printf 'ishikawa_deployment_verification=pass;release=v1.3.1;platform=linux/amd64;promotion_state=%s\n' \
+  "$promotion_state"

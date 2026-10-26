@@ -41,6 +41,21 @@ repository and pass its fresh-install verifier before publication.
 The post-v1.3 optimization backlog does not amend this release. Org-lab
 migration remains deferred until EmceeDanko qualification and human acceptance.
 
+## Historical-baseline disposition — 2026-10-26
+
+The operator subsequently completed and accepted the attended v1.3 UI. The
+content-free acceptance receipt is
+`deployment/evidence/ISHIKAWA_V1_3_EMCEEDANKO_UI_ACCEPTANCE.md`.
+
+The exact v1.3 archive and evidence remain immutable as the historical
+behavioral baseline. They are not silently overwritten or relabeled. The
+security dependency refresh and permanent `next build`/`next start` correction
+are a separate patch release, Ishikawa v1.3.1, governed by V13-79 through
+V13-89. v1.3.1 retains the v1.3 schema, corpus-agnostic product behavior,
+retrieval metrics, and qualification expectations, but its changed application
+and generic runtime-image bytes require fresh exact-byte qualification and
+human acceptance before org-lab promotion.
+
 ## Deployment qualification correction
 
 V13-71 preserves `127.0.0.1:1384` as the packaged Retrieval API default and

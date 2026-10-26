@@ -385,13 +385,12 @@ Retrieval API entrypoint, complete readiness checks, classified JSONL logging,
 operator logging control, content-free metrics, bounded retention, optional
 retention timer, and a boot-disabled systemd user unit. The Chat UI source now
 lives under `application/web/` and is documented in
-[`docs/CHAT_UI.md`](docs/CHAT_UI.md). It uses the unchanged Node 24/Next.js
-16.4.1 image with host bind mounts, presents bounded multi-turn chat and
+[`docs/CHAT_UI.md`](docs/CHAT_UI.md). It uses the separate pinned Linux AMD64
+Node 24/Next.js image with read-only host bind mounts, presents bounded multi-turn chat and
 structured citations, and reaches retrieval only through its server-side
-proxy. The operator-run local container build and HTTP proof are accepted
-through Script `99`. The final explicit `scripts/ishikawa-stack` command starts PostgreSQL,
+proxy. The final explicit `scripts/ishikawa-stack` command starts PostgreSQL,
 the native Retrieval API, and the host-mounted web container in dependency
-order, requires readiness between them, and stops them in reverse order. Its
+order, builds bounded ephemeral `.next` state, runs `next start`, requires
+readiness between layers, and stops them in reverse order. Its
 durable contract is recorded in
-[`docs/STACK_CONTROL.md`](docs/STACK_CONTROL.md). Stack-control qualification
-is the current gate; refreshed final-state packaging follows.
+[`docs/STACK_CONTROL.md`](docs/STACK_CONTROL.md).

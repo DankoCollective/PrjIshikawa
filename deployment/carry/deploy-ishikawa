@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Consolidated operator entrypoint for the portable Ishikawa deployment.
+
+usage() {
+  printf '%s\n' \
+    'Usage: deploy-ishikawa verify' \
+    '       deploy-ishikawa inventory --output-dir /tmp/NAME [port and host options]' \
+    '       deploy-ishikawa install [port and host options]' \
+    '       deploy-ishikawa install-schema' \
+    '       deploy-ishikawa start|status|stop' \
+    '       deploy-ishikawa remove --confirm-empty-installation' \
+    '' \
+    'Options for inventory, install, and install-schema where applicable:' \
+    '  --expected-hostname NAME' \
+    '  --expected-os-version VERSION       Default: 26.04' \
+    '  --postgresql-port PORT              Default: 5432' \
+    '  --retrieval-port PORT               Default: 1384' \
+    '  --web-port PORT                     Default: 3000' \
+    'Options for install only:' \
+    '  --gemma-port PORT                   Default: 8000' \
+    '  --nomic-port PORT                   Default: 8001'
+}
+
+fail() {
+  printf '%s\n' \
+    'FAILURE DETAIL' \
+    "action=${action:-argument_validation}" \
+    "reason=$1" \
+    'operator_action=Correct the reported condition and rerun the same command.' \
+    '' \
+    'SCRIPT RESULT' \
+    "ishikawa_deployment_${action:-command}=blocked" >&2
+  exit 1
+}
+
+(( $# >= 1 )) || { usage >&2; exit 2; }
+action="$1"
+shift
+case "$action" in
+  verify|inventory|install|install-schema|start|status|stop|remove) ;;
+  --help|-h) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+readonly carry_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly verifier="$carry_root/verify-deployment"
+readonly inspector="$carry_root/inspect-native-prerequisites"
+readonly application_archive="$carry_root/ishikawa-v1.3.1.tar.gz"
+readonly image_archive="$carry_root/node-next-runtime-amd64.tar"
+readonly image_identity="$carry_root/runtime-image-identity.json"
+readonly carry_receipt="$carry_root/carry-receipt.json"
+readonly image_reference='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
+readonly install_root="$HOME/Documents/Ishikawa"
+readonly user_unit_root="$HOME/.config/systemd/user"
+readonly temporary_base="${TMPDIR:-/tmp}"
+readonly -a unit_names=(
+  ishikawa-observability-retention.service
+  ishikawa-observability-retention.timer
+  ishikawa-retrieval-api.service
+)
+
+[[ -f "$verifier" && ! -L "$verifier" ]] || fail verifier_missing
+[[ "$temporary_base" == /tmp || "$temporary_base" == /tmp/* ]] \
+  || fail temporary_directory_invalid
+[[ -d "$temporary_base" && ! -L "$temporary_base" && -w "$temporary_base" ]] \
+  || fail temporary_directory_unsafe
+
+if [[ "$action" == verify ]]; then
+  (( $# == 0 )) || fail arguments_invalid
+  exec bash "$verifier"
+fi
+
+expected_hostname=''
+expected_os_version='26.04'
+postgresql_port='5432'
+retrieval_port='1384'
+web_port='3000'
+gemma_port='8000'
+nomic_port='8001'
+output_dir=''
+confirm_remove=false
+while (( $# > 0 )); do
+  case "$1" in
+    --expected-hostname) expected_hostname="${2:-}"; shift 2 ;;
+    --expected-os-version) expected_os_version="${2:-}"; shift 2 ;;
+    --postgresql-port) postgresql_port="${2:-}"; shift 2 ;;
+    --retrieval-port) retrieval_port="${2:-}"; shift 2 ;;
+    --web-port) web_port="${2:-}"; shift 2 ;;
+    --gemma-port) gemma_port="${2:-}"; shift 2 ;;
+    --nomic-port) nomic_port="${2:-}"; shift 2 ;;
+    --output-dir) output_dir="${2:-}"; shift 2 ;;
+    --confirm-empty-installation) confirm_remove=true; shift ;;
+    *) fail arguments_invalid ;;
+  esac
+done
+
+if [[ "$action" == inventory ]]; then
+  [[ -n "$output_dir" ]] || fail output_directory_required
+  [[ "$gemma_port" == 8000 && "$nomic_port" == 8001 && "$confirm_remove" == false ]] \
+    || fail arguments_invalid
+  arguments=(
+    --expected-os-version "$expected_os_version"
+    --expected-architecture amd64
+    --postgresql-port "$postgresql_port"
+    --retrieval-port "$retrieval_port"
+    --web-port "$web_port"
+    --output-dir "$output_dir"
+  )
+  [[ -z "$expected_hostname" ]] || arguments+=(--expected-hostname "$expected_hostname")
+  exec bash "$inspector" "${arguments[@]}"
+fi
+
+if [[ "$action" == start || "$action" == status || "$action" == stop ]]; then
+  [[ -z "$expected_hostname" && "$expected_os_version" == 26.04 \
+      && "$postgresql_port" == 5432 && "$retrieval_port" == 1384 \
+      && "$web_port" == 3000 && "$gemma_port" == 8000 && "$nomic_port" == 8001 \
+      && -z "$output_dir" && "$confirm_remove" == false ]] || fail arguments_invalid
+  [[ -x "$install_root/scripts/ishikawa-stack" ]] || fail application_not_installed
+  exec "$install_root/scripts/ishikawa-stack" "$action"
+fi
+
+if [[ "$action" == install-schema ]]; then
+  [[ -z "$expected_hostname" && "$expected_os_version" == 26.04 \
+      && "$retrieval_port" == 1384 \
+      && "$web_port" == 3000 && "$gemma_port" == 8000 && "$nomic_port" == 8001 \
+      && -z "$output_dir" && "$confirm_remove" == false ]] || fail arguments_invalid
+  [[ "$postgresql_port" =~ ^[0-9]+$ && "$postgresql_port" -ge 1 \
+      && "$postgresql_port" -le 65535 ]] || fail port_invalid
+  for required in bash chmod dropdb jq pg_isready psql python3 rm sleep sudo systemctl tar; do
+    command -v "$required" >/dev/null 2>&1 || fail "command_missing_${required}"
+  done
+  bash "$verifier" >/dev/null || fail carry_verification_failed
+  [[ "$(jq -r '.promotion_state' "$carry_receipt")" == final_exact_byte_requalified ]] \
+    || fail carry_not_final
+  [[ -f "$install_root/config/deployment.yaml" && ! -L "$install_root/config/deployment.yaml" ]] \
+    || fail application_not_installed
+  installed_postgresql_port="$(python3 -B - "$install_root/config/deployment.yaml" <<'PY'
+import sys
+from pathlib import Path
+import yaml
+value = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(value.get("postgresql", {}).get("port", "invalid"))
+PY
+)" || fail installed_configuration_invalid
+  [[ "$installed_postgresql_port" == "$postgresql_port" ]] \
+    || fail postgresql_port_mismatch
+  ingest_password="${ISHIKAWA_POSTGRESQL_INGEST_PASSWORD-}"
+  retrieval_password="${ISHIKAWA_POSTGRESQL_PASSWORD-}"
+  for selected_password in "$ingest_password" "$retrieval_password"; do
+    [[ ${#selected_password} -ge 16 && ${#selected_password} -le 256 ]] \
+      || fail database_credential_invalid
+    [[ "$selected_password" != *$'\n'* && "$selected_password" != *$'\r'* ]] \
+      || fail database_credential_invalid
+    [[ ! "$selected_password" =~ [[:cntrl:]] ]] || fail database_credential_invalid
+  done
+  [[ "$ingest_password" != "$retrieval_password" ]] || fail database_credentials_not_distinct
+  temporary_schema_root="$(mktemp -d "$temporary_base/ishikawa-schema-install.XXXXXX")"
+  postgresql_started=false
+  database_mutation_started=false
+  setup_token="$(python3 -B - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)"
+  cleanup_schema() {
+    local status="$?"
+    trap - EXIT INT TERM
+    if (( status != 0 )) && [[ "$database_mutation_started" == true ]]; then
+      marker_count="$(sudo -u postgres -- psql --no-psqlrc --port "$postgresql_port" \
+        --tuples-only --no-align \
+        --dbname=postgres --command="SELECT count(*) FROM pg_roles WHERE rolname IN ('rag_owner','rag_ingest','rag_retrieval') AND shobj_description(oid, 'pg_authid') = 'ishikawa-setup:${setup_token}'" \
+        2>/dev/null || true)"
+      if [[ "$marker_count" == 3 ]]; then
+        sudo -u postgres -- psql --no-psqlrc --port "$postgresql_port" --dbname=postgres \
+          --set=ON_ERROR_STOP=1 --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'rag_catalog' AND pid <> pg_backend_pid()" \
+          >/dev/null 2>&1 || true
+        sudo -u postgres -- dropdb --port "$postgresql_port" --if-exists rag_catalog \
+          >/dev/null 2>&1 || true
+        sudo -u postgres -- psql --no-psqlrc --port "$postgresql_port" --dbname=postgres \
+          --set=ON_ERROR_STOP=1 \
+          --command='DROP ROLE IF EXISTS rag_retrieval, rag_ingest, rag_owner' \
+          >/dev/null 2>&1 || true
+      fi
+    fi
+    if [[ "$postgresql_started" == true ]]; then
+      sudo systemctl stop postgresql@16-main.service >/dev/null 2>&1 || true
+    fi
+    [[ "$temporary_schema_root" == "$temporary_base"/ishikawa-schema-install.* \
+        && -d "$temporary_schema_root" ]] && rm -rf -- "$temporary_schema_root"
+    exit "$status"
+  }
+  trap cleanup_schema EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  tar --no-same-owner --no-same-permissions -xzf "$application_archive" \
+    -C "$temporary_schema_root" \
+    || fail application_extraction_failed
+  chmod 0755 "$temporary_schema_root" \
+    "$temporary_schema_root/ishikawa-v1.3.1" \
+    "$temporary_schema_root/ishikawa-v1.3.1/database" \
+    "$temporary_schema_root/ishikawa-v1.3.1/database/install-schema"
+  chmod 0644 "$temporary_schema_root/ishikawa-v1.3.1/database/"{README.md,SHA256SUMS,schema.sql}
+  printf '[DATABASE] state=preflight;mutation=false\n'
+  sudo -v || fail privilege_authorization_failed
+  [[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled ]] \
+    || fail postgresql_boot_enabled
+  [[ "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] \
+    || fail postgresql_cluster_boot_enabled
+  [[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]] \
+    || fail postgresql_cluster_already_active
+  sudo systemctl start postgresql@16-main.service >/dev/null 2>&1 \
+    || fail postgresql_start_failed
+  postgresql_started=true
+  for (( attempt = 0; attempt < 80; attempt += 1 )); do
+    pg_isready --quiet --host 127.0.0.1 --port "$postgresql_port" && break
+    sleep 0.25
+  done
+  pg_isready --quiet --host 127.0.0.1 --port "$postgresql_port" \
+    || fail postgresql_readiness_failed
+  preflight_counts="$(sudo -u postgres -- psql --no-psqlrc --port "$postgresql_port" \
+    --tuples-only --no-align \
+    --dbname=postgres --set=ON_ERROR_STOP=1 <<'SQL'
+SELECT count(*) FROM pg_roles WHERE rolname IN ('rag_owner','rag_ingest','rag_retrieval');
+SELECT count(*) FROM pg_database WHERE datname = 'rag_catalog';
+SELECT count(*) FROM pg_available_extensions WHERE name = 'vector';
+SQL
+)" || fail database_preflight_failed
+  [[ "$preflight_counts" == $'0\n0\n1' ]] || fail database_target_not_clean
+  printf '[DATABASE] state=creating;roles=3;database=rag_catalog;schema=5\n'
+  database_mutation_started=true
+  if ! ISHIKAWA_SETUP_INGEST_PASSWORD="$ingest_password" \
+      ISHIKAWA_SETUP_RETRIEVAL_PASSWORD="$retrieval_password" \
+      ISHIKAWA_SETUP_TOKEN="$setup_token" python3 -B - <<'PY' \
+      | sudo -u postgres -- psql --no-psqlrc --port "$postgresql_port" --dbname=postgres \
+          --set=ON_ERROR_STOP=1 >/dev/null
+import os
+
+def literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+ingest = literal(os.environ["ISHIKAWA_SETUP_INGEST_PASSWORD"])
+retrieval = literal(os.environ["ISHIKAWA_SETUP_RETRIEVAL_PASSWORD"])
+marker = literal("ishikawa-setup:" + os.environ["ISHIKAWA_SETUP_TOKEN"])
+print("BEGIN;")
+print("CREATE ROLE rag_owner NOLOGIN;")
+print(f"CREATE ROLE rag_ingest LOGIN PASSWORD {ingest};")
+print(f"CREATE ROLE rag_retrieval LOGIN PASSWORD {retrieval};")
+print(f"COMMENT ON ROLE rag_owner IS {marker};")
+print(f"COMMENT ON ROLE rag_ingest IS {marker};")
+print(f"COMMENT ON ROLE rag_retrieval IS {marker};")
+print("COMMIT;")
+print("CREATE DATABASE rag_catalog OWNER rag_owner;")
+print("\\connect rag_catalog")
+print("CREATE EXTENSION vector;")
+PY
+  then
+    fail database_creation_failed
+  fi
+  sudo -u postgres -- env PGPORT="$postgresql_port" bash \
+    "$temporary_schema_root/ishikawa-v1.3.1/database/install-schema" \
+    --database rag_catalog --owner-role rag_owner \
+    --ingest-role rag_ingest --retrieval-role rag_retrieval \
+    || fail schema_install_failed
+  sudo -u postgres -- psql --no-psqlrc --port "$postgresql_port" --dbname=postgres \
+    --set=ON_ERROR_STOP=1 \
+    --command='COMMENT ON ROLE rag_owner IS NULL; COMMENT ON ROLE rag_ingest IS NULL; COMMENT ON ROLE rag_retrieval IS NULL' \
+    >/dev/null || fail database_setup_marker_cleanup_failed
+  database_mutation_started=false
+  printf '[DATABASE] state=pass;database=rag_catalog;schema=5;roles=least_privilege\n'
+  printf '\nSCRIPT RESULT\nishikawa_deployment_install_schema=pass\n'
+  exit 0
+fi
+
+if [[ "$action" == remove ]]; then
+  [[ "$confirm_remove" == true && -z "$expected_hostname" \
+      && "$expected_os_version" == 26.04 && "$postgresql_port" == 5432 \
+      && "$retrieval_port" == 1384 && "$web_port" == 3000 \
+      && "$gemma_port" == 8000 && "$nomic_port" == 8001 && -z "$output_dir" ]] \
+    || fail explicit_empty_removal_confirmation_required
+  [[ -d "$install_root" && ! -L "$install_root" ]] || fail application_not_installed
+  [[ "$(cd -- "$install_root" && pwd -P)" == "$(cd -- "$HOME/Documents" && pwd -P)/Ishikawa" ]] \
+    || fail installation_path_unsafe
+  stack_status="$("$install_root/scripts/ishikawa-stack" status 2>/dev/null || true)"
+  grep -Fxq 'ishikawa_stack=status;state=stopped;boot_enabled=false' <<<"$stack_status" \
+    || fail stack_must_be_stopped
+  find "$install_root/corpus/source" -type f -print -quit | grep -q . \
+    && fail source_documents_present
+  find "$install_root/config/ingestion" -type f -print -quit | grep -q . \
+    && fail ingestion_records_present
+  find "$install_root/state" -type f -print -quit | grep -q . \
+    && fail runtime_state_present
+  for unit_name in "${unit_names[@]}"; do
+    [[ "$(systemctl --user is-active "$unit_name" 2>/dev/null || true)" != active ]] \
+      || fail user_unit_active
+    [[ "$(systemctl --user is-enabled "$unit_name" 2>/dev/null || true)" != enabled ]] \
+      || fail user_unit_enabled
+  done
+  for unit_name in "${unit_names[@]}"; do rm -f -- "$user_unit_root/$unit_name"; done
+  systemctl --user daemon-reload >/dev/null 2>&1 || fail user_manager_reload_failed
+  rm -rf -- "$install_root"
+  printf 'ishikawa_deployment=remove;state=application_removed;database_removed=false;image_removed=false\n'
+  printf '\nSCRIPT RESULT\nishikawa_deployment_remove=pass\n'
+  exit 0
+fi
+
+[[ "$action" == install ]] || fail arguments_invalid
+[[ -z "$output_dir" && "$confirm_remove" == false ]] || fail arguments_invalid
+(( EUID != 0 )) || fail non_root_operator_required
+[[ "$HOME" == /* && "$install_root" == "$HOME/Documents/Ishikawa" ]] \
+  || fail operator_home_invalid
+[[ -z "$expected_hostname" || "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] \
+  || fail expected_hostname_invalid
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail expected_os_version_invalid
+for selected_port in "$postgresql_port" "$retrieval_port" "$web_port" "$gemma_port" "$nomic_port"; do
+  [[ "$selected_port" =~ ^[0-9]+$ && "$selected_port" -ge 1 && "$selected_port" -le 65535 ]] \
+    || fail port_invalid
+done
+[[ "$(printf '%s\n' "$postgresql_port" "$retrieval_port" "$web_port" "$gemma_port" "$nomic_port" \
+  | sort -u | awk 'END {print NR}')" == 5 ]] || fail ports_collide
+for required in bash cp docker find grep install jq loginctl mkdir mktemp mv python3 rm \
+  sha256sum sort sudo systemctl tar; do
+  command -v "$required" >/dev/null 2>&1 || fail "command_missing_${required}"
+done
+printf '[PREFLIGHT] state=start;mutation=false\n'
+bash "$verifier" >/dev/null || fail carry_verification_failed
+[[ "$(jq -r '.promotion_state' "$carry_receipt")" == final_exact_byte_requalified ]] \
+  || fail carry_not_final
+[[ ! -e "$install_root" && ! -L "$install_root" ]] || fail installation_exists
+for unit_name in "${unit_names[@]}"; do
+  [[ ! -e "$user_unit_root/$unit_name" && ! -L "$user_unit_root/$unit_name" ]] \
+    || fail user_unit_target_exists
+done
+[[ "$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null || true)" != yes ]] \
+  || fail user_lingering_enabled
+[[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled ]] \
+  || fail postgresql_boot_enabled
+[[ "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] \
+  || fail postgresql_cluster_boot_enabled
+systemctl cat postgresql@16-main.service >/dev/null 2>&1 \
+  || fail postgresql_cluster_unit_missing
+systemctl --user show-environment >/dev/null 2>&1 || fail user_manager_unavailable
+printf '[PREFLIGHT] state=pass;carry=verified;target_paths=free;boot_enabled=false\n'
+
+inventory_parent="$(mktemp -d "$temporary_base/ishikawa-install-inventory.XXXXXX")"
+inventory_root="$inventory_parent/inventory"
+inventory_arguments=(
+  --expected-os-version "$expected_os_version" --expected-architecture amd64
+  --postgresql-port "$postgresql_port" --retrieval-port "$retrieval_port"
+  --web-port "$web_port" --output-dir "$inventory_root"
+)
+[[ -z "$expected_hostname" ]] || inventory_arguments+=(--expected-hostname "$expected_hostname")
+bash "$inspector" "${inventory_arguments[@]}" >/dev/null \
+  || fail native_prerequisite_inventory_failed
+
+python3 -B - "$inventory_root/host-summary.env" "$inventory_root/package-inventory.tsv" <<'PY' \
+  || fail native_prerequisites_incompatible
+import csv
+import sys
+from pathlib import Path
+
+summary = {}
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    key, value = line.split("=", 1)
+    summary[key] = value
+if summary.get("architecture") != "amd64":
+    raise SystemExit(1)
+if summary.get("python_yaml_available") != "true" or summary.get("python_psycopg_available") != "true":
+    raise SystemExit(1)
+if not summary.get("psql_version", "").startswith("16."):
+    raise SystemExit(1)
+required = {
+    "python3", "python3-yaml", "python3-psycopg", "poppler-utils",
+    "postgresql-common", "postgresql-client-16", "postgresql-16",
+    "postgresql-16-pgvector", "libpq5",
+}
+with Path(sys.argv[2]).open(encoding="utf-8", newline="") as stream:
+    installed = {
+        row["package"] for row in csv.DictReader(stream, delimiter="\t")
+        if row["installed_version"] != "none"
+    }
+if not required.issubset(installed):
+    raise SystemExit(1)
+PY
+printf '[INVENTORY] state=pass;platform=linux/amd64;native_dependencies=compatible\n'
+
+temporary_root="$(mktemp -d "$temporary_base/ishikawa-deployment-install.XXXXXX")"
+application_installed=false
+units_installed=false
+image_loaded=false
+declare -a docker_command=(docker)
+cleanup_install() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if (( status != 0 )); then
+    if [[ "$units_installed" == true ]]; then
+      for unit_name in "${unit_names[@]}"; do rm -f -- "$user_unit_root/$unit_name"; done
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
+    if [[ "$application_installed" == true && -d "$install_root" && ! -L "$install_root" ]]; then
+      rm -rf -- "$install_root"
+    fi
+    if [[ "$image_loaded" == true ]]; then
+      "${docker_command[@]}" image rm "$image_reference" >/dev/null 2>&1 || true
+    fi
+  fi
+  [[ "$temporary_root" == "$temporary_base"/ishikawa-deployment-install.* && -d "$temporary_root" ]] \
+    && rm -rf -- "$temporary_root"
+  exit "$status"
+}
+trap cleanup_install EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tar --no-same-owner --no-same-permissions -xzf "$application_archive" \
+  -C "$temporary_root" || fail application_extraction_failed
+bash "$temporary_root/ishikawa-v1.3.1/verify-ishikawa-release" >/dev/null \
+  || fail application_verification_failed
+
+if ! docker info >/dev/null 2>&1; then
+  printf '[INPUT REQUIRED] Attended sudo authorization for the local container runtime.\n'
+  sudo -v || fail privilege_authorization_failed
+  docker_command=(sudo docker)
+  "${docker_command[@]}" info >/dev/null 2>&1 || fail container_runtime_unavailable
+fi
+expected_image_id="$(jq -r '.image_id' "$image_identity")"
+existing_image_id="$("${docker_command[@]}" image inspect "$image_reference" --format '{{.Id}}' 2>/dev/null || true)"
+[[ -z "$existing_image_id" || "$existing_image_id" == "$expected_image_id" ]] \
+  || fail runtime_image_tag_collision
+
+if [[ -z "$existing_image_id" ]]; then
+  printf '[IMAGE] state=loading;source=verified_local_archive\n'
+  "${docker_command[@]}" load --input "$image_archive" >/dev/null \
+    || fail runtime_image_load_failed
+  image_loaded=true
+fi
+[[ "$("${docker_command[@]}" image inspect "$image_reference" --format '{{.Id}}' 2>/dev/null || true)" \
+    == "$expected_image_id" ]] || fail runtime_image_identity_mismatch
+[[ "$("${docker_command[@]}" image inspect "$image_reference" --format '{{.Architecture}}' 2>/dev/null || true)" \
+    == amd64 ]] || fail runtime_image_architecture_mismatch
+printf '[IMAGE] state=pass;architecture=amd64;application_in_image=false\n'
+
+printf '[APPLICATION] state=installing;root=%s\n' "$install_root"
+bash "$temporary_root/ishikawa-v1.3.1/application/install-ishikawa" \
+  --install-root "$install_root" >/dev/null || fail application_install_failed
+application_installed=true
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$install_root/application/python" python3 -B - \
+  "$install_root" "$postgresql_port" "$retrieval_port" "$web_port" \
+  "$gemma_port" "$nomic_port" <<'PY' || fail configuration_install_failed
+import os
+import sys
+from pathlib import Path
+
+import yaml
+from ishikawa.deployment import validate_deployment_profile
+from ishikawa.ingestion_runtime import validate_ingestion_dependencies
+from ishikawa.runtime import validate_runtime_dependencies
+
+root = Path(sys.argv[1])
+postgresql_port, retrieval_port, web_port, gemma_port, nomic_port = map(int, sys.argv[2:])
+deployment_path = root / "config/deployment.yaml"
+runtime_path = root / "config/runtime_dependencies.yaml"
+ingestion_path = root / "config/ingestion_dependencies.yaml"
+deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+ingestion = yaml.safe_load(ingestion_path.read_text(encoding="utf-8"))
+deployment["postgresql"]["port"] = postgresql_port
+deployment["retrieval"]["port"] = retrieval_port
+deployment["web"]["port"] = web_port
+deployment["web"]["retrieval_base_url"] = f"http://127.0.0.1:{retrieval_port}"
+runtime["gemma"]["chat_endpoint_url"] = f"http://127.0.0.1:{gemma_port}/v1/chat/completions"
+runtime["gemma"]["tokenization_endpoint_url"] = f"http://127.0.0.1:{gemma_port}/tokenize"
+runtime["gemma"]["health_endpoint_url"] = f"http://127.0.0.1:{gemma_port}/health"
+runtime["nomic"]["embedding_endpoint_url"] = f"http://127.0.0.1:{nomic_port}/v1/embeddings"
+runtime["nomic"]["health_endpoint_url"] = f"http://127.0.0.1:{nomic_port}/health"
+ingestion["nomic"]["embedding_endpoint_url"] = f"http://127.0.0.1:{nomic_port}/v1/embeddings"
+ingestion["nomic"]["tokenization_endpoint_url"] = f"http://127.0.0.1:{nomic_port}/tokenize"
+validate_deployment_profile(deployment)
+validate_runtime_dependencies(runtime)
+validate_ingestion_dependencies(ingestion)
+for path, value in ((deployment_path, deployment), (runtime_path, runtime), (ingestion_path, ingestion)):
+    temporary = path.with_name(f".{path.name}.new")
+    temporary.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, path)
+PY
+PYTHONDONTWRITEBYTECODE=1 "$install_root/scripts/ishikawa-retrieval-api" --check-config >/dev/null \
+  || fail installed_configuration_invalid
+printf '[APPLICATION] state=pass;configuration=validated\n'
+
+mkdir -p -- "$user_unit_root"
+for unit_name in "${unit_names[@]}"; do
+  install -m 0644 -- "$install_root/systemd/$unit_name" "$user_unit_root/$unit_name"
+done
+units_installed=true
+systemctl --user daemon-reload >/dev/null 2>&1 || fail user_manager_reload_failed
+for unit_name in "${unit_names[@]}"; do
+  [[ "$(systemctl --user is-enabled "$unit_name" 2>/dev/null || true)" != enabled ]] \
+    || fail installed_unit_boot_enabled
+done
+[[ "$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null || true)" != yes ]] \
+  || fail user_lingering_enabled_after_install
+printf '[UNITS] state=pass;installed=true;enabled=false;lingering=false\n'
+
+trap - EXIT INT TERM
+rm -rf -- "$temporary_root"
+printf 'ishikawa_deployment=install;state=pass;install_root=%s;inventory=%s;boot_enabled=false;database_changed=false\n' \
+  "$install_root" "$inventory_root"
+printf '\nSCRIPT RESULT\nishikawa_deployment_install=pass\n'

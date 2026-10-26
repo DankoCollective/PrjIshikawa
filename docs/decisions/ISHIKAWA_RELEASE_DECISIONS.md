@@ -26,6 +26,13 @@ begin. No black-corpus access, Tech contact, service or database mutation,
 credential handling, or package promotion is authorized by these planning
 decisions alone. V13-90 separately authorizes the bounded EmceeDanko
 runtime-image build and artifact-return operation described there.
+V13-91 is a new EmceeDanko-only promotion decision and is ready to freeze.
+It does not change the frozen org-lab carry design: it would replace the
+active attended v1.3 application/runtime with the exact already-qualified and
+human-accepted v1.3.1 bytes while preserving the existing corpus-v3 database.
+No promotion implementation or live switch is authorized until V13-91 is
+frozen. The already-approved Script 09 cleanup remains the immediate safe
+action before that promotion.
 
 ## Decisions
 
@@ -677,3 +684,49 @@ EmceeDanko is already evidenced as Ubuntu 24.04 AMD64 and is the next exact-byte
 qualification host. Native construction there avoids adding an unreviewed
 cross-architecture execution dependency while preserving the app-free image
 and separate-application design.
+
+### V13-91 — Promote accepted v1.3.1 on EmceeDanko
+
+Decision: Decide whether to replace the active accepted EmceeDanko v1.3
+application/runtime with the exact Script 09-qualified and human-accepted
+v1.3.1 application and generic runtime image before carry assembly.
+
+Status: Ready to freeze.
+
+Recommendation: Implement numbered Script 10 as one attended promotion
+lifecycle. First complete the already-approved Script 09 cleanup. Script 10
+must then verify the exact Script 07 image, Script 08 application, Script 09
+qualification and acceptance receipts, current v1.3 readiness, corpus-v3
+database identity, direct model routes, free transition resources, and
+disabled boot posture before mutation. Stage the exact application at
+`$HOME/Documents/Ishikawa-v1.3.1`; keep the accepted v1.2 canonical path and
+disabled unit untouched; stop active v1.3 only at the immediate switch; move
+the stopped durable PostgreSQL state without schema, corpus, role, or
+credential changes; and launch package-local v1.3.1 on loopback ports
+`5432`/`8384`/`3384` with the exact generic image, read-only application
+mounts, bounded ephemeral `.next`, and no autostart. Automatically restore
+the accepted v1.3 runtime and database location if launch fails before human
+acceptance. Provide separate `--accept` and `--rollback` actions. After
+v1.3.1 human acceptance, `--accept` must retain content-free promotion
+evidence, remove the superseded v1.3 application/runtime copy, and remove the
+old Node 24.22.0 / Next.js 16.4.1 / React 19.2.0 image only after proving no
+remaining container uses it. Preserve v1.2 files and database as historical
+bytes, but keep the already-frozen V13-76 no-rollback posture: they are not a
+runtime or acceptance dependency.
+
+Reason/Evidence: Script 09 proved the exact v1.3.1 application archive
+`2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69`,
+runtime archive
+`af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f`,
+and image ID
+`sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298`
+through two fresh production builds, 60/60 frontier cases, complete readiness,
+and operator UI acceptance while leaving v1.3 and its database unchanged.
+The active v1.3 web runtime still uses the superseded
+`node-24-slim-nextjs-16-4-1:amd64` image. A versioned v1.3.1 root avoids
+silently repointing the preserved v1.2 unit at `$HOME/Documents/Ishikawa`,
+while the bounded database move and temporary v1.3 rollback source protect
+the accepted corpus-v3 state during the switch. Removing the old image before
+successful v1.3.1 acceptance would destroy the only immediate application
+rollback path; retaining it after acceptance would leave the superseded
+security posture unnecessarily available.

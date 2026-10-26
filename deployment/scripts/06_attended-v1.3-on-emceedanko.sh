@@ -294,7 +294,16 @@ target_capture_web_diagnostic() {
       if [[ -f "$log_path" && ! -L "$log_path" ]]; then
         target_web_log_sha256="$(sha256sum "$log_path" | awk '{print $1}')"
         target_web_log_bytes="$(wc -c <"$log_path" | tr -d ' ')"
-        if grep -Eqi 'EADDRINUSE|address already in use' "$log_path"; then
+        if grep -Eqi 'EACCES|permission denied' "$log_path" \
+            && grep -Eqi '/opt/nextjs/\.next|\.next/(dev|cache|server|static)' "$log_path"; then
+          target_web_root_cause='web_generated_state_permission_denied'
+        elif grep -Eqi 'EACCES|permission denied' "$log_path" \
+            && grep -Eqi '/root|/\.npm|npm.*cache' "$log_path"; then
+          target_web_root_cause='web_runtime_home_permission_denied'
+        elif grep -Eqi 'EACCES|permission denied' "$log_path" \
+            && grep -Eqi '/opt/nextjs/(app|components|lib|public|package\.json|next\.config\.mjs)' "$log_path"; then
+          target_web_root_cause='web_source_mount_permission_denied'
+        elif grep -Eqi 'EADDRINUSE|address already in use' "$log_path"; then
           target_web_root_cause='web_port_in_use'
         elif grep -Eqi 'ERR_MODULE_NOT_FOUND|Module not found|Cannot find module' "$log_path"; then
           target_web_root_cause='web_module_missing'
@@ -340,7 +349,10 @@ target_wait_web() {
     target_container_running "$v1_3_container" || return 1
     target_web_live_status="$(target_http_status 'http://127.0.0.1:3384/api/live')"
     target_web_ready_status="$(target_http_status 'http://127.0.0.1:3384/api/ready')"
-    [[ "$target_web_ready_status" == 200 ]] && return 0
+    if [[ "$target_web_ready_status" == 200 ]]; then
+      target_web_api_status="$(target_http_status 'http://127.0.0.1:8384/ready')"
+      [[ "$target_web_api_status" == 200 ]] && return 0
+    fi
     if [[ "$target_web_live_status" == 200 && "$target_web_ready_status" == 503 ]]; then
       target_web_api_status="$(target_http_status 'http://127.0.0.1:8384/ready')"
       if [[ "$target_web_api_status" == 200 ]]; then
@@ -468,7 +480,7 @@ PY
 target_start_web() {
   local product_root="$1" container_name="$2" retain_on_exit="${3:-false}"
   local direct_next="${4:-false}" values=''
-  local -a parsed=() mounts=() lifecycle=(--rm) web_command=()
+  local -a parsed=() mounts=() lifecycle=(--rm) runtime_mounts=() web_command=()
   [[ "$retain_on_exit" == true ]] && lifecycle=()
   values="$(target_web_values "$product_root")" || return 1
   mapfile -t parsed <<<"$values"
@@ -482,6 +494,7 @@ target_start_web() {
     --mount "type=bind,src=$product_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly"
   )
   if [[ "$direct_next" == true ]]; then
+    runtime_mounts=(--tmpfs '/opt/nextjs/.next:rw,nosuid,nodev,size=536870912,mode=1777')
     web_command=(next dev --hostname "${parsed[2]}" --port "${parsed[3]}")
   else
     web_command=(npm run dev -- --hostname "${parsed[2]}" --port "${parsed[3]}")
@@ -489,11 +502,60 @@ target_start_web() {
   "${target_docker[@]}" run --detach "${lifecycle[@]}" \
     --name "$container_name" --network host --restart no \
     --security-opt no-new-privileges --cap-drop ALL \
+    "${runtime_mounts[@]}" \
     --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=${parsed[0]}" \
     --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=${parsed[1]}" \
     --env "ISHIKAWA_RETRIEVAL_BASE_URL=${parsed[4]}" \
     "${mounts[@]}" "node-24-slim-nextjs-16-4-1:amd64" \
     "${web_command[@]}" >/dev/null
+}
+
+target_preflight_web_runtime() {
+  local attempt live_status='000' home_status='000' asset_status='000'
+  target_stage='web_runtime_preflight'
+  target_emit WEB_PREFLIGHT \
+    'state=start;scope=exact_attended_runtime;port=3384;v1_2_still_untouched=true'
+  if ! target_start_web "$runtime_root" "$v1_3_container" true true; then
+    target_capture_web_diagnostic "$v1_3_container"
+    target_stop_v1_3
+    target_fail v1_3_web_preflight_start_failed \
+      "The exact attended UI could not start before switchover;root_cause=${target_web_root_cause};container_running=${target_web_container_state};container_exit_code=${target_web_exit_code};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Keep v1.2 untouched; correct the reported web runtime boundary and rerun Script 06.'
+  fi
+  for (( attempt = 0; attempt < 120; attempt += 1 )); do
+    target_container_running "$v1_3_container" || break
+    live_status="$(target_http_status 'http://127.0.0.1:3384/api/live')"
+    [[ "$live_status" == 200 ]] && break
+    sleep 0.5
+  done
+  if [[ "$live_status" != 200 ]]; then
+    target_web_live_status="$live_status"
+    target_capture_web_diagnostic "$v1_3_container"
+    target_stop_v1_3
+    target_fail v1_3_web_preflight_liveness_failed \
+      "The exact attended UI failed liveness before switchover;root_cause=${target_web_root_cause};container_running=${target_web_container_state};container_exit_code=${target_web_exit_code};container_oom_killed=${target_web_oom_killed};web_live_http=${live_status};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Keep v1.2 untouched; correct the reported web runtime boundary and rerun Script 06.'
+  fi
+  home_status="$(target_http_status 'http://127.0.0.1:3384/')"
+  asset_status="$(target_http_status 'http://127.0.0.1:3384/theme-init.js')"
+  if [[ "$home_status" != 200 || "$asset_status" != 200 ]]; then
+    target_web_live_status="$live_status"
+    target_capture_web_diagnostic "$v1_3_container"
+    target_stop_v1_3
+    target_fail v1_3_web_preflight_surface_failed \
+      "The exact attended UI did not serve its home and static surfaces before switchover;root_cause=${target_web_root_cause};web_live_http=${live_status};home_http=${home_status};asset_http=${asset_status};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Keep v1.2 untouched; correct the reported UI surface and rerun Script 06.'
+  fi
+  target_stop_v1_3
+  if [[ "$target_cleanup_failed" == true ]] \
+      || target_container_exists "$v1_3_container" \
+      || target_port_listening "$ui_port"; then
+    target_fail v1_3_web_preflight_cleanup_failed \
+      'The pre-switchover UI proof did not remove its exact temporary container or release port 3384.' \
+      'Keep v1.2 untouched and reconcile only the named v1.3 web container and port.'
+  fi
+  target_emit WEB_PREFLIGHT \
+    'state=pass;liveness=pass;home=pass;static_asset=pass;cleanup=pass;v1_2_still_untouched=true'
 }
 
 target_restore_v1_2() {
@@ -1629,6 +1691,7 @@ target_stop_v1_2_for_switch() {
 
 target_launch_v1_3() {
   local pid_file="$runtime_root/state/run/attended-v1.3.pid"
+  local home_status asset_status dependency_status
   target_stage='v1_3_attended_launch'
   rm -f -- "$pid_file"
   export ISHIKAWA_GEMMA_API_KEY="$target_gemma_key"
@@ -1675,6 +1738,16 @@ target_launch_v1_3() {
       "The attended v1.3 UI did not become ready on port 3384;root_cause=${target_web_root_cause};container_running=${target_web_container_state};container_exit_code=${target_web_exit_code};container_oom_killed=${target_web_oom_killed};web_live_http=${target_web_live_status};web_ready_http=${target_web_ready_status};api_ready_http=${target_web_api_status};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
       'Allow automatic v1.2 restoration and inspect the protected attended web log only if the content-safe detail is insufficient.'
   fi
+  home_status="$(target_http_status 'http://127.0.0.1:3384/')"
+  asset_status="$(target_http_status 'http://127.0.0.1:3384/theme-init.js')"
+  dependency_status="$(target_http_status 'http://127.0.0.1:3384/api/dependencies')"
+  if [[ "$home_status" != 200 || "$asset_status" != 200 \
+      || "$dependency_status" != 200 ]]; then
+    target_capture_web_diagnostic "$v1_3_container"
+    target_fail v1_3_web_surface_not_ready \
+      "The attended UI readiness route passed but a required UI surface failed;home_http=${home_status};asset_http=${asset_status};dependencies_http=${dependency_status};root_cause=${target_web_root_cause};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Allow automatic v1.2 restoration and correct the reported UI surface before retrying.'
+  fi
   [[ "$(systemctl --user is-enabled "$v1_2_unit" 2>/dev/null || true)" != enabled \
       && "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled \
       && "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]] \
@@ -1685,7 +1758,7 @@ target_launch_v1_3() {
     || target_fail persistent_v1_3_unit_appeared \
       'A persistent v1.3 user unit appeared during the attended launch.' \
       'Allow automatic v1.2 restoration and reconcile the unapproved unit.'
-  target_emit WEB 'state=pass;ui=http://127.0.0.1:3384;retrieval_proxy=ready;container=ishikawa-v1.3-web'
+  target_emit WEB 'state=pass;ui=http://127.0.0.1:3384;liveness=pass;home=pass;static_asset=pass;retrieval_proxy=ready;dependency_proxy=ready;container=ishikawa-v1.3-web'
 }
 
 target_launch_main() {
@@ -1738,6 +1811,7 @@ target_launch_main() {
     *) target_fail database_state_invalid 'The v1.3 database state classifier returned an invalid value.' \
         'Review Script 06 before target mutation.' ;;
   esac
+  target_preflight_web_runtime
   target_stop_v1_2_for_switch
   target_start_private_postgresql_runtime
   target_prelaunch_readiness
@@ -1749,6 +1823,7 @@ target_launch_main() {
 
 target_accept_main() {
   local acceptance_root acceptance_file timestamp pid
+  local home_status asset_status dependency_status
   target_stage='acceptance_preflight'
   for command_name in chmod curl date docker dpkg find grep hostname kill ln mkdir mktemp python3 readlink rm sha256sum ss sudo systemctl; do
     command -v "$command_name" >/dev/null 2>&1 \
@@ -1776,6 +1851,14 @@ target_accept_main() {
     && target_http_ready 'http://127.0.0.1:3384/api/ready' \
     || target_fail attended_runtime_not_ready 'The attended v1.3 API or UI is not ready.' \
       'Do not accept; run Script 06 --rollback or correct and relaunch.'
+  home_status="$(target_http_status 'http://127.0.0.1:3384/')"
+  asset_status="$(target_http_status 'http://127.0.0.1:3384/theme-init.js')"
+  dependency_status="$(target_http_status 'http://127.0.0.1:3384/api/dependencies')"
+  [[ "$home_status" == 200 && "$asset_status" == 200 \
+      && "$dependency_status" == 200 ]] \
+    || target_fail acceptance_web_surface_invalid \
+      "The attended UI surface proof failed;home_http=${home_status};asset_http=${asset_status};dependencies_http=${dependency_status}." \
+      'Do not accept; keep the attended runtime for review or run Script 06 --rollback.'
   "$target_pg_ctl" -D "$runtime_root/state/postgresql/data" status >/dev/null 2>&1 \
     || target_fail attended_postgresql_not_running \
       'The isolated durable v1.3 PostgreSQL cluster is not running.' \

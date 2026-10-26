@@ -204,6 +204,14 @@ image, framework version, working directory, source mounts, generated `.next`
 state, or application command. Keep any accepted rollback runtime on its
 previous launch path unless that runtime is separately requalified.
 
+When the hardened container cannot create generated `.next` state in the
+image working directory, the attended launcher may mount only
+`/opt/nextjs/.next` as a bounded, disposable tmpfs. Keep the application
+source mounts read-only, retain `no-new-privileges` and capability removal,
+and prove liveness, the home route, and required static assets before stopping
+an accepted runtime. The tmpfs must disappear with the exact container and
+must never contain source, credentials, database state, or retained evidence.
+
 ## Runtime Pattern
 
 The established attended runtime uses a unique container name, approved

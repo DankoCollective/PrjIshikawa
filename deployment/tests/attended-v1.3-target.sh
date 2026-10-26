@@ -212,6 +212,9 @@ case "$action" in
             && ( "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" == 1 \
               || "${ISHIKAWA_TEST_WEB_PREFLIGHT_FAIL:-0}" == 1 ) ]]; then
           printf "false;1;false\n"
+        elif [[ "$name" == ishikawa-v1.2-web-preflight \
+            && "${ISHIKAWA_TEST_V12_WEB_RECREATE_FAIL:-0}" == 1 ]]; then
+          printf "false;1;false\n"
         else
           printf "false;0;false\n"
         fi
@@ -231,6 +234,9 @@ case "$action" in
       printf "%s\n" "Failed to compile: simulated attended readiness route failure"
     elif [[ "$name" == ishikawa-v1.3-web && "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" == 1 ]]; then
       printf "%s\n" "simulated attended web process exit"
+    elif [[ "$name" == ishikawa-v1.2-web-preflight \
+        && "${ISHIKAWA_TEST_V12_WEB_RECREATE_FAIL:-0}" == 1 ]]; then
+      printf "%s\n" "Error: EACCES: permission denied, open /opt/nextjs/next.config.mjs"
     else
       printf "%s\n" "simulated bounded web log"
     fi ;;
@@ -268,6 +274,10 @@ case "$action" in
       count=$(( count + 1 ))
       printf "%s\n" "$count" >"$ISHIKAWA_TEST_STATE/v13-web-run-count"
       printf "%s\n" "$original" >"$ISHIKAWA_TEST_STATE/v13-web-run-args"
+      expected_identity="--user $(id -u):$(id -g) --env HOME=/tmp"
+      [[ "$original" == *"$expected_identity"* ]] || exit 1
+    elif [[ "$name" == ishikawa-v1.2-web-preflight ]]; then
+      printf "%s\n" "$original" >"$ISHIKAWA_TEST_STATE/v12-web-preflight-run-args"
     elif [[ "$name" == ishikawa-web ]]; then
       printf "%s\n" "$original" >"$ISHIKAWA_TEST_STATE/v12-web-run-args"
     fi
@@ -275,7 +285,10 @@ case "$action" in
         && "${ISHIKAWA_TEST_WEB_FAIL:-0}" == 1 && "$count" -ge 2 ]]; then
       exit 1
     fi
-    if [[ "$name" != ishikawa-v1.3-web \
+    if [[ "$name" == ishikawa-v1.2-web-preflight \
+        && "${ISHIKAWA_TEST_V12_WEB_RECREATE_FAIL:-0}" == 1 ]]; then
+      :
+    elif [[ "$name" != ishikawa-v1.3-web \
         || ( "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" != 1 \
           && "${ISHIKAWA_TEST_WEB_PREFLIGHT_FAIL:-0}" != 1 ) \
         || ( "${ISHIKAWA_TEST_WEB_EXIT_AFTER_START:-0}" == 1 && "$count" -lt 2 ) ]]; then
@@ -296,6 +309,7 @@ if [[ ( "$(cat "$ISHIKAWA_TEST_STATE/postgres")" == active || "$(cat "$ISHIKAWA_
 if [[ "$(cat "$ISHIKAWA_TEST_STATE/private-pg-port")" == 65438 && ( "$*" != *sport* || "$*" == *65438* ) ]]; then output+="LISTEN 0 4096 127.0.0.1:65438 0.0.0.0:*\n"; fi
 if [[ "$(cat "$ISHIKAWA_TEST_STATE/unit")" == active && ( "$*" != *sport* || "$*" == *1384* ) ]]; then output+="LISTEN 0 4096 127.0.0.1:1384 0.0.0.0:*\n"; fi
 if grep -Fxq ishikawa-web "$ISHIKAWA_TEST_STATE/containers" && [[ "$*" != *sport* || "$*" == *3000* ]]; then output+="LISTEN 0 4096 127.0.0.1:3000 0.0.0.0:*\n"; fi
+if grep -Fxq ishikawa-v1.2-web-preflight "$ISHIKAWA_TEST_STATE/containers" && [[ "$*" != *sport* || "$*" == *3394* ]]; then output+="LISTEN 0 4096 127.0.0.1:3394 0.0.0.0:*\n"; fi
 if [[ -s "$ISHIKAWA_TEST_STATE/v13-api-pid" && ( "$*" != *sport* || "$*" == *8384* ) ]]; then pid="$(cat "$ISHIKAWA_TEST_STATE/v13-api-pid")"; kill -0 "$pid" 2>/dev/null && output+="LISTEN 0 4096 127.0.0.1:8384 0.0.0.0:*\n" || true; fi
 if grep -Fxq ishikawa-v1.3-web "$ISHIKAWA_TEST_STATE/containers" && [[ "$*" != *sport* || "$*" == *3384* ]]; then output+="LISTEN 0 4096 127.0.0.1:3384 0.0.0.0:*\n"; fi
 printf "%b" "$output"'
@@ -318,6 +332,7 @@ if [[ ( "$url" == *:3384/ || "$url" == *:3384/theme-init.js \
     && "${ISHIKAWA_TEST_ACCEPTANCE_SURFACE_FAIL:-0}" == 1 ]]; then status=500; fi
 if [[ "$url" == *:1384/* && "$(cat "$ISHIKAWA_TEST_STATE/unit")" != active ]]; then status=503; fi
 if [[ "$url" == *:3000/* ]] && ! grep -Fxq ishikawa-web "$ISHIKAWA_TEST_STATE/containers"; then status=503; fi
+if [[ "$url" == *:3394/* ]] && ! grep -Fxq ishikawa-v1.2-web-preflight "$ISHIKAWA_TEST_STATE/containers"; then status=503; fi
 printf "%s" "$status"'
 write_command createdb '
 if [[ "${1:-}" == --version ]]; then printf "createdb (PostgreSQL) 16.10\n"; exit 0; fi
@@ -407,7 +422,7 @@ reset_fresh_state() {
   printf '%s\n' none >"$test_root/state/private-pg-port"
   rm -f -- "$test_root/state/v13-api-pid"
   rm -f -- "$test_root/state/v13-web-run-args" "$test_root/state/v12-web-run-args" \
-    "$test_root/state/v13-web-run-count"
+    "$test_root/state/v12-web-preflight-run-args" "$test_root/state/v13-web-run-count"
   rm -rf -- "$test_root/home/Documents/Ishikawa-v1.3-attended"
 }
 
@@ -424,6 +439,7 @@ run_target() {
   local web_preflight_fail="${15:-0}"
   local web_surface_fail="${16:-0}"
   local acceptance_surface_fail="${17:-0}"
+  local v1_2_web_recreate_fail="${18:-0}"
   local output="$test_root/${name}.stdout" result_path="$test_root/payload/${name}-result.txt"
   local command secrets='' waiver_option=''
   rm -f -- "$result_path"
@@ -455,6 +471,7 @@ run_target() {
     ISHIKAWA_TEST_WEB_PREFLIGHT_FAIL="$web_preflight_fail" \
     ISHIKAWA_TEST_WEB_SURFACE_FAIL="$web_surface_fail" \
     ISHIKAWA_TEST_ACCEPTANCE_SURFACE_FAIL="$acceptance_surface_fail" \
+    ISHIKAWA_TEST_V12_WEB_RECREATE_FAIL="$v1_2_web_recreate_fail" \
     ISHIKAWA_TEST_MODEL_FAIL="$model_fail" \
     ISHIKAWA_TEST_RESTORE_FAIL="$restore_fail" \
     ISHIKAWA_TEST_DB_COUNT_FAIL="$database_count_fail" \
@@ -526,6 +543,26 @@ grep -Fxq 'detail=The v1.2 real readiness path failed;readiness_marker=ishikawa_
   || fail v1_2_model_route_failure_mutated_state
 
 reset_fresh_state
+run_target v1-2-web-recreation-failure --target-launch 5 0 0 0 0 0 '' none 0 0 0 0 0 0 0 1
+(( target_status != 0 )) || fail v1_2_web_recreation_failure_accepted
+grep -Fxq 'reason=v1_2_web_recreation_preflight_failed' "$last_result" \
+  || fail v1_2_web_recreation_failure_reason_missing
+grep -Fq 'root_cause=web_source_mount_permission_denied;container_running=false;container_exit_code=1;' \
+  "$last_result" || fail v1_2_web_recreation_failure_detail_missing
+grep -Fxq '[ROLLBACK] state=preflight_start;v1_2_web_recreation=testing;temporary_port=3394;accepted_runtime_untouched=true' \
+  "$last_output" || fail v1_2_web_recreation_start_marker_missing
+[[ "$(<"$test_root/state/database")" == none \
+    && "$(<"$test_root/state/unit")" == active \
+    && "$(<"$test_root/state/postgres")" == active \
+    && "$(grep -Fxc ishikawa-web "$test_root/state/containers")" -eq 1 \
+    && ! -e "$test_root/home/Documents/Ishikawa-v1.3-attended" ]] \
+  || fail v1_2_web_recreation_failure_mutated_state
+! grep -Fxq ishikawa-v1.2-web-preflight "$test_root/state/containers" \
+  || fail v1_2_web_recreation_failure_container_left_running
+! grep -Fxq ishikawa-v1.2-web-preflight "$test_root/state/retained-containers" \
+  || fail v1_2_web_recreation_failure_container_retained
+
+reset_fresh_state
 run_target web-preflight-failure --target-launch 5 0 0 0 0 0 '' none 0 0 0 0 1
 (( target_status != 0 )) || fail web_preflight_failure_accepted
 grep -Fxq 'reason=v1_3_web_preflight_liveness_failed' "$last_result" \
@@ -561,6 +598,8 @@ grep -Fxq '[READINESS] state=pass;v1_2_rollback=waived;v1_2_password_read=false;
   || fail waived_readiness_marker_missing
 ! grep -Fq '[INPUT REQUIRED] v1.2 PostgreSQL retrieval password' "$last_output" \
   || fail waived_v1_2_password_prompted
+[[ ! -e "$test_root/state/v12-web-preflight-run-args" ]] \
+  || fail waived_v1_2_web_recreation_contacted
 [[ "$(<"$test_root/state/database")" == rag_catalog \
     && "$(<"$test_root/state/private-pg-port")" == none \
     && "$(<"$test_root/state/postgres")" == inactive \
@@ -625,6 +664,9 @@ grep -Eq 'node-24-slim-nextjs-16-4-1:amd64 next dev --hostname 127\.0\.0\.1 --po
 grep -Fq -- '--tmpfs /opt/nextjs/.next:rw,nosuid,nodev,size=536870912,mode=1777' \
   "$test_root/state/v13-web-run-args" \
   || fail v1_3_generated_state_tmpfs_missing
+grep -Fq -- "--user $(id -u):$(id -g) --env HOME=/tmp" \
+  "$test_root/state/v13-web-run-args" \
+  || fail v1_3_host_identity_missing
 [[ "$(<"$test_root/state/postgres")" == inactive \
     && "$(<"$test_root/state/unit")" == inactive \
     && "$(<"$test_root/state/private-pg-port")" == 5432 ]] \
@@ -697,6 +739,17 @@ grep -Fq 'action=reused_exact' "$last_output" || fail durable_reuse_marker_missi
     && "$(<"$test_root/state/private-pg-port")" == 5432 ]] \
   || fail postgresql_switchover_invalid
 grep -Fxq ishikawa-v1.3-web "$test_root/state/containers" || fail v1_3_web_not_running
+grep -Fxq '[ROLLBACK] state=preflight_pass;v1_2_web_recreation=pass;liveness=pass;readiness=pass;home=pass;static_asset=pass;temporary_port=3394;cleanup=pass' \
+  "$last_output" || fail v1_2_web_recreation_pass_marker_missing
+grep -Eq 'node-24-slim-nextjs-16-4-1:amd64 npm run dev -- --hostname 127\.0\.0\.1 --port 3394$' \
+  "$test_root/state/v12-web-preflight-run-args" \
+  || fail v1_2_web_recreation_command_changed
+! grep -Fq -- '--tmpfs /opt/nextjs/.next' "$test_root/state/v12-web-preflight-run-args" \
+  || fail v1_2_web_recreation_tmpfs_added
+! grep -Fq -- '--user ' "$test_root/state/v12-web-preflight-run-args" \
+  || fail v1_2_web_recreation_identity_changed
+! grep -Fxq ishikawa-v1.2-web-preflight "$test_root/state/containers" \
+  || fail v1_2_web_recreation_container_left_running_after_pass
 
 run_target accept-surface-failure --target-accept 0 0 0 0 0 0 '' none 0 0 0 0 0 0 1
 (( target_status != 0 )) || fail acceptance_surface_failure_accepted
@@ -783,7 +836,8 @@ candidate_after="$(cd -- "$candidate" && find . -type f -printf '%P\n' | sort | 
 
 printf '%s\n' \
   'fresh_ingestion_failure_cleanup=pass;model_preflight_no_mutation=pass;direct_next_preflight_no_mutation=pass;credential_boundary_detail=pass;v1_2_readiness_component_detail=pass;candidate_checksum_path_detail=pass;candidate_mode_detail=pass;partial_state_rejection=pass' \
-  'pre_switchover_web_runtime_proof=pass;pre_switchover_web_failure_preserves_v1_2=pass;generated_state_tmpfs=pass' \
+  'pre_switchover_web_runtime_proof=pass;pre_switchover_web_failure_preserves_v1_2=pass;generated_state_tmpfs=pass;v1_3_host_identity=pass' \
+  'v1_2_disposable_recreation_proof=pass;v1_2_recreation_failure_preserves_runtime=pass;v1_2_launcher_identity_unchanged=pass' \
   'explicit_v1_2_rollback_waiver=pass;inactive_v1_2_not_required=pass;waived_failure_cleanup=pass;web_supervision_diagnostics=pass;web_surface_diagnostics=pass;exited_web_log_retention=pass;protected_web_log_boundary=pass;direct_next_runtime=pass;v1_2_npm_restore_unchanged=pass;waived_durable_retry=pass;conditional_explicit_rollback=pass' \
   'post_switchover_launch_failure=pass;automatic_v1_2_restoration=pass;durable_database_preservation=pass' \
   'automatic_restoration_failure_reporting=pass;failed_restore_v1_3_cleanup=pass' \

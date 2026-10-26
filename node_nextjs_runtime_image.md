@@ -212,6 +212,23 @@ and prove liveness, the home route, and required static assets before stopping
 an accepted runtime. The tmpfs must disappear with the exact container and
 must never contain source, credentials, database state, or retained evidence.
 
+If exact staged source is intentionally private to the deployment account
+(for example, regular files mode `0600` and directories mode `0700`), a
+capability-stripped image-default root process cannot rely on discretionary
+access-control bypasses to read the bind mounts. The attended launcher may run
+the v1.3 web process as the numeric UID and primary GID of that deployment
+account and set `HOME=/tmp`. This preserves the exact source bytes and modes,
+keeps every source mount read-only, and allows only generated `.next` state in
+the bounded tmpfs. Prove the exact identity and source-import behavior before
+switchover; do not solve this boundary by changing candidate modes.
+
+Where automatic rollback is promised, also start and remove a separately
+named disposable container from the preserved rollback launcher, image, and
+source tree on a temporary loopback port before stopping the accepted runtime.
+The proof must cover liveness, readiness, the home route, required static
+assets, and complete cleanup. A running old container proves current service,
+not that it can be recreated after it is stopped.
+
 ## Runtime Pattern
 
 The established attended runtime uses a unique container name, approved

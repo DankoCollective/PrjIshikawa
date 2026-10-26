@@ -56,7 +56,9 @@ readonly retrieval_role='rag_retrieval'
 readonly private_postgresql_port=65438
 readonly v1_2_unit='ishikawa-retrieval-api.service'
 readonly v1_2_container='ishikawa-web'
+readonly v1_2_preflight_container='ishikawa-v1.2-web-preflight'
 readonly v1_3_container='ishikawa-v1.3-web'
+readonly v1_2_preflight_ui_port=3394
 readonly ui_port=3384
 readonly retrieval_port=8384
 readonly manifest_name='qualification-corpus-v3.yaml'
@@ -141,6 +143,7 @@ target_web_api_status='000'
 target_web_root_cause='unreported_failure'
 target_web_log_sha256='none'
 target_web_log_bytes='0'
+target_v1_2_preflight_started=false
 target_gemma_key=''
 target_nomic_key=''
 target_v1_2_database_password=''
@@ -265,8 +268,24 @@ target_container_exists() {
   "${target_docker[@]}" inspect "$name" >/dev/null 2>&1
 }
 
+target_remove_web_container() {
+  local container_name="$1" cleanup_status=0
+  if target_container_exists "$container_name"; then
+    if target_container_running "$container_name"; then
+      "${target_docker[@]}" stop --time 20 "$container_name" >/dev/null 2>&1 \
+        || cleanup_status=1
+    fi
+    if target_container_exists "$container_name"; then
+      "${target_docker[@]}" rm --force "$container_name" >/dev/null 2>&1 \
+        || cleanup_status=1
+    fi
+  fi
+  ! target_container_exists "$container_name" || cleanup_status=1
+  (( cleanup_status == 0 ))
+}
+
 target_capture_web_diagnostic() {
-  local container_name="$1" state='' log_path=''
+  local container_name="$1" log_path="${2:-}" state=''
   target_web_container_state='missing'
   target_web_exit_code='unknown'
   target_web_oom_killed='unknown'
@@ -284,8 +303,8 @@ target_capture_web_diagnostic() {
     [[ "$target_web_exit_code" =~ ^[0-9]+$ ]] || target_web_exit_code='unknown'
     [[ "$target_web_oom_killed" == true || "$target_web_oom_killed" == false ]] \
       || target_web_oom_killed='unknown'
-    log_path="$runtime_root/state/logs/attended-web.log"
-    if [[ -d "$runtime_root/state/logs" && ! -L "$runtime_root/state/logs" \
+    [[ -n "$log_path" ]] || log_path="$runtime_root/state/logs/attended-web.log"
+    if [[ -d "${log_path%/*}" && ! -L "${log_path%/*}" \
         && ( ( ! -e "$log_path" && ! -L "$log_path" ) \
           || ( -f "$log_path" && ! -L "$log_path" ) ) ]] \
         && : >"$log_path" && chmod 0600 "$log_path"; then
@@ -479,12 +498,17 @@ PY
 
 target_start_web() {
   local product_root="$1" container_name="$2" retain_on_exit="${3:-false}"
-  local direct_next="${4:-false}" values=''
-  local -a parsed=() mounts=() lifecycle=(--rm) runtime_mounts=() web_command=()
+  local direct_next="${4:-false}" port_override="${5:-}" values='' selected_port=''
+  local runtime_uid='' runtime_gid=''
+  local -a parsed=() mounts=() lifecycle=(--rm) runtime_identity=()
+  local -a runtime_mounts=() web_command=()
   [[ "$retain_on_exit" == true ]] && lifecycle=()
   values="$(target_web_values "$product_root")" || return 1
   mapfile -t parsed <<<"$values"
   (( ${#parsed[@]} == 5 )) || return 1
+  selected_port="${port_override:-${parsed[3]}}"
+  [[ "$selected_port" =~ ^[0-9]+$ && "$selected_port" -ge 1024 \
+      && "$selected_port" -le 65535 ]] || return 1
   mounts=(
     --mount "type=bind,src=$product_root/application/web/app,dst=/opt/nextjs/app,readonly"
     --mount "type=bind,src=$product_root/application/web/components,dst=/opt/nextjs/components,readonly"
@@ -494,20 +518,87 @@ target_start_web() {
     --mount "type=bind,src=$product_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly"
   )
   if [[ "$direct_next" == true ]]; then
+    runtime_uid="$(id -u)" || return 1
+    runtime_gid="$(id -g)" || return 1
+    [[ "$runtime_uid" =~ ^[0-9]+$ && "$runtime_gid" =~ ^[0-9]+$ ]] || return 1
+    runtime_identity=(--user "${runtime_uid}:${runtime_gid}" --env HOME=/tmp)
     runtime_mounts=(--tmpfs '/opt/nextjs/.next:rw,nosuid,nodev,size=536870912,mode=1777')
-    web_command=(next dev --hostname "${parsed[2]}" --port "${parsed[3]}")
+    web_command=(next dev --hostname "${parsed[2]}" --port "$selected_port")
   else
-    web_command=(npm run dev -- --hostname "${parsed[2]}" --port "${parsed[3]}")
+    web_command=(npm run dev -- --hostname "${parsed[2]}" --port "$selected_port")
   fi
   "${target_docker[@]}" run --detach "${lifecycle[@]}" \
     --name "$container_name" --network host --restart no \
     --security-opt no-new-privileges --cap-drop ALL \
+    "${runtime_identity[@]}" \
     "${runtime_mounts[@]}" \
     --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=${parsed[0]}" \
     --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=${parsed[1]}" \
     --env "ISHIKAWA_RETRIEVAL_BASE_URL=${parsed[4]}" \
     "${mounts[@]}" "node-24-slim-nextjs-16-4-1:amd64" \
     "${web_command[@]}" >/dev/null
+}
+
+target_prove_v1_2_web_recreation() {
+  local attempt live_status='000' ready_status='000' api_status='000'
+  local home_status='000' asset_status='000'
+  local diagnostic_path="$target_payload_root/v1-2-web-preflight.log"
+  target_stage='v1_2_web_recreation_preflight'
+  target_emit ROLLBACK \
+    "state=preflight_start;v1_2_web_recreation=testing;temporary_port=${v1_2_preflight_ui_port};accepted_runtime_untouched=true"
+  target_v1_2_preflight_started=true
+  if ! target_start_web "$active_v1_2_root" "$v1_2_preflight_container" \
+      true false "$v1_2_preflight_ui_port"; then
+    target_capture_web_diagnostic "$v1_2_preflight_container" "$diagnostic_path"
+    target_remove_web_container "$v1_2_preflight_container" \
+      || target_cleanup_failed=true
+    target_fail v1_2_web_recreation_preflight_failed \
+      "The preserved v1.2 launcher could not create a disposable UI before switchover;root_cause=${target_web_root_cause};container_running=${target_web_container_state};container_exit_code=${target_web_exit_code};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Keep the active v1.2 runtime untouched; correct its recreation boundary or rerun Script 06 only with the explicit rollback waiver.'
+  fi
+  for (( attempt = 0; attempt < 120; attempt += 1 )); do
+    target_container_running "$v1_2_preflight_container" || break
+    live_status="$(target_http_status "http://127.0.0.1:${v1_2_preflight_ui_port}/api/live")"
+    ready_status="$(target_http_status "http://127.0.0.1:${v1_2_preflight_ui_port}/api/ready")"
+    api_status="$(target_http_status 'http://127.0.0.1:1384/ready')"
+    [[ "$live_status" == 200 && "$ready_status" == 200 && "$api_status" == 200 ]] \
+      && break
+    sleep 0.5
+  done
+  if [[ "$live_status" != 200 || "$ready_status" != 200 || "$api_status" != 200 ]]; then
+    target_web_live_status="$live_status"
+    target_web_ready_status="$ready_status"
+    target_web_api_status="$api_status"
+    target_capture_web_diagnostic "$v1_2_preflight_container" "$diagnostic_path"
+    target_remove_web_container "$v1_2_preflight_container" \
+      || target_cleanup_failed=true
+    target_fail v1_2_web_recreation_preflight_failed \
+      "The preserved v1.2 launcher did not recreate a ready disposable UI before switchover;root_cause=${target_web_root_cause};container_running=${target_web_container_state};container_exit_code=${target_web_exit_code};container_oom_killed=${target_web_oom_killed};web_live_http=${live_status};web_ready_http=${ready_status};api_ready_http=${api_status};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Keep the active v1.2 runtime untouched; correct its recreation boundary or rerun Script 06 only with the explicit rollback waiver.'
+  fi
+  home_status="$(target_http_status "http://127.0.0.1:${v1_2_preflight_ui_port}/")"
+  asset_status="$(target_http_status "http://127.0.0.1:${v1_2_preflight_ui_port}/theme-init.js")"
+  if [[ "$home_status" != 200 || "$asset_status" != 200 ]]; then
+    target_web_live_status="$live_status"
+    target_web_ready_status="$ready_status"
+    target_web_api_status="$api_status"
+    target_capture_web_diagnostic "$v1_2_preflight_container" "$diagnostic_path"
+    target_remove_web_container "$v1_2_preflight_container" \
+      || target_cleanup_failed=true
+    target_fail v1_2_web_recreation_preflight_failed \
+      "The preserved v1.2 launcher recreated its readiness route but not every required UI surface;root_cause=${target_web_root_cause};home_http=${home_status};asset_http=${asset_status};protected_log_sha256=${target_web_log_sha256};protected_log_bytes=${target_web_log_bytes}." \
+      'Keep the active v1.2 runtime untouched; correct its recreation boundary or rerun Script 06 only with the explicit rollback waiver.'
+  fi
+  if ! target_remove_web_container "$v1_2_preflight_container" \
+      || target_port_listening "$v1_2_preflight_ui_port"; then
+    target_cleanup_failed=true
+    target_fail v1_2_web_recreation_cleanup_failed \
+      "The disposable v1.2 recreation proof did not release its exact container or temporary port ${v1_2_preflight_ui_port}." \
+      'Keep the active v1.2 runtime untouched and reconcile only the named disposable proof container and port.'
+  fi
+  target_v1_2_preflight_started=false
+  target_emit ROLLBACK \
+    "state=preflight_pass;v1_2_web_recreation=pass;liveness=pass;readiness=pass;home=pass;static_asset=pass;temporary_port=${v1_2_preflight_ui_port};cleanup=pass"
 }
 
 target_preflight_web_runtime() {
@@ -697,6 +788,13 @@ target_exit() {
   trap - ERR EXIT HUP INT TERM
   set +e
   if [[ "$target_complete" != true ]]; then
+    if [[ "$target_v1_2_preflight_started" == true ]]; then
+      if target_remove_web_container "$v1_2_preflight_container"; then
+        target_v1_2_preflight_started=false
+      else
+        target_cleanup_failed=true
+      fi
+    fi
     if [[ "$mode" == --target-launch && "$target_v1_2_stopped" == true ]]; then
       target_stop_v1_3
       if [[ "$target_waive_v1_2_rollback" == true ]]; then
@@ -1003,6 +1101,10 @@ target_check_boot_and_ports() {
     || target_fail stale_v1_3_container_found \
       'A container already owns the reserved attended v1.3 container name.' \
       'Inspect and explicitly reconcile the stale attended container before Script 06.'
+  ! target_container_exists "$v1_2_preflight_container" \
+    || target_fail stale_v1_2_preflight_container_found \
+      'A container already owns the reserved disposable v1.2 proof name.' \
+      'Inspect and explicitly reconcile the stale proof container before Script 06.'
   if [[ "$target_waive_v1_2_rollback" == false ]]; then
     [[ "$(systemctl --user is-active "$v1_2_unit" 2>/dev/null || true)" == active ]] \
       || target_fail v1_2_retrieval_not_active 'The accepted v1.2 Retrieval API is not active.' \
@@ -1018,6 +1120,10 @@ target_check_boot_and_ports() {
         || target_fail "v1_2_port_${port}_missing" "Required accepted listener ${port} is absent." \
           'Restore accepted v1.2 before launching the attended candidate.'
     done
+    ! target_port_listening "$v1_2_preflight_ui_port" \
+      || target_fail v1_2_preflight_port_in_use \
+        "Temporary rollback-proof port ${v1_2_preflight_ui_port} is occupied." \
+        'Identify the unexpected listener before testing v1.2 recreation.'
   elif [[ "$(systemctl is-active postgresql@16-main.service 2>/dev/null || true)" != active ]]; then
     ! target_port_listening 5432 \
       || target_fail canonical_postgresql_port_in_use \
@@ -1803,6 +1909,7 @@ target_launch_main() {
     target_emit READINESS 'state=pass;v1_2_rollback=waived;v1_2_password_read=false;v1_2_readiness_contact=false'
   else
     target_validate_v1_2_restore_credentials
+    target_prove_v1_2_web_recreation
   fi
   target_database_state
   case "$target_database_action" in

@@ -354,3 +354,38 @@ v1.2 password is requested or readiness contact made, a failed waived launch
 stops v1.3 without attempting v1.2 restoration, the durable v1.3 database can
 be reused for an exact retry, and explicit later rollback remains conditional
 on restoring the v1.2 dependencies.
+
+### V13-77 — Explicit attended web identity and rollback recreation proof
+
+Decision: Keep the exact staged v1.3 source private and unchanged, run only
+the attended v1.3 web process as the numeric UID and primary GID of the
+deployment account with `HOME=/tmp`, and keep generated `.next` state in the
+bounded disposable tmpfs. When automatic v1.2 rollback is promised, Script 06
+must also prove before any durable v1.3 database work or switchover that a
+separately named disposable v1.2 UI can be freshly created from the preserved
+launcher, exact image, and source tree on temporary port `3394`, can serve its
+liveness, readiness, home, and static-asset surfaces, and can be completely
+removed. The explicit V13-76 waiver skips only the v1.2 recreation proof.
+
+Status: Frozen by operator direction on 2026-10-25.
+
+Recommendation: Do not chmod, chown, copy over, or otherwise normalize the
+qualified candidate. Preserve its exact file modes and read-only bind mounts,
+retain `no-new-privileges` and `--cap-drop ALL`, and supply the deployment
+account identity only to the direct v1.3 Next.js path. Leave the accepted v1.2
+launcher unchanged. Treat a failed disposable v1.2 recreation as a default-
+path rollback blocker while the currently running v1.2 remains untouched;
+the operator may correct that old runtime or explicitly select V13-76.
+
+Reason/Evidence: The failing EmceeDanko pre-switchover container reached
+Next.js readiness and then received `EACCES` opening
+`/opt/nextjs/next.config.mjs`. The staged file was mode `0600`, owned by
+`1000:1000`; the accepted image declared no `USER`. Under the exact
+`no-new-privileges` and capability-drop boundary, the image-default identity
+could not import the read-only bind-mounted file, while the same container
+with `--user 1000:1000 --env HOME=/tmp` imported it successfully. This proves
+an identity mismatch rather than npm, Next.js, or candidate corruption. Full
+target lifecycle regressions enforce the v1.3 identity, unchanged v1.2 launch
+arguments, v1.2 recreation success and failure cleanup, waiver non-contact,
+pre-switchover preservation, automatic restoration, acceptance, rollback,
+candidate immutability, and one standalone result contract.

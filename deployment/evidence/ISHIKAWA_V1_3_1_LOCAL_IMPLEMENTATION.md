@@ -114,6 +114,19 @@ deployment harnesses passed together, including the pre-existing release,
 staging, qualification, attended-runtime, image-build, application-build,
 production-stack, carry, and portable-deployment branches.
 
+The first operator Script 09 run stopped in preflight with
+`accepted_v1_3_baseline_not_ready`; it installed or launched no v1.3.1 object
+and changed neither accepted v1.3 nor its database. The content-free report is
+SHA-256
+`65d03f14ab13e35aef607761430d98d65fe8a1f03c0158816eadf0a62626cc72`.
+The operator's forward used EmceeDanko local ports `8000`/`8001`, while frozen
+V13-76 and the canonical EmceeDanko forwarding wrapper assign the v1.3 model
+listeners to `18000`/`18001`. Script 09 now defaults to those frozen v1.3
+ports, reports individual accepted-install/API/UI/PostgreSQL preflight states,
+and preserves the target's exact failure reason through the outer wrapper.
+The expanded target and wrapper harnesses pass the corrected default-route,
+component-diagnostic, nested-failure, complete lifecycle, and cleanup paths.
+
 The remaining ordered gates are:
 
 1. run Script 09 to requalify the exact Script 07 image and Script 08

@@ -37,6 +37,8 @@ for ((index=1; index <= $#; index++)); do
 done
 remote_command="${!#}"
 if [[ "$remote_command" == *"bash ./requalify-v1.3.1-on-emceedanko"* ]]; then
+  [[ "$remote_command" == *"http://127.0.0.1:18000"* \
+      && "$remote_command" == *"http://127.0.0.1:18001"* ]] || exit 21
   payload="$(tr "'\''" "\n" <<<"$remote_command" | awk "/\\/payload\\/target-result[.]txt$/ {print; exit}")"
   mode="$(tr "'\''" "\n" <<<"$remote_command" | awk "/^--(run|accept|cleanup)$/ {print; exit}")"
   if [[ "${MOCK_TARGET_FAIL:-0}" == 1 ]]; then
@@ -125,6 +127,7 @@ target_failure_status="$?"
 set -e
 (( target_failure_status != 0 ))
 grep -Fq 'reason=candidate_web_build_failed' "$root/target-failure.out"
+! grep -Fq 'reason=unexpected_command_failure' "$root/target-failure.out"
 [[ "$(sha256sum -- "$evidence/SHA256SUMS" | awk '{print $1}')" == "$manifest_before" ]]
 
 set +e

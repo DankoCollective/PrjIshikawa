@@ -31,8 +31,8 @@ target="${APPLICATION_HOST_TARGET:-DankoSurface_EmceeDanko}"
 expected_hostname="${APPLICATION_HOST_EXPECTED_HOSTNAME:-EmceeDanko}"
 expected_os_version="${APPLICATION_HOST_EXPECTED_OS_VERSION:-24.04}"
 identity_file="${APPLICATION_HOST_IDENTITY_FILE:-}"
-gemma_base_url="${ISHIKAWA_GEMMA_BASE_URL:-http://127.0.0.1:8000}"
-nomic_base_url="${ISHIKAWA_NOMIC_BASE_URL:-http://127.0.0.1:8001}"
+gemma_base_url="${ISHIKAWA_GEMMA_BASE_URL:-http://127.0.0.1:18000}"
+nomic_base_url="${ISHIKAWA_NOMIC_BASE_URL:-http://127.0.0.1:18001}"
 report_root="${ISHIKAWA_SCRIPT09_REPORT_ROOT:-$default_report_root}"
 mode="${1:-}"
 shift || true
@@ -294,15 +294,15 @@ tty_input=/dev/null
 [[ -t 0 ]] && tty_input=/dev/tty
 remote_timeout=900
 [[ "$mode" == --run ]] && remote_timeout=9000
-set +e
 timeout --foreground "$remote_timeout" ssh -tt "${ssh_args[@]}" -o BatchMode=yes "$target" \
   "cd '$remote_root/payload' && bash ./requalify-v1.3.1-on-emceedanko '$mode' --payload-root '$remote_root/payload' --result-path '$remote_root/payload/target-result.txt' --expected-hostname '$expected_hostname' --expected-os-version '$expected_os_version' --expected-architecture amd64 --gemma-base-url '$gemma_base_url' --nomic-base-url '$nomic_base_url' --expected-helper-sha256 '$helper_sha256'" \
   <"$tty_input" >"$stream_path" 2>&1 &
 remote_pid="$!"
-wait "$remote_pid"; remote_status="$?"; remote_pid=''
-wait "$stream_pid"; tee_status="$?"; stream_pid=''
+if wait "$remote_pid"; then remote_status=0; else remote_status="$?"; fi
+remote_pid=''
+if wait "$stream_pid"; then tee_status=0; else tee_status="$?"; fi
+stream_pid=''
 rm -f -- "$stream_path"
-set -e
 (( tee_status == 0 )) || block report_stream_failed 'The live Script 09 report stream failed.' 'Restore the local report lane.'
 if (( remote_status != 0 )); then
   [[ "$remote_status" != 124 ]] || block target_action_timeout "The ${mode#--} action exceeded its bounded timeout." 'Review the retained target milestones and cleanup state.'

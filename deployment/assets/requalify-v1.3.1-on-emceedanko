@@ -37,8 +37,8 @@ result_path=''
 expected_hostname='EmceeDanko'
 expected_os_version='24.04'
 expected_architecture='amd64'
-gemma_base_url='http://127.0.0.1:8000'
-nomic_base_url='http://127.0.0.1:8001'
+gemma_base_url='http://127.0.0.1:18000'
+nomic_base_url='http://127.0.0.1:18001'
 expected_helper_sha256=''
 stage='argument_validation'
 complete=false
@@ -250,6 +250,7 @@ if [[ "$mode" == --validate-only ]]; then
   printf '%s\n' \
     'v1_3_1_requalification_helper=ready' \
     'qualification_ports=3385,8385;accepted_ports=3384,8384;database_mode=read_only_reuse' \
+    'model_forward_ports=18000,18001;forward_origin=emceedanko' \
     'web_runtime=exact_image,read_only_source,bounded_tmpfs,next_build_then_next_start'
   exit 0
 fi
@@ -308,6 +309,16 @@ accepted_ready() {
     && http_ready 'http://127.0.0.1:8384/ready' \
     && http_ready 'http://127.0.0.1:3384/api/ready' \
     && pg_isready --quiet --host 127.0.0.1 --port "$postgresql_port"
+}
+
+accepted_readiness_detail() {
+  local installation=blocked api_status ui_status postgresql=blocked
+  [[ -d "$accepted_root" && ! -L "$accepted_root" ]] && installation=pass
+  api_status="$(http_status 'http://127.0.0.1:8384/ready')"
+  ui_status="$(http_status 'http://127.0.0.1:3384/api/ready')"
+  pg_isready --quiet --host 127.0.0.1 --port "$postgresql_port" && postgresql=pass
+  printf 'installation=%s;api_ready_http=%s;ui_ready_http=%s;postgresql=%s' \
+    "$installation" "$api_status" "$ui_status" "$postgresql"
 }
 
 check_boot_posture() {
@@ -384,7 +395,7 @@ fi
 
 stage='run_preflight'
 accepted_ready || fail accepted_v1_3_baseline_not_ready \
-  'The accepted v1.3 API, UI, database, or installation is not ready before side-by-side qualification.' \
+  "The accepted v1.3 baseline is not ready before side-by-side qualification;$(accepted_readiness_detail)." \
   'Reconcile the accepted v1.3 baseline before running Script 09.'
 check_boot_posture || fail boot_posture_enabled 'Boot autostart is enabled for an Ishikawa dependency.' 'Restore the accepted disabled boot posture before qualification.'
 [[ ! -e "$candidate_root" && ! -L "$candidate_root" ]] \

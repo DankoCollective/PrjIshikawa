@@ -180,3 +180,6 @@ password because its database access is read-only and it does not recreate or
 modify corpus v3. A passing run leaves the exact candidate on ports
 `3385`/`8385` for attended review and prints the `--accept` and `--cleanup`
 commands. The accepted v1.3 runtime remains on `3384`/`8384` throughout.
+Script 09 defaults to the frozen v1.3 Gemma/Nomic forward ports
+`18000`/`18001`; create those loopback listeners on EmceeDanko, not on the
+wrapper host.

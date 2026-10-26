@@ -66,7 +66,13 @@ if [[ -n "${MOCK_OCCUPIED_PORT:-}" && "$*" == *":${MOCK_OCCUPIED_PORT}"* ]]; the
   printf "%s\n" LISTEN
 fi'
 make_mock curl '
-if [[ "$*" == *"%{http_code}"* ]]; then printf 200; fi
+if [[ "$*" == *"%{http_code}"* ]]; then
+  if [[ "${MOCK_ACCEPTED_API_FAIL:-0}" == 1 && "$*" == *"127.0.0.1:8384/ready"* ]]; then
+    printf 503
+  else
+    printf 200
+  fi
+fi
 exit 0'
 make_mock docker '
 state="${MOCK_STATE:?}"
@@ -191,6 +197,16 @@ grep -Fxq 'accepted-v1.3-unchanged' "$root/home/Documents/Ishikawa-v1.3-attended
 
 reset_payload
 set +e
+run_helper --run "$payload/baseline-failure-result.txt" "$root/baseline-failure.out" 'MOCK_ACCEPTED_API_FAIL=1'
+baseline_failure_status="$?"
+set -e
+(( baseline_failure_status != 0 ))
+grep -Fq 'reason=accepted_v1_3_baseline_not_ready' "$root/baseline-failure.out"
+grep -Fq 'installation=pass;api_ready_http=503;ui_ready_http=200;postgresql=pass' "$root/baseline-failure.out"
+[[ ! -e "$root/home/Documents/Ishikawa-v1.3.1-qualification" && ! -e "$root/state/container.exists" ]]
+
+reset_payload
+set +e
 run_helper --run "$payload/failure-result.txt" "$root/failure.out" 'MOCK_FAIL_WEB=1'
 failure_status="$?"
 set -e
@@ -221,4 +237,4 @@ grep -Fxq 'detail=cleanup_failed=false' "$payload/frontier-failure-result.txt"
 [[ ! -e "$root/home/Documents/Ishikawa-v1.3.1-qualification" && ! -e "$root/state/container.exists" ]]
 grep -Fxq 'accepted-v1.3-unchanged' "$root/home/Documents/Ishikawa-v1.3-attended/sentinel"
 
-printf '%s\n' 'v1_3_1_requalification_target_harness=pass;run=pass;accept=pass;cleanup=pass;web_failure_cleanup=pass;database_mismatch=pass;frontier_failure_cleanup=pass'
+printf '%s\n' 'v1_3_1_requalification_target_harness=pass;run=pass;accept=pass;cleanup=pass;baseline_diagnostic=pass;web_failure_cleanup=pass;database_mismatch=pass;frontier_failure_cleanup=pass'

@@ -51,6 +51,12 @@ of target mutation, or successful cleanup does not reduce the violation.
 - Treat security advisories as implementation gates, not paperwork. For first-class packages, wheels, binaries, source archives, containers, authority-service tools, and dependencies, capture advisory sources, review affectedness, record mitigation or non-applicability, and do not proceed to install/promote with an unmitigated action-required advisory unless the operator explicitly accepts and records the risk.
 - For off-the-shelf products, prove the vendor-supported minimal runtime before hardening or custom integration. Do not force one approved service into another product's bootstrap path before first runtime proof; supporting services such as OpenBao, PostgreSQL, an IdP, CA, artifact repository, reverse proxy, or observability stack require explicit later integration/runtime-consumer decisions.
 - Do not attempt ad hoc SSH to lab hosts from the agent sandbox when the established run path already writes local reports or when interactive key/sudo prompts are required. Review `local/reports/...` first. If more target data is needed, prepare a focused script or command for the operator to run so the output writes back through the controlled report path.
+- Do not add connectivity, network-isolation, DNS, route, socket, ping, curl,
+  or equivalent network probes to an org-lab script merely to verify a
+  configured flag or offline posture. When Docker uses `--network none`, APT
+  sources are empty, or another approved control disables networking, report
+  that fact as configured posture rather than inventing a probe. A network
+  probe requires explicit operator direction.
 - When using an external URL for planning, decisions, or procedure, add or update its entry in `Reference_Directory.md`.
 - Keep execution notes separate from reusable procedure.
 - Use placeholders in tracked docs for local-only values.

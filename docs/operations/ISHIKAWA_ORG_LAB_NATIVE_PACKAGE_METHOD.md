@@ -58,6 +58,16 @@ troubleshooting, but repeating them on Tech is not an acceptance gate.
 This waiver does not permit target-side package downloads, substitution of a
 different package version, or installation from outside the qualified shelf.
 
+## Qualification network boundary
+
+The work-laptop capture step uses approved internet access to download the
+signed package closure. The later qualification step performs no network
+query. It uses an already-local Ubuntu image, passes Docker `--network none`,
+and gives APT empty source and list configuration. Its `network_mode=none`
+record describes those configured controls; it is not the result of a ping,
+DNS, route, URL, socket, or other connectivity probe. Do not add such a probe
+to the org-lab workflow without explicit operator direction.
+
 ## Direct package identities
 
 The reviewed direct set is:

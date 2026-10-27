@@ -39,6 +39,7 @@
 | `deployment/carry/SECURITY_REVIEW.md` | Portable exact-payload security disposition bound into the package receipt and checksum manifest | Tracked |
 | `deployment/carry/inspect-native-prerequisites` | Portable read-only Tech prerequisite, capacity, path, listener, Docker, and PostgreSQL inventory | Tracked |
 | `deployment/carry/capture-native-prerequisites` | Standalone work-laptop capture of the signed Ubuntu 26.04 AMD64 PostgreSQL 16, pgvector, Psycopg, and transitive `.deb` closure | Tracked |
+| `deployment/carry/qualify-native-prerequisites` | Standalone network-disabled Ubuntu 26.04 AMD64 proof of the captured native-package shelf, Psycopg, PostgreSQL 16, pgvector, and license inventory | Tracked |
 | `deployment/assets/stage-v1.3-candidate` | Bounded target-side Script 04 helper | Tracked |
 | `deployment/assets/qualify-v1.3-candidate` | Bounded target-side Script 05 helper | Tracked |
 | `deployment/assets/build-node-next-runtime` | Unnumbered native-host runtime-image builder invoked by Script 07 | Tracked |
@@ -66,6 +67,7 @@
 | `deployment/tests/deployment-entrypoint.sh` | Portable verify, install, configure, database, lifecycle, removal, and cleanup regression | Tracked |
 | `deployment/tests/native-prerequisite-inventory.sh` | Read-only target inventory direct/sudo, host-surface, checksum, package-health, and refusal regression | Tracked |
 | `deployment/tests/native-package-capture.sh` | Standalone native-package capture success, signed-key, repository, pin, direct-hash, preservation, and clean-output regression | Tracked |
+| `deployment/tests/native-package-qualification.sh` | Native-shelf checksum, direct/sudo Docker, offline-result, missing-image, and container-failure regression | Tracked |
 | `qualification/frontier/` | Frozen 60-question gate | Tracked |
 | `qualification/frontier/evaluate-frontier.py` | Exact 60-question target qualification evaluator | Tracked |
 | `deployment/scripts/` | Active operator interfaces | Tracked |

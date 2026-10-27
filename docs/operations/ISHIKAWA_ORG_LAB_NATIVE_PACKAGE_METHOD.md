@@ -98,6 +98,13 @@ runtime dependency and may be carried alone to the internet-connected work
 laptop. Preserve its command output, signed metadata, downloaded packages,
 and generated records until the final outer carry is accepted.
 
+After capture, use the separate standalone
+`deployment/carry/qualify-native-prerequisites` file on the work laptop. It
+verifies the origin shelf and performs the item 7 local-file-only installation
+and operation proof inside a disposable network-disabled Ubuntu 26.04 AMD64
+container. Docker access may be direct or attended through its explicit
+`--sudo-docker` option. The qualification does not contact Tech.
+
 ## Stop conditions
 
 Stop before transfer or installation if any of these occurs:

@@ -1,0 +1,334 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 077
+
+PROGRAM_NAME="qualify-native-prerequisites"
+SHELF_DIR="${PWD}"
+USE_SUDO_DOCKER=false
+DOCKER_IMAGE="ubuntu:26.04"
+RESULT_EMITTED=false
+
+DIRECT_SPECS=(
+  "python3-psycopg=3.3.2-1build1"
+  "postgresql-common=293.pgdg26.04+1"
+  "postgresql-client-common=293.pgdg26.04+1"
+  "libpq5=18.6-1.pgdg26.04+2"
+  "postgresql-client-16=16.15-1.pgdg26.04+2"
+  "postgresql-16=16.15-1.pgdg26.04+2"
+  "postgresql-16-pgvector=0.8.7-1.pgdg26.04+1"
+)
+
+usage() {
+  cat <<'USAGE'
+Usage: qualify-native-prerequisites [--shelf DIRECTORY] [--sudo-docker]
+
+Verify a captured Ishikawa Ubuntu 26.04 AMD64 native-package shelf and prove
+local-file-only installation, Psycopg import, PostgreSQL 16 startup, and
+pgvector operation in a disposable network-disabled Ubuntu 26.04 container.
+
+Options:
+  --shelf DIRECTORY  Captured shelf root. Default: current directory.
+  --sudo-docker      Invoke Docker through attended sudo.
+  --help             Show this help.
+USAGE
+}
+
+emit_result() {
+  local value="$1"
+  if [[ "$RESULT_EMITTED" == false ]]; then
+    printf '\nSCRIPT RESULT\n%s=%s\n' "$PROGRAM_NAME" "$value"
+    RESULT_EMITTED=true
+  fi
+}
+
+fail() {
+  local reason="$1"
+  local detail="$2"
+  printf '\nFAILURE DETAIL\nreason=%s\ndetail=%s\n' "$reason" "$detail" >&2
+  emit_result "blocked;reason=${reason}"
+  exit 1
+}
+
+on_error() {
+  local status=$?
+  local line="${BASH_LINENO[0]:-unknown}"
+  trap - ERR
+  printf '\nFAILURE DETAIL\nreason=unexpected_command_failure\nline=%s\nexit_status=%s\n' \
+    "$line" "$status" >&2
+  emit_result "blocked;reason=unexpected_command_failure"
+  exit "$status"
+}
+trap on_error ERR
+
+while (($# > 0)); do
+  case "$1" in
+    --shelf)
+      (($# >= 2)) || fail "invalid_arguments" "--shelf requires a directory."
+      SHELF_DIR="$2"
+      shift 2
+      ;;
+    --sudo-docker)
+      USE_SUDO_DOCKER=true
+      shift
+      ;;
+    --help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "invalid_arguments" "Unsupported argument: $1"
+      ;;
+  esac
+done
+
+for command_name in awk bash date docker find grep mkdir readlink sha256sum sort tail wc xargs; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || fail "missing_command" "Required command is unavailable: ${command_name}"
+done
+
+[[ -d "$SHELF_DIR" ]] || fail "shelf_missing" "Shelf directory does not exist: ${SHELF_DIR}"
+SHELF_DIR="$(readlink -f "$SHELF_DIR")"
+[[ -d "$SHELF_DIR/debs" ]] || fail "debs_missing" "Shelf has no debs directory."
+
+for required_file in \
+  capture-summary.env deb-checksums.sha256 package-manifest.tsv \
+  repository-metadata/postgresql-signing-key.fingerprint shelf-checksums.sha256; do
+  [[ -f "$SHELF_DIR/$required_file" ]] \
+    || fail "shelf_file_missing" "Required shelf file is absent: ${required_file}"
+done
+
+grep -Fxq 'capture_status=downloaded_pending_offline_qualification' \
+  "$SHELF_DIR/capture-summary.env" \
+  || fail "capture_state_wrong" "Shelf is not in the expected downloaded-pending-qualification state."
+grep -Fxq 'target_release=resolute' "$SHELF_DIR/capture-summary.env" \
+  || fail "target_release_wrong" "Shelf target release is not resolute."
+grep -Fxq 'target_architecture=amd64' "$SHELF_DIR/capture-summary.env" \
+  || fail "target_architecture_wrong" "Shelf target architecture is not amd64."
+grep -Fxq 'postgresql_major=16' "$SHELF_DIR/capture-summary.env" \
+  || fail "postgresql_major_wrong" "Shelf PostgreSQL major version is not 16."
+grep -Fxq 'B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8' \
+  "$SHELF_DIR/repository-metadata/postgresql-signing-key.fingerprint" \
+  || fail "pgdg_key_identity_wrong" "Shelf PGDG key fingerprint is not the reviewed identity."
+
+printf '[SHELF] action=verify_origin_checksums\n'
+if ! (cd "$SHELF_DIR" && sha256sum --check --status deb-checksums.sha256); then
+  fail "deb_checksum_failure" "One or more captured package files no longer match the origin manifest."
+fi
+if ! (cd "$SHELF_DIR" && sha256sum --check --status shelf-checksums.sha256); then
+  fail "shelf_checksum_failure" "One or more captured shelf files no longer match the origin manifest."
+fi
+
+deb_count="$(find "$SHELF_DIR/debs" -maxdepth 1 -type f -name '*.deb' | wc -l | awk '{print $1}')"
+summary_count="$(awk -F= '$1 == "captured_package_count" {print $2}' "$SHELF_DIR/capture-summary.env")"
+[[ "$deb_count" =~ ^[0-9]+$ && "$summary_count" == "$deb_count" ]] \
+  || fail "package_count_mismatch" "Summary count ${summary_count:-none} does not match ${deb_count:-none} files."
+printf '[SHELF] state=pass;packages=%s\n' "$deb_count"
+
+DOCKER=(docker)
+if [[ "$USE_SUDO_DOCKER" == true ]]; then
+  command -v sudo >/dev/null 2>&1 \
+    || fail "sudo_unavailable" "--sudo-docker was selected but sudo is unavailable."
+  printf '[DOCKER] action=attended_sudo_validation\n'
+  sudo -v || fail "sudo_validation_failed" "Docker requires attended sudo and validation failed."
+  DOCKER=(sudo docker)
+fi
+
+if ! "${DOCKER[@]}" image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+  fail "qualification_image_missing" "${DOCKER_IMAGE} is not present locally; pull it before qualification."
+fi
+
+image_os="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Os}}')"
+image_arch="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Architecture}}')"
+image_id="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Id}}')"
+image_digests="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{join .RepoDigests ","}}')"
+[[ "$image_os" == linux && "$image_arch" == amd64 ]] \
+  || fail "qualification_image_wrong" "Expected linux/amd64; observed ${image_os}/${image_arch}."
+
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+QUALIFICATION_DIR="$SHELF_DIR/qualification-${RUN_STAMP}"
+[[ ! -e "$QUALIFICATION_DIR" ]] \
+  || fail "qualification_output_exists" "Qualification output already exists: ${QUALIFICATION_DIR}"
+mkdir -p "$QUALIFICATION_DIR"
+
+cat > "$QUALIFICATION_DIR/container-proof.sh" <<'CONTAINER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+cleanup_postgresql() {
+  if [[ -f /tmp/pgdata/postmaster.pid ]]; then
+    su postgres -s /bin/sh -c \
+      "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/pgdata -m fast -w stop" \
+      >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_postgresql EXIT
+
+mkdir -p /tmp/empty-apt-sources /tmp/empty-apt-lists/partial
+printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+chmod 755 /usr/sbin/policy-rc.d
+
+mapfile -d '' package_files < <(
+  find /shelf/debs -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
+)
+(( ${#package_files[@]} > 0 ))
+
+APT_OFFLINE=(
+  -o Dir::Etc::sourcelist=/dev/null
+  -o Dir::Etc::sourceparts=/tmp/empty-apt-sources
+  -o Dir::State::lists=/tmp/empty-apt-lists
+  -o APT::Sandbox::User=root
+)
+
+printf '[OFFLINE] action=simulate;packages=%s\n' "${#package_files[@]}"
+apt-get "${APT_OFFLINE[@]}" --simulate --no-install-recommends install \
+  "${package_files[@]}"
+
+printf '[OFFLINE] action=install\n'
+apt-get "${APT_OFFLINE[@]}" --yes --no-install-recommends install \
+  "${package_files[@]}"
+
+audit_output="$(dpkg --audit)"
+[[ -z "$audit_output" ]] || {
+  printf '%s\n' "$audit_output" >&2
+  exit 31
+}
+apt-get "${APT_OFFLINE[@]}" check
+
+expected_specs=(
+  'python3-psycopg=3.3.2-1build1'
+  'postgresql-common=293.pgdg26.04+1'
+  'postgresql-client-common=293.pgdg26.04+1'
+  'libpq5=18.6-1.pgdg26.04+2'
+  'postgresql-client-16=16.15-1.pgdg26.04+2'
+  'postgresql-16=16.15-1.pgdg26.04+2'
+  'postgresql-16-pgvector=0.8.7-1.pgdg26.04+1'
+)
+for spec in "${expected_specs[@]}"; do
+  package_name="${spec%%=*}"
+  expected_version="${spec#*=}"
+  installed_version="$(dpkg-query -W -f='${Version}' "$package_name")"
+  [[ "$installed_version" == "$expected_version" ]]
+  printf '[PACKAGE] name=%s;version=%s;state=pass\n' "$package_name" "$installed_version"
+done
+
+python3 - <<'PY'
+import psycopg
+assert psycopg.__version__ == "3.3.2", psycopg.__version__
+print(f"[PSYCOPG] version={psycopg.__version__};state=pass")
+PY
+
+install -d -o postgres -g postgres -m 0700 /tmp/pgdata
+install -d -o postgres -g postgres -m 0775 /tmp/pgsocket
+su postgres -s /bin/sh -c \
+  '/usr/lib/postgresql/16/bin/initdb -D /tmp/pgdata --no-locale --encoding=UTF8' \
+  > /tmp/postgresql-initdb.txt
+su postgres -s /bin/sh -c \
+  "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/pgdata -o '-k /tmp/pgsocket -h 127.0.0.1 -p 55432' -w start" \
+  > /tmp/postgresql-start.txt
+
+cat > /tmp/pgvector-proof.sql <<'SQL'
+\set ON_ERROR_STOP on
+CREATE EXTENSION vector;
+SELECT extversion FROM pg_extension WHERE extname = 'vector';
+CREATE TABLE vector_proof (id integer PRIMARY KEY, embedding vector(3));
+INSERT INTO vector_proof VALUES (1, '[1,2,3]'), (2, '[3,2,1]');
+SELECT id FROM vector_proof ORDER BY embedding <-> '[1,2,3]' LIMIT 1;
+SQL
+su postgres -s /bin/sh -c \
+  '/usr/lib/postgresql/16/bin/psql -h /tmp/pgsocket -p 55432 -d postgres -Atf /tmp/pgvector-proof.sql' \
+  > /tmp/pgvector-proof.txt
+grep -Fxq '0.8.7' /tmp/pgvector-proof.txt
+grep -Fxq '1' /tmp/pgvector-proof.txt
+printf '[POSTGRESQL] major=16;pgvector=0.8.7;query=pass;state=pass\n'
+
+license_missing=0
+printf '[LICENSE] action=inventory\n'
+while IFS=$'\t' read -r filename package_name _rest; do
+  [[ "$filename" != filename ]] || continue
+  copyright_path="/usr/share/doc/${package_name}/copyright"
+  if [[ -r "$copyright_path" ]]; then
+    resolved_path="$(readlink -f "$copyright_path")"
+    copyright_hash="$(sha256sum "$resolved_path" | awk '{print $1}')"
+    printf '[LICENSE] package=%s;copyright_sha256=%s\n' "$package_name" "$copyright_hash"
+  else
+    printf '[LICENSE] package=%s;copyright=missing\n' "$package_name" >&2
+    license_missing=$((license_missing + 1))
+  fi
+done < /shelf/package-manifest.tsv
+((license_missing == 0))
+printf '[LICENSE] state=inventory_pass\n'
+
+printf '[OFFLINE] state=pass;network=none;source_lists=empty\n'
+CONTAINER
+
+bash -n "$QUALIFICATION_DIR/container-proof.sh" \
+  || fail "container_proof_syntax_failure" "Generated container proof did not pass bash syntax validation."
+
+cat > "$QUALIFICATION_DIR/qualification-environment.env" <<ENVIRONMENT
+qualification_image=${DOCKER_IMAGE}
+qualification_image_id=${image_id}
+qualification_image_digests=${image_digests}
+qualification_image_os=${image_os}
+qualification_image_architecture=${image_arch}
+container_network=none
+source_shelf=${SHELF_DIR}
+captured_package_count=${deb_count}
+ENVIRONMENT
+
+printf '[QUALIFICATION] action=offline_container_install;network=none\n'
+if ! "${DOCKER[@]}" run --rm \
+  --network none \
+  --platform linux/amd64 \
+  --mount "type=bind,src=$SHELF_DIR,dst=/shelf,readonly" \
+  "$DOCKER_IMAGE" \
+  bash -s < "$QUALIFICATION_DIR/container-proof.sh" \
+  > "$QUALIFICATION_DIR/container-proof.log" 2>&1; then
+  tail -n 160 "$QUALIFICATION_DIR/container-proof.log" >&2 || true
+  fail "offline_qualification_failed" "Disposable Ubuntu 26.04 local-file-only qualification failed."
+fi
+
+grep -Fq '[OFFLINE] state=pass;network=none;source_lists=empty' \
+  "$QUALIFICATION_DIR/container-proof.log" \
+  || fail "offline_result_missing" "Container proof did not emit its success boundary."
+grep -Fq '[POSTGRESQL] major=16;pgvector=0.8.7;query=pass;state=pass' \
+  "$QUALIFICATION_DIR/container-proof.log" \
+  || fail "postgresql_result_missing" "PostgreSQL 16/pgvector proof result is absent."
+grep -Fq '[PSYCOPG] version=3.3.2;state=pass' \
+  "$QUALIFICATION_DIR/container-proof.log" \
+  || fail "psycopg_result_missing" "Psycopg proof result is absent."
+grep -Fq '[LICENSE] state=inventory_pass' \
+  "$QUALIFICATION_DIR/container-proof.log" \
+  || fail "license_inventory_missing" "Package copyright inventory did not pass."
+
+grep '^\[LICENSE\] package=' "$QUALIFICATION_DIR/container-proof.log" \
+  > "$QUALIFICATION_DIR/license-inventory.txt"
+
+cat > "$QUALIFICATION_DIR/qualification-summary.env" <<SUMMARY
+qualification_status=offline_installation_and_operation_pass
+target_release=resolute
+target_architecture=amd64
+captured_package_count=${deb_count}
+psycopg_version=3.3.2
+postgresql_major=16
+pgvector_version=0.8.7
+container_network=none
+apt_source_lists=empty
+license_inventory=pass
+closure_advisory_review=pending
+tech_contact_performed=false
+SUMMARY
+
+(
+  cd "$QUALIFICATION_DIR"
+  find . -type f ! -name qualification-checksums.sha256 -print0 \
+    | sort -z | xargs -0 sha256sum > qualification-checksums.sha256
+)
+
+printf '[QUALIFICATION] state=pass;report=%s\n' "$QUALIFICATION_DIR"
+printf '[NEXT] closure_advisory_review=pending\n'
+
+trap - ERR
+emit_result "pass"

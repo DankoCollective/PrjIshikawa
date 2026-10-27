@@ -207,6 +207,7 @@
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`
 - `deployment/carry/capture-native-prerequisites`
+- `deployment/carry/qualify-native-prerequisites`
 
 Script 05 prints a complete `[INPUT REQUIRED]` line before each hidden Gemma
 and Nomic API-key input. It does not log or retain either value. A clean Script

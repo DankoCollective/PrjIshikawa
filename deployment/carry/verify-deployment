@@ -47,6 +47,7 @@ readonly temporary_base="${TMPDIR:-/tmp}"
 find "$carry_root" -type l -print -quit | grep -q . && fail carry_symlink_found
 for required_file in \
   README.md SHA256SUMS PACKAGE_MANIFEST.json application-release.json \
+  SECURITY_REVIEW.md \
   deployment-package-receipt.json \
   application-license.json application-sbom.cdx.json deploy-ishikawa \
   inspect-native-prerequisites ishikawa-v1.3.1.tar.gz \
@@ -74,7 +75,7 @@ trap 'exit 143' TERM
 
 printf '%s\n' \
   ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS README.md RUNTIME_LICENSES.md \
-  RUNTIME_README.md RUNTIME_SECURITY.md application-release.json \
+  RUNTIME_README.md RUNTIME_SECURITY.md SECURITY_REVIEW.md application-release.json \
   application-license.json application-sbom.cdx.json PACKAGE_MANIFEST.json \
   deployment-package-receipt.json \
   deploy-ishikawa inspect-native-prerequisites \
@@ -145,6 +146,7 @@ python3 -B - "$image_identity" "$carry_root/runtime-build-receipt.json" \
   "$carry_root/application-sbom.cdx.json" "$carry_root/application-license.json" \
   "$carry_root/runtime-sbom.cdx.json" "$carry_root/runtime-licenses.json" \
   "$package_receipt" "$carry_root/application-release.json" \
+  "$carry_root/SECURITY_REVIEW.md" \
   "$application_archive" "$image_archive" <<'PY' \
   || fail identity_record_invalid
 import hashlib
@@ -156,7 +158,7 @@ from pathlib import Path
 
 (identity_path, build_receipt_path, application_sbom_path, application_license_path,
  runtime_sbom_path, runtime_licenses_path, receipt_path, application_release_path,
- application_path, image_path) = map(Path, sys.argv[1:])
+ security_review_path, application_path, image_path) = map(Path, sys.argv[1:])
 identity = json.loads(identity_path.read_text(encoding="utf-8"))
 build_receipt = json.loads(build_receipt_path.read_text(encoding="utf-8"))
 application_sbom = json.loads(application_sbom_path.read_text(encoding="utf-8"))
@@ -348,6 +350,7 @@ expected_receipt = {
     "image_reference": expected_identity["image_reference"],
     "platform": "linux/amd64",
     "production_runtime": "pass",
+    "security_review_sha256": digest(security_review_path),
     "schema": "ishikawa.deployment-package-receipt.v1",
 }
 if any(receipt.get(key) != value for key, value in expected_receipt.items()):
@@ -356,6 +359,12 @@ review_states = {
     "assembled_pending_security_inventory_and_independent_review": {
         "independent_final_review": "pending",
         "security_review": "pending_complete_exact_artifact_review",
+        "stable_handoff": False,
+        "target_inventory": "pending",
+    },
+    "assembled_pending_target_inventory_and_independent_review": {
+        "independent_final_review": "pending",
+        "security_review": "pass",
         "stable_handoff": False,
         "target_inventory": "pending",
     },

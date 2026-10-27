@@ -322,15 +322,91 @@ package-manager-free runtime. The prior candidate remains intact and
 non-installable as historical evidence; it is not a carry candidate. See
 `deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`.
 
+Script 13's first attended run stopped before service mutation: the accepted
+previous container was running, but the original compound image check could not
+prove both required recreatable image objects and did not identify which image
+check failed. Both exact archives remain preserved locally. Script 13 now
+resolves the checksum-bound previous archive, transfers it with the corrected
+archive for run/rollback actions, checks target transfer and Docker-storage
+capacity, loads the previous archive first and corrected archive last when
+restoration is needed, and verifies both image IDs plus the corrected canonical
+tag before touching the production web container. The target harness
+passes image reuse/restoration, missing and bad archive, low capacity, both
+load failures, both post-load identity failures, production switch,
+acceptance, rollback, automatic restoration, layout/path, consumer, and image
+retirement branches. The wrapper harness passes archive capacity, both transfer
+failures, transferred checksum refusal, lifecycle, evidence recovery,
+publication, target/receipt failure, signal, and remote cleanup branches. The
+complete Script 12 target and wrapper harnesses also pass after this correction.
+
+Script 13 subsequently passed and the operator accepted the corrected
+production UI. Its final receipts bind the unchanged application, corrected
+runtime, 60/60 frontier result, production ports, unchanged Retrieval API,
+PostgreSQL, database, schema, and corpus, disabled boot posture, and safe
+retirement of the superseded image.
+
+Script 14 now implements the corrected local carry reassembly. It requires the
+complete Script 12 and Script 13 lifecycle, exact corrected scan and durable
+security disposition, exact application/runtime identities, frozen decisions,
+capacity, package-language and secret scans, a classified 26-file manifest,
+complete checksums, and independent portable verification. Its isolated
+harness covers every success, rerun, supersession, capacity, copy,
+record-generation, identity, checksum, terminology, security-evidence,
+security-contract, and secret-refusal branch. The portable deployment harness
+also passes the corrected runtime identity and security-record contract across
+verification, install, configure, schema, lifecycle, removal, replay refusal,
+candidate refusal, and failure cleanup.
+
+The first real corrected Script 14 assembly passed and published a verified
+26-file review-pending candidate while preserving the verified superseded
+candidate. The required post-run upstream audit then found two target-inventory
+foot traps before any Tech contact: apt health depended on output wording
+instead of command status, and the inspector omitted the selected Gemma/Nomic
+listeners plus an operator-visible terminal result. The bounded correction
+now captures apt status directly, verifies the package before inventory,
+records all five ports, target paths/units/capacity, Docker and PostgreSQL
+facts, optional protected-source usability, and emits staged progress with one
+standalone result. Direct and attended-sudo Docker/PostgreSQL inspection,
+inaccessible-runtime capture, apt-failure capture, checksums, collision, and
+invalid-source refusal pass end to end. The corrected Script 14 rerun then
+passed, preserved the prior verified candidate, and published the exact
+168,528,633-byte, 26-file review-pending package.
+
+The later operator-run Tech inventory used the selected web `3384` and
+Retrieval API `8384` ports and made no target mutation. Review of that handoff
+found that the portable deployment defaults and command sheet still named the
+generic application ports `3000` and `1384`. Installation had not run. The
+bounded correction changed only the portable entrypoint, inventory helper,
+operator sheet, generated manifest, and checksums. The entrypoint now defaults
+to `3384`/`8384`, retains explicit reviewed install overrides, and runs
+lifecycle actions from installed YAML without reimposing a port value. Default
+installation, explicit overrides, inventory, schema, lifecycle, removal,
+failure cleanup, candidate refusal, carry-builder, stack, release-boundary,
+and independent checksum verification pass end to end. Script 14 then
+published the corrected 168,530,714-byte, 26-file review-pending package. Its
+controlling identities
+are:
+
+- assembly report SHA-256:
+  `962de5c675a4e97fc529db343c3df9dcf80d97dc8f6d241ba41e712628210f4d`;
+- package-manifest SHA-256:
+  `db4f779c218cf541dad777abad7805b4e35d2b3b07c027918dcf5123ddc20b99`;
+- package-receipt SHA-256:
+  `49e4e2a6bd9ce916a0b66ff8d74abda8a3d061a3a140a1e2e9bbadd27f5a9ef4`;
+- complete checksum-manifest SHA-256:
+  `f231037bf039906b1c28c4f5b0da2c2be154c1e22a099a23824f52832a46e74c`;
+  and
+- carried inventory-helper SHA-256:
+  `61112f68ffda972ac7486a4cbbb360dfd03adf5fd132d1cfad8296defbbe0e21`.
+
+The accepted application and corrected runtime archive identities remain
+unchanged.
+
 The remaining ordered gates are:
 
-1. run and accept Script 12 against the exact corrected runtime, then clean up
-   only its isolated qualification candidate;
-2. promote the accepted corrected runtime on EmceeDanko and reassemble the
-   carry from its new exact lifecycle evidence;
-3. accept the read-only Tech inventory and resolve any required offline native
+1. accept the read-only Tech inventory and resolve any required offline native
    prerequisite payload;
-4. complete independent review and atomically promote the exact carry bytes to
+2. complete independent review and atomically promote the exact carry bytes to
    the stable handoff.
 
 Current disposition:

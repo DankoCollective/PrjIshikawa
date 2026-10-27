@@ -44,10 +44,12 @@ mock_state="$test_root/mock-state"
 mkdir -p -- "$carry" "$home/Documents" "$test_root/bin" "$test_root/tmp" \
   "$mock_state" "$test_root/application/ishikawa-v1.3.1/application/payload/application/python/ishikawa" \
   "$test_root/application/ishikawa-v1.3.1/application/payload/config" \
+  "$test_root/application/ishikawa-v1.3.1/application/payload/docs" \
   "$test_root/application/ishikawa-v1.3.1/application/payload/scripts" \
   "$test_root/application/ishikawa-v1.3.1/application/payload/systemd" \
   "$test_root/application/ishikawa-v1.3.1/database"
 cp -- "$repo_root/deployment/carry/README.md" "$carry/README.md"
+cp -- "$repo_root/deployment/carry/SECURITY_REVIEW.md" "$carry/SECURITY_REVIEW.md"
 cp -- "$repo_root/deployment/carry/deploy-ishikawa" "$carry/deploy-ishikawa"
 cp -- "$repo_root/deployment/carry/verify-deployment" "$carry/verify-deployment"
 
@@ -108,6 +110,11 @@ schema_version: 1
 nomic: {embedding_endpoint_url: 'http://127.0.0.1:8001/v1/embeddings', tokenization_endpoint_url: 'http://127.0.0.1:8001/tokenize'}
 postgresql: {database_name: rag_catalog}
 YAML
+cat >"$test_root/application/ishikawa-v1.3.1/application/payload/docs/COMMAND_SHEET.md" <<'DOC'
+Web: http://127.0.0.1:3000
+Retrieval: http://127.0.0.1:1384/ready
+Do not expose ports `3000`, `1384`, or `5432` beyond loopback.
+DOC
 
 scripts="$test_root/application/ishikawa-v1.3.1/application/payload/scripts"
 cat >"$scripts/ishikawa-retrieval-api" <<'MOCK'
@@ -163,26 +170,32 @@ tar -cf "$carry/node-next-runtime-amd64.tar" -C "$test_root/image" manifest.json
 image_sha="$(sha256sum "$carry/node-next-runtime-amd64.tar" | awk '{print $1}')"
 application_sha="$(sha256sum "$carry/ishikawa-v1.3.1.tar.gz" | awk '{print $1}')"
 printf '%s\n' \
-  '{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"component":{"properties":[{"name":"oci:image:config-digest","value":"sha256:'"$config_hex"'"}]}},"components":[{"name":"node","version":"24.22.1","licenses":[{"license":{"id":"MIT"}}]},{"name":"npm","version":"11.19.1","licenses":[{"license":{"id":"Artistic-2.0"}}]},{"name":"yarn","version":"1.22.22","licenses":[{"license":{"id":"BSD-2-Clause"}}]}]}' \
+  '{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"component":{"properties":[{"name":"oci:image:config-digest","value":"sha256:'"$config_hex"'"}]}},"components":[{"name":"node","version":"24.22.1","licenses":[{"license":{"id":"MIT"}}]}]}' \
   >"$carry/runtime-sbom.cdx.json"
 printf '%s\n' \
-  '{"schema":"node-runtime-license-inventory.v1","runtime_tools":[{"name":"node","version":"24.22.1","license":"MIT","license_file":"/usr/local/LICENSE","license_sha256":"'"$(printf '%064d' 1)"'"},{"name":"npm","version":"11.19.1","license":"Artistic-2.0","license_file":"/usr/local/lib/node_modules/npm/LICENSE","license_sha256":"'"$(printf '%064d' 2)"'"},{"name":"yarn","version":"1.22.22","license":"BSD-2-Clause","license_file":"/opt/yarn-v1.22.22/LICENSE","license_sha256":"'"$(printf '%064d' 3)"'"}]}' \
+  '{"schema":"node-runtime-license-inventory.v2","build_tools":[{"name":"npm","version":"11.21.1","archive_sha256":"dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b","base_bundled_copy_executed":false,"retained_in_runtime":false}],"javascript_packages":[],"operating_system_packages":[],"runtime_tools":[{"name":"node","version":"24.22.1","license":"MIT","license_file":"/usr/local/LICENSE","license_sha256":"'"$(printf '%064d' 1)"'"}]}' \
   >"$carry/runtime-licenses.json"
 runtime_sbom_sha="$(sha256sum "$carry/runtime-sbom.cdx.json" | awk '{print $1}')"
 runtime_licenses_sha="$(sha256sum "$carry/runtime-licenses.json" | awk '{print $1}')"
+security_review_sha="$(sha256sum "$carry/SECURITY_REVIEW.md" | awk '{print $1}')"
 python3 -B - "$carry/runtime-image-identity.json" \
   "$carry/deployment-package-receipt.json" "$carry/application-release.json" \
-  "$image_sha" "$application_sha" "$config_hex" "$history_sha" <<'PY'
+  "$image_sha" "$application_sha" "$config_hex" "$history_sha" \
+  "$security_review_sha" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-identity_path, receipt_path, application_release_path, image_sha, application_sha, config_hex, history_sha = sys.argv[1:]
+identity_path, receipt_path, application_release_path, image_sha, application_sha, config_hex, history_sha, security_review_sha = sys.argv[1:]
 reference = "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64"
 identity = {
     "application_in_image": False,
     "archive_sha256": image_sha,
     "architecture": "amd64",
+    "base_bundled_npm_executed": False,
+    "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
     "config_digest": "sha256:" + config_hex,
     "generated_next_in_image": False,
     "history_sha256": history_sha,
@@ -190,12 +203,13 @@ identity = {
     "image_reference": reference,
     "next": "16.4.3",
     "node": "24.22.1",
-    "npm": "11.19.1",
     "platform": "linux/amd64",
     "react": "19.2.9",
     "react_dom": "19.2.9",
-    "schema": "node-next-runtime-image.v1",
-    "yarn": "1.22.22",
+    "runtime_npm": False,
+    "runtime_yarn": False,
+    "schema": "node-next-runtime-image.v3",
+    "tzdata": "2026e-0+deb12u1",
 }
 receipt = {
     "application_archive_sha256": application_sha,
@@ -214,6 +228,7 @@ receipt = {
     "release_state": "deployment_ready",
     "schema": "ishikawa.deployment-package-receipt.v1",
     "security_review": "pass",
+    "security_review_sha256": security_review_sha,
     "stable_handoff": True,
     "target_inventory": "approved",
 }
@@ -250,14 +265,21 @@ from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
     "archive_sha256": sys.argv[2],
     "architecture": "amd64",
+    "base_bundled_npm_executed": False,
+    "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
     "config_digest": "sha256:" + sys.argv[3],
     "history_sha256": sys.argv[4],
     "image_id": "sha256:" + "0" * 64,
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "platform": "linux/amd64",
+    "runtime_npm": False,
+    "runtime_yarn": False,
     "sbom_sha256": sys.argv[5],
     "licenses_sha256": sys.argv[6],
-    "schema": "node-next-runtime-build-receipt.v1",
+    "schema": "node-next-runtime-build-receipt.v3",
+    "tzdata": "2026e-0+deb12u1",
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
 printf 'FROM scratch\n' >"$carry/runtime-Dockerfile"
@@ -271,9 +293,20 @@ cat >"$carry/inspect-native-prerequisites" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 output=''
+postgresql_port=''
+retrieval_port=''
+web_port=''
+gemma_port=''
+nomic_port=''
 while (( $# > 0 )); do
   case "$1" in
     --output-dir) output="${2:-}"; shift 2 ;;
+    --postgresql-port) postgresql_port="${2:-}"; shift 2 ;;
+    --retrieval-port) retrieval_port="${2:-}"; shift 2 ;;
+    --web-port) web_port="${2:-}"; shift 2 ;;
+    --gemma-port) gemma_port="${2:-}"; shift 2 ;;
+    --nomic-port) nomic_port="${2:-}"; shift 2 ;;
+    --use-sudo-inspection) shift ;;
     *) shift 2 ;;
   esac
 done
@@ -286,13 +319,20 @@ python_yaml_available=true
 python_psycopg_available=true
 psql_version=16.10
 DATA
+printf '%s\n' \
+  "postgresql_port=$postgresql_port" \
+  "retrieval_port=$retrieval_port" \
+  "web_port=$web_port" \
+  "gemma_port=$gemma_port" \
+  "nomic_port=$nomic_port" >>"$output/host-summary.env"
 printf 'package\tinstalled_version\tcandidate_version\tarchitecture\tsource\tfilename\tsha256\tsize\tpolicy_sha256\n' >"$output/package-inventory.tsv"
 for package in python3 python3-yaml python3-psycopg poppler-utils postgresql-common \
   postgresql-client-16 postgresql-16 postgresql-16-pgvector libpq5; do
   printf '%s\t1\t1\tamd64\tnone\tnone\tnone\tnone\tnone\n' "$package" \
     >>"$output/package-inventory.tsv"
 done
-printf 'ishikawa_native_prerequisite_inventory=pass;output_dir=%s\n' "$output"
+printf '[SUMMARY] state=pass;output_dir=%s;mutation=false\n' "$output"
+printf '\nSCRIPT RESULT\nishikawa_native_prerequisite_inventory=pass\n'
 MOCK
 chmod 0755 "$carry/"{deploy-ishikawa,inspect-native-prerequisites,verify-deployment}
 
@@ -460,6 +500,20 @@ verify_output="$(bash "$deploy" verify 2>&1)" || fail verify_failed
 grep -Fq 'ishikawa_deployment_verification=pass;' <<<"$verify_output" \
   || fail verify_marker_missing
 
+mkdir -- "$test_root/protected-source"
+inventory_output="$(bash "$deploy" inventory \
+  --postgresql-port 55432 --retrieval-port 11384 --web-port 13000 \
+  --gemma-port 18000 --nomic-port 18001 \
+  --protected-source-root "$test_root/protected-source" \
+  --use-sudo-inspection \
+  --output-dir "$test_root/tmp/operator-inventory" 2>&1)" \
+  || fail inventory_failed
+grep -Fxq 'ishikawa_native_prerequisite_inventory=pass' <<<"$inventory_output" \
+  || fail inventory_marker_missing
+[[ -f "$test_root/tmp/operator-inventory/host-summary.env" \
+    && -f "$test_root/tmp/operator-inventory/package-inventory.tsv" ]] \
+  || fail inventory_evidence_missing
+
 cp -- "$carry/deployment-package-receipt.json" "$test_root/deployment-package-receipt.json"
 python3 -B - "$carry/deployment-package-receipt.json" <<'PY'
 import json
@@ -481,11 +535,64 @@ grep -Fxq 'ishikawa_deployment_verification=blocked;reason=identity_record_inval
 mv -- "$test_root/deployment-package-receipt.json" "$carry/deployment-package-receipt.json"
 write_manifest
 
+default_install_output="$(bash "$deploy" install 2>&1)" \
+  || fail default_install_failed
+grep -Fq 'ishikawa_deployment=install;state=pass;' <<<"$default_install_output" \
+  || fail default_install_marker_missing
+default_inventory_path="$(sed -n 's/.*;inventory=\([^;]*\);boot_enabled=.*/\1/p' \
+  <<<"$default_install_output")"
+[[ -n "$default_inventory_path" && -f "$default_inventory_path/host-summary.env" ]] \
+  || fail default_install_inventory_missing
+for expected in postgresql_port=5432 retrieval_port=8384 web_port=3384 \
+  gemma_port=8000 nomic_port=8001; do
+  grep -Fxq "$expected" "$default_inventory_path/host-summary.env" \
+    || fail default_install_inventory_port_invalid
+done
+python3 -B - "$home/Documents/Ishikawa/config/deployment.yaml" <<'PY' \
+  || fail default_configured_ports_invalid
+import sys
+from pathlib import Path
+import yaml
+deployment = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert deployment["postgresql"]["port"] == 5432
+assert deployment["retrieval"]["port"] == 8384
+assert deployment["web"]["port"] == 3384
+assert deployment["web"]["retrieval_base_url"] == "http://127.0.0.1:8384"
+PY
+grep -Fq 'Web: http://127.0.0.1:3384' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail default_operator_web_port_invalid
+grep -Fq 'Retrieval: http://127.0.0.1:8384/ready' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail default_operator_retrieval_port_invalid
+grep -Fq 'ports `3384`, `8384`, or `5432`' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail default_operator_port_warning_invalid
+if grep -ERn '127\.0\.0\.1:(3000|1384)' \
+    "$home/Documents/Ishikawa/docs" >/dev/null; then
+  fail default_operator_stale_port_found
+fi
+default_remove_output="$(bash "$deploy" remove --confirm-empty-installation 2>&1)" \
+  || fail default_remove_failed
+grep -Fq 'ishikawa_deployment=remove;state=application_removed;' \
+  <<<"$default_remove_output" || fail default_remove_marker_missing
+[[ ! -e "$home/Documents/Ishikawa" && -f "$mock_state/image" ]] \
+  || fail default_remove_boundary_invalid
+
 install_output="$(bash "$deploy" install \
   --postgresql-port 55432 --retrieval-port 11384 --web-port 13000 \
   --gemma-port 18000 --nomic-port 18001 2>&1)" || fail install_failed
 grep -Fq 'ishikawa_deployment=install;state=pass;' <<<"$install_output" \
   || fail install_marker_missing
+override_inventory_path="$(sed -n 's/.*;inventory=\([^;]*\);boot_enabled=.*/\1/p' \
+  <<<"$install_output")"
+[[ -n "$override_inventory_path" && -f "$override_inventory_path/host-summary.env" ]] \
+  || fail override_install_inventory_missing
+for expected in postgresql_port=55432 retrieval_port=11384 web_port=13000 \
+  gemma_port=18000 nomic_port=18001; do
+  grep -Fxq "$expected" "$override_inventory_path/host-summary.env" \
+    || fail override_install_inventory_port_invalid
+done
 [[ -d "$home/Documents/Ishikawa" && -f "$mock_state/image" ]] \
   || fail install_state_missing
 for unit in ishikawa-observability-retention.service \
@@ -507,6 +614,15 @@ assert runtime["gemma"]["chat_endpoint_url"].startswith("http://127.0.0.1:18000/
 assert runtime["nomic"]["embedding_endpoint_url"].startswith("http://127.0.0.1:18001/")
 assert ingestion["nomic"]["tokenization_endpoint_url"].startswith("http://127.0.0.1:18001/")
 PY
+grep -Fq 'Web: http://127.0.0.1:13000' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail override_operator_web_port_invalid
+grep -Fq 'Retrieval: http://127.0.0.1:11384/ready' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail override_operator_retrieval_port_invalid
+grep -Fq 'ports `13000`, `11384`, or `55432`' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail override_operator_port_warning_invalid
 
 export ISHIKAWA_POSTGRESQL_INGEST_PASSWORD='fixture-ingestion-password'
 export ISHIKAWA_POSTGRESQL_PASSWORD='fixture-retrieval-password'
@@ -550,6 +666,27 @@ grep -Fq 'ishikawa_deployment=remove;state=application_removed;' <<<"$remove_out
 [[ ! -e "$home/Documents/Ishikawa" && -f "$mock_state/image" ]] \
   || fail remove_boundary_invalid
 
+swapped_install_output="$(bash "$deploy" install \
+  --retrieval-port 3000 --web-port 1384 2>&1)" \
+  || fail swapped_port_install_failed
+grep -Fq 'ishikawa_deployment=install;state=pass;' <<<"$swapped_install_output" \
+  || fail swapped_port_install_marker_missing
+grep -Fq 'Web: http://127.0.0.1:1384' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail swapped_operator_web_port_invalid
+grep -Fq 'Retrieval: http://127.0.0.1:3000/ready' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail swapped_operator_retrieval_port_invalid
+grep -Fq 'ports `1384`, `3000`, or `5432`' \
+  "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+  || fail swapped_operator_port_warning_invalid
+swapped_remove_output="$(bash "$deploy" remove --confirm-empty-installation 2>&1)" \
+  || fail swapped_remove_failed
+grep -Fq 'ishikawa_deployment=remove;state=application_removed;' \
+  <<<"$swapped_remove_output" || fail swapped_remove_marker_missing
+[[ ! -e "$home/Documents/Ishikawa" && -f "$mock_state/image" ]] \
+  || fail swapped_remove_boundary_invalid
+
 rm -f -- "$mock_state/image"
 export MOCK_CONFIG_FAIL=true
 set +e
@@ -588,7 +725,7 @@ grep -Fxq 'reason=carry_not_final' <<<"$candidate_output" \
   || fail candidate_preflight_mutated
 
 printf '%s\n' \
-  'verify=pass;review_state_correlation=pass;inventory_preflight=pass;install=pass;configuration=pass;schema=pass' \
+  'verify=pass;review_state_correlation=pass;inventory_command=pass;inventory_preflight=pass;install=pass;configuration=pass;schema=pass' \
   'start_status_stop=pass;replay_refusal=pass;empty_removal=pass' \
   'schema_failure_cleanup=pass;failure_cleanup=pass;candidate_refusal_before_mutation=pass'
 printf '\nSCRIPT RESULT\nishikawa_deployment_entrypoint_test=pass\n'

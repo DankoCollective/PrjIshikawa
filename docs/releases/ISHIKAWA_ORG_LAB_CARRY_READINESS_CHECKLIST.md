@@ -437,12 +437,12 @@ The bounded local implementation now includes:
 - the permanent read-only-source production lifecycle with a bounded
   ephemeral `.next`, `next build`, `next start`, UID/GID identity, readiness,
   timeout, capacity, stop, and failure cleanup;
-- numbered Script 11 as the minimal carry-candidate assembler, with separate
-  application and image archives, exact runtime build receipt, combined
-  npm/Debian runtime SBOM,
-  runtime license inventory, a classified 25-file
+- numbered Script 14 as the corrected minimal carry-candidate assembler, with
+  separate application and image archives, exact runtime build receipt,
+  application/runtime SBOMs, runtime license inventory, portable exact-payload
+  security disposition, a classified 26-file
   purpose/consumer/mode/size/hash inventory, one complete checksum manifest,
-  portable verification, exact Script 09/10 lifecycle binding, and no stable
+  portable verification, exact Script 12/13 lifecycle binding, and no stable
   final promotion;
 - one portable deployment entrypoint for inventory, exact-image load,
   application/configuration/unit installation, clean least-privilege database
@@ -461,9 +461,9 @@ UI, EmceeDanko requalification and human acceptance, Tech inventory, protected
 corpus execution, independent final review, or stable-handoff promotion.
 
 Corrected Script 07 passed build, transfer, publication, independent return
-verification, and cleanup. Its evidence binds the exact archive tag, eight
+verification, and cleanup. Its evidence binds the exact archive tag,
 checksum-addressed layers, OCI config, canonical history, image ID, SBOM, and
-Node/npm/Yarn license records. Script 08 then passed all 486 native tests, all
+the Node runtime/build-tool license boundary. Script 08 then passed all 486 native tests, all
 17 JavaScript tests, the exact-image production build, two clean deterministic
 assemblies, fresh installation, application SBOM/license, verified return,
 atomic candidate publication, and cleanup. Evidence:
@@ -476,28 +476,44 @@ promotion passed with corpus-v3 unchanged and v1.3 rollback still available;
 the operator accepted the production-port UI and corrected Script 10 acceptance
 published its checksum-bound receipt. The action proved the exact application,
 image, production runtime, 60/60 frontier result, old-image retirement, and no
-database, schema, corpus, or boot-autostart mutation. Script 11 is implemented
-and its success, rerun, supersession, acceptance-gate, checksum, provenance,
-identity, package-manifest, portable-verification, terminology, artifact/tmp
-capacity, payload-copy failure, generated-record failure, mode-neutral
-storage, and cleanup branches pass in isolated end-to-end harnesses. Its
-corrected real invocation assembled and independently verified the exact
-25-file, 173,989,414-byte candidate. The package remains **NOT CARRY-READY**
-until the exact-artifact security review, approved Tech inventory, independent
-review, and stable publication pass.
+database, schema, corpus, or boot-autostart mutation. Script 12 subsequently
+requalified the corrected package-manager-free runtime with the unchanged
+application, two fresh production build/start containers, all dependency
+checks, 60/60 frontier cases, and attended UI acceptance. Script 13 promoted
+that exact image to production port `3384`, preserved the application,
+Retrieval API, PostgreSQL, schema, database, and corpus, and retired the
+superseded image only after proving it had no remaining container consumer.
 
-The first complete exact-image vulnerability scan is now durable under
-`local/reports/ishikawa-v1.3.1-security-review/` and summarized in
-`deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`. It opened a decision
-about build-time npm/Yarn retained in the runtime image; no package byte is
-being silently changed while that decision is open.
+The exact corrected-image vulnerability scan and itemized dispositions are
+durable under `local/reports/ishikawa-v1.3.1-security-review/` and
+`deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`. The scan records
+zero JavaScript findings and zero findings with an available fixed version;
+no unresolved action-required item remains for the exact corrected payload.
 
-The superseded vulnerable runtime archive and currently running pre-correction
-image remain operationally isolated and **carry-blocked** until a corrected
-image has passed scan, production requalification, and attended acceptance.
-Before stable carry publication, prove removal of the superseded image and
-archive from the carry lane and perform only identity-bounded build-residue
-cleanup; broad Docker pruning is prohibited.
+Script 14 is implemented and its success, rerun, supersession, acceptance,
+security-evidence, scan-contract, secret, checksum, provenance, identity,
+package-manifest, portable-verification, terminology, capacity, copy failure,
+generated-record failure, mode-neutral storage, and cleanup branches pass in
+isolated end-to-end harnesses. Its first real corrected assembly passed; the
+post-run audit then corrected the carried read-only inventory's apt-status,
+five-listener, host-surface, staged-progress, and standalone-result contracts.
+The corrected Script 14 rerun passed and published the independently verified
+26-file candidate. The later Tech inventory used the operator-selected web
+`3384` and Retrieval API `8384` ports and made no mutation. It exposed stale
+generic `3000`/`1384` defaults in the portable deployment support files before
+installation. The bounded correction left both primary payloads unchanged,
+set the portable defaults and operator commands to `3384`/`8384`, preserved
+explicit reviewed overrides, removed lifecycle dependence on command-level
+port constants, materialized selected ports in installed operator documents,
+propagated all five ports through install-time inventory, and passed
+default/override installation plus the complete
+inventory, schema, lifecycle, removal, failure, candidate-refusal, carry, and
+checksum suite. Script 14 republished the 26-file candidate bound to
+package-manifest SHA-256
+`db4f779c218cf541dad777abad7805b4e35d2b3b07c027918dcf5123ddc20b99`.
+The package remains **NOT CARRY-READY** until approved Tech inventory and any
+inventory-required native prerequisite resolution pass, an independent review
+passes, and the exact bytes are published to the stable handoff.
 
 The first Script 10 acceptance attempt then blocked safely because a container
 still referenced the superseded image. The bounded correction removes exact
@@ -674,7 +690,7 @@ disposition.
   Ishikawa source/build output after a clean load. Evidence:
   `deployment/evidence/ISHIKAWA_V1_3_1_RUNTIME_IMAGE_BUILD.md`, runtime archive
   SHA-256
-  `af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f`;
+  `b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1`;
   reviewer/date: Script 07 plus local independent artifact review, 2026-10-26.
 - [ ] **BUILD-04 — MUST.** Verify every sidecar against the artifact from the
   final directory and independently recompute every SHA-256. Evidence: ___;
@@ -810,4 +826,4 @@ disposition.
 
 ## Final status
 
-`carry_ready=blocked;reason=security_inventory_and_final_review_pending`
+`carry_ready=blocked;reason=target_inventory_and_final_review_pending`

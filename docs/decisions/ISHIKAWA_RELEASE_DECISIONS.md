@@ -30,9 +30,12 @@ V13-91 is a frozen EmceeDanko-only promotion decision. It does not change the
 frozen org-lab carry design: it replaces the
 active attended v1.3 application/runtime with the exact already-qualified and
 human-accepted v1.3.1 bytes while preserving the existing corpus-v3 database.
-Bounded Script 10 implementation is authorized. The already-approved Script
-09 cleanup remains the immediate operator action before promotion; target
-execution remains operator-attended through the reviewed command.
+V13-92 and V13-93 are also frozen: use the corrected package-manager-free
+runtime, requalify it without changing the application or corpus-v3 database,
+then promote only the accepted web runtime. Those actions completed with
+attended acceptance. Bounded corrected carry reassembly from the exact
+Script 12/13 evidence is authorized; Tech contact, stable publication, and
+target mutation remain separate later gates.
 
 ## Decisions
 
@@ -759,3 +762,41 @@ The corrected exact-archive scan has zero Node/JavaScript findings and zero
 records with an available fixed version. The remaining Debian records retain
 the itemized non-reachable or distribution dispositions in
 `deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md`.
+
+### V13-93 — In-place corrected web-runtime promotion
+
+Decision: Promote the Script 12-accepted corrected image by replacing only the
+v1.3.1 production web container on port `3384`. Keep the exact external
+application at `$HOME/Documents/Ishikawa-v1.3.1`, the Retrieval API on `8384`,
+PostgreSQL and corpus v3 on `5432`, credentials, configuration, and disabled
+boot posture unchanged. Do not move, rebuild, or restart those unchanged
+objects.
+
+Status: Frozen as the bounded, non-architectural continuation of V13-92 under
+operator direction on 2026-10-26.
+
+Recommendation: Before the switch, verify the complete Script 12 lifecycle,
+the accepted Script 10 production receipt, both exact image IDs, and the exact
+installed web path set and file bytes. Do not infer that a running container
+makes its image recreatable. Carry both exact checksum-bound runtime archives;
+when either image is absent, load the previous archive first and the corrected
+archive last, then prove both image IDs and the corrected canonical tag before
+the service switch. Retain the superseded runtime image as the pre-acceptance
+rollback source. Automatically recreate the previous web container if the
+corrected production build/start fails or the attended run is interrupted.
+After separate UI acceptance, refuse retirement while any container consumes
+the superseded image, then remove only that image. Require the subsequent carry
+assembly to bind Script 12 and Script 13 evidence.
+
+Reason/Evidence: Script 12 proved the corrected image with two fresh production
+build/start containers, 60/60 frontier cases, complete dependency readiness,
+and human UI acceptance on `3385`/`8385`, while leaving accepted production and
+corpus v3 unchanged. Its cleanup removed the isolated candidate. Replacing the
+web container alone is the smallest change that places those accepted bytes on
+production port `3384`; restarting or moving the unchanged API, database, or
+application would add risk without qualifying any additional changed byte. A
+first attended Script 13 preflight proved the running previous container but
+could not prove both required recreatable image objects; its original compound
+failure did not identify which image check failed. Exact restoration of both
+checksum-bound archives closes either image-availability gap without changing
+a running service or the frozen deployment architecture.

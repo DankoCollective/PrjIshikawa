@@ -13,10 +13,14 @@ target filesystem.
 
 The assembly lane publishes these files first as a local package candidate.
 `deployment-package-receipt.json` must say `deployment_ready` before install or
-schema initialization is permitted. Exact-artifact security review, approved
-destination inventory, independent review, and stable-handoff publication are
-separate gates; renaming or copying an assembled candidate does not satisfy
-them.
+schema initialization is permitted. Exact-artifact security review is complete;
+approved destination inventory, independent review, and stable-handoff
+publication are separate remaining gates. Renaming or copying an assembled
+candidate does not satisfy them.
+
+`SECURITY_REVIEW.md` records the completed exact-payload vulnerability
+disposition. The assembled candidate remains non-installable until destination
+inventory, independent review, and stable-handoff publication are complete.
 
 ## Requirements and boundaries
 
@@ -47,7 +51,30 @@ Capture the destination's read-only prerequisite inventory before installing:
 
 ```bash
 bash ./deploy-ishikawa inventory \
+  --postgresql-port 5432 \
+  --retrieval-port 8384 \
+  --web-port 3384 \
+  --gemma-port 8000 \
+  --nomic-port 8001 \
+  --use-sudo-inspection \
   --output-dir /tmp/ishikawa-native-prerequisite-inventory
+```
+
+The inventory normally completes in one to three minutes. With
+`--use-sudo-inspection` it prompts once for attended sudo authorization and
+uses that authorization only for read-only Docker and, when the selected
+PostgreSQL cluster is already online, catalog inspection. It does not start
+the cluster. If the protected
+corpus root is already known, add `--protected-source-root /absolute/path`;
+the evidence records only whether the root is usable, never its path or file
+names. The inventory checks all five selected listeners, package/runtime
+availability, apt/dpkg health, PostgreSQL cluster posture, existing Ishikawa
+paths and units, operator/user-manager posture, and bounded capacity in one
+pass. It finishes with:
+
+```text
+SCRIPT RESULT
+ishikawa_native_prerequisite_inventory=pass
 ```
 
 After the inventory is reviewed, install the image, application, and
@@ -57,10 +84,13 @@ boot-disabled user units:
 bash ./deploy-ishikawa install
 ```
 
-The installation root is always `$HOME/Documents/Ishikawa`. The default
-loopback ports are web `3000`, Retrieval API `1384`, PostgreSQL `5432`, Gemma
+The installation root is always `$HOME/Documents/Ishikawa`. The selected Tech
+loopback ports are web `3384`, Retrieval API `8384`, PostgreSQL `5432`, Gemma
 `8000`, and Nomic `8001`. Supply explicit port options to `inventory` and
-`install` when the reviewed destination topology differs.
+`install` when the reviewed destination topology differs. Installation writes
+the selected endpoints into the installed YAML and operator documents so the
+installed command sheet cannot direct the operator to the archive's generic
+source defaults.
 
 The install command completes every preflight before loading the image or
 creating the application root. It prints bounded stage markers and ends with:

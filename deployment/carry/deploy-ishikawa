@@ -36,11 +36,13 @@ usage() {
     '  --expected-hostname NAME' \
     '  --expected-os-version VERSION       Default: 26.04' \
     '  --postgresql-port PORT              Default: 5432' \
-    '  --retrieval-port PORT               Default: 1384' \
-    '  --web-port PORT                     Default: 3000' \
-    'Options for install only:' \
+    '  --retrieval-port PORT               Default: 8384' \
+    '  --web-port PORT                     Default: 3384' \
     '  --gemma-port PORT                   Default: 8000' \
-    '  --nomic-port PORT                   Default: 8001'
+    '  --nomic-port PORT                   Default: 8001' \
+    'Options for inventory only:' \
+    '  --protected-source-root PATH        Optional protected corpus root check' \
+    '  --use-sudo-inspection               Attended Docker/PostgreSQL inspection'
 }
 
 fail() {
@@ -58,6 +60,7 @@ fail() {
 (( $# >= 1 )) || { usage >&2; exit 2; }
 action="$1"
 shift
+readonly action_argument_count="$#"
 case "$action" in
   verify|inventory|install|install-schema|start|status|stop|remove) ;;
   --help|-h) usage; exit 0 ;;
@@ -95,22 +98,35 @@ fi
 expected_hostname=''
 expected_os_version='26.04'
 postgresql_port='5432'
-retrieval_port='1384'
-web_port='3000'
+retrieval_port='8384'
+web_port='3384'
 gemma_port='8000'
 nomic_port='8001'
 output_dir=''
+protected_source_root=''
+use_sudo_inspection=false
 confirm_remove=false
+expected_hostname_supplied=false
+expected_os_version_supplied=false
+postgresql_port_supplied=false
+retrieval_port_supplied=false
+web_port_supplied=false
+gemma_port_supplied=false
+nomic_port_supplied=false
+output_dir_supplied=false
+protected_source_root_supplied=false
 while (( $# > 0 )); do
   case "$1" in
-    --expected-hostname) expected_hostname="${2:-}"; shift 2 ;;
-    --expected-os-version) expected_os_version="${2:-}"; shift 2 ;;
-    --postgresql-port) postgresql_port="${2:-}"; shift 2 ;;
-    --retrieval-port) retrieval_port="${2:-}"; shift 2 ;;
-    --web-port) web_port="${2:-}"; shift 2 ;;
-    --gemma-port) gemma_port="${2:-}"; shift 2 ;;
-    --nomic-port) nomic_port="${2:-}"; shift 2 ;;
-    --output-dir) output_dir="${2:-}"; shift 2 ;;
+    --expected-hostname) expected_hostname="${2:-}"; expected_hostname_supplied=true; shift 2 ;;
+    --expected-os-version) expected_os_version="${2:-}"; expected_os_version_supplied=true; shift 2 ;;
+    --postgresql-port) postgresql_port="${2:-}"; postgresql_port_supplied=true; shift 2 ;;
+    --retrieval-port) retrieval_port="${2:-}"; retrieval_port_supplied=true; shift 2 ;;
+    --web-port) web_port="${2:-}"; web_port_supplied=true; shift 2 ;;
+    --gemma-port) gemma_port="${2:-}"; gemma_port_supplied=true; shift 2 ;;
+    --nomic-port) nomic_port="${2:-}"; nomic_port_supplied=true; shift 2 ;;
+    --protected-source-root) protected_source_root="${2:-}"; protected_source_root_supplied=true; shift 2 ;;
+    --use-sudo-inspection) use_sudo_inspection=true; shift ;;
+    --output-dir) output_dir="${2:-}"; output_dir_supplied=true; shift 2 ;;
     --confirm-empty-installation) confirm_remove=true; shift ;;
     *) fail arguments_invalid ;;
   esac
@@ -118,34 +134,40 @@ done
 
 if [[ "$action" == inventory ]]; then
   [[ -n "$output_dir" ]] || fail output_directory_required
-  [[ "$gemma_port" == 8000 && "$nomic_port" == 8001 && "$confirm_remove" == false ]] \
-    || fail arguments_invalid
+  [[ "$confirm_remove" == false ]] || fail arguments_invalid
+  printf '[VERIFY] state=start;mutation=false\n'
+  bash "$verifier" >/dev/null || fail carry_verification_failed
+  printf '[VERIFY] state=pass;release=v1.3.1;mutation=false\n'
   arguments=(
     --expected-os-version "$expected_os_version"
     --expected-architecture amd64
     --postgresql-port "$postgresql_port"
     --retrieval-port "$retrieval_port"
     --web-port "$web_port"
+    --gemma-port "$gemma_port"
+    --nomic-port "$nomic_port"
     --output-dir "$output_dir"
   )
   [[ -z "$expected_hostname" ]] || arguments+=(--expected-hostname "$expected_hostname")
+  [[ -z "$protected_source_root" ]] \
+    || arguments+=(--protected-source-root "$protected_source_root")
+  [[ "$use_sudo_inspection" == false ]] || arguments+=(--use-sudo-inspection)
   exec bash "$inspector" "${arguments[@]}"
 fi
 
 if [[ "$action" == start || "$action" == status || "$action" == stop ]]; then
-  [[ -z "$expected_hostname" && "$expected_os_version" == 26.04 \
-      && "$postgresql_port" == 5432 && "$retrieval_port" == 1384 \
-      && "$web_port" == 3000 && "$gemma_port" == 8000 && "$nomic_port" == 8001 \
-      && -z "$output_dir" && "$confirm_remove" == false ]] || fail arguments_invalid
+  (( action_argument_count == 0 )) || fail arguments_invalid
   [[ -x "$install_root/scripts/ishikawa-stack" ]] || fail application_not_installed
   exec "$install_root/scripts/ishikawa-stack" "$action"
 fi
 
 if [[ "$action" == install-schema ]]; then
-  [[ -z "$expected_hostname" && "$expected_os_version" == 26.04 \
-      && "$retrieval_port" == 1384 \
-      && "$web_port" == 3000 && "$gemma_port" == 8000 && "$nomic_port" == 8001 \
-      && -z "$output_dir" && "$confirm_remove" == false ]] || fail arguments_invalid
+  [[ "$expected_hostname_supplied" == false && "$expected_os_version_supplied" == false \
+      && "$retrieval_port_supplied" == false && "$web_port_supplied" == false \
+      && "$gemma_port_supplied" == false && "$nomic_port_supplied" == false \
+      && "$output_dir_supplied" == false && "$protected_source_root_supplied" == false \
+      && "$use_sudo_inspection" == false && "$confirm_remove" == false ]] \
+    || fail arguments_invalid
   [[ "$postgresql_port" =~ ^[0-9]+$ && "$postgresql_port" -ge 1 \
       && "$postgresql_port" -le 65535 ]] || fail port_invalid
   for required in bash chmod dropdb jq pg_isready psql python3 rm sleep sudo systemctl tar; do
@@ -294,10 +316,7 @@ PY
 fi
 
 if [[ "$action" == remove ]]; then
-  [[ "$confirm_remove" == true && -z "$expected_hostname" \
-      && "$expected_os_version" == 26.04 && "$postgresql_port" == 5432 \
-      && "$retrieval_port" == 1384 && "$web_port" == 3000 \
-      && "$gemma_port" == 8000 && "$nomic_port" == 8001 && -z "$output_dir" ]] \
+  [[ "$confirm_remove" == true && "$action_argument_count" == 1 ]] \
     || fail explicit_empty_removal_confirmation_required
   [[ -d "$install_root" && ! -L "$install_root" ]] || fail application_not_installed
   [[ "$(cd -- "$install_root" && pwd -P)" == "$(cd -- "$HOME/Documents" && pwd -P)/Ishikawa" ]] \
@@ -326,7 +345,9 @@ if [[ "$action" == remove ]]; then
 fi
 
 [[ "$action" == install ]] || fail arguments_invalid
-[[ -z "$output_dir" && "$confirm_remove" == false ]] || fail arguments_invalid
+[[ "$output_dir_supplied" == false && "$protected_source_root_supplied" == false \
+    && "$use_sudo_inspection" == false && "$confirm_remove" == false ]] \
+  || fail arguments_invalid
 (( EUID != 0 )) || fail non_root_operator_required
 [[ "$HOME" == /* && "$install_root" == "$HOME/Documents/Ishikawa" ]] \
   || fail operator_home_invalid
@@ -368,7 +389,8 @@ inventory_root="$inventory_parent/inventory"
 inventory_arguments=(
   --expected-os-version "$expected_os_version" --expected-architecture amd64
   --postgresql-port "$postgresql_port" --retrieval-port "$retrieval_port"
-  --web-port "$web_port" --output-dir "$inventory_root"
+  --web-port "$web_port" --gemma-port "$gemma_port" --nomic-port "$nomic_port"
+  --output-dir "$inventory_root"
 )
 [[ -z "$expected_hostname" ]] || inventory_arguments+=(--expected-hostname "$expected_hostname")
 bash "$inspector" "${inventory_arguments[@]}" >/dev/null \
@@ -470,6 +492,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$install_root/application/python" python3 
   "$install_root" "$postgresql_port" "$retrieval_port" "$web_port" \
   "$gemma_port" "$nomic_port" <<'PY' || fail configuration_install_failed
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -483,9 +506,13 @@ postgresql_port, retrieval_port, web_port, gemma_port, nomic_port = map(int, sys
 deployment_path = root / "config/deployment.yaml"
 runtime_path = root / "config/runtime_dependencies.yaml"
 ingestion_path = root / "config/ingestion_dependencies.yaml"
+docs_root = root / "docs"
 deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
 runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
 ingestion = yaml.safe_load(ingestion_path.read_text(encoding="utf-8"))
+source_postgresql_port = int(deployment["postgresql"]["port"])
+source_retrieval_port = int(deployment["retrieval"]["port"])
+source_web_port = int(deployment["web"]["port"])
 deployment["postgresql"]["port"] = postgresql_port
 deployment["retrieval"]["port"] = retrieval_port
 deployment["web"]["port"] = web_port
@@ -505,10 +532,44 @@ for path, value in ((deployment_path, deployment), (runtime_path, runtime), (ing
     temporary.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
     os.chmod(temporary, 0o644)
     os.replace(temporary, path)
+
+if not docs_root.is_dir() or docs_root.is_symlink():
+    raise SystemExit(1)
+endpoint_replacements = {
+    f"127.0.0.1:{source_web_port}": f"127.0.0.1:{web_port}",
+    f"127.0.0.1:{source_retrieval_port}": f"127.0.0.1:{retrieval_port}",
+}
+endpoint_pattern = re.compile(
+    "|".join(re.escape(source) for source in endpoint_replacements)
+)
+source_warning = (
+    f"ports `{source_web_port}`, `{source_retrieval_port}`, or `{source_postgresql_port}`"
+)
+target_warning = f"ports `{web_port}`, `{retrieval_port}`, or `{postgresql_port}`"
+replacement_counts = {source: 0 for source in endpoint_replacements}
+for path in sorted(docs_root.glob("*.md")):
+    if not path.is_file() or path.is_symlink():
+        raise SystemExit(1)
+    original = path.read_text(encoding="utf-8")
+    for source in endpoint_replacements:
+        replacement_counts[source] += original.count(source)
+    updated = endpoint_pattern.sub(
+        lambda match: endpoint_replacements[match.group(0)], original
+    ).replace(source_warning, target_warning)
+    if updated != original:
+        temporary = path.with_name(f".{path.name}.new")
+        temporary.write_text(updated, encoding="utf-8")
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+source_web_endpoint = f"127.0.0.1:{source_web_port}"
+source_retrieval_endpoint = f"127.0.0.1:{source_retrieval_port}"
+if replacement_counts[source_web_endpoint] == 0 \
+        or replacement_counts[source_retrieval_endpoint] == 0:
+    raise SystemExit(1)
 PY
 PYTHONDONTWRITEBYTECODE=1 "$install_root/scripts/ishikawa-retrieval-api" --check-config >/dev/null \
   || fail installed_configuration_invalid
-printf '[APPLICATION] state=pass;configuration=validated\n'
+printf '[APPLICATION] state=pass;configuration=validated;operator_ports=materialized\n'
 
 mkdir -p -- "$user_unit_root"
 for unit_name in "${unit_names[@]}"; do

@@ -6,8 +6,8 @@ set -Eeuo pipefail
 #   fixtures only.
 #
 # Mental model:
-#   Create exact-shaped application, image, qualification, and promotion
-#   fixtures; run the numbered assembler through success, rerun, supersession,
+#   Create exact-shaped application, corrected image, qualification, promotion,
+#   and security fixtures; run the active assembler through success, rerun, supersession,
 #   and adjacent refusal paths; then prove no fixture survives cleanup.
 #
 # Inputs or prerequisites:
@@ -19,8 +19,10 @@ set -Eeuo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
 readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
-readonly expected_runtime_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
-readonly expected_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
+readonly expected_runtime_sha256='b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1'
+readonly expected_image_id='sha256:6c93bcb5ed22de92420c4de4892eecdd08f1badc8b19e4d6f4488711f8f7a31a'
+readonly expected_config_digest='sha256:ccbae1b68ecf82121ce76080793cb7febdf1d6df1653995db02fc2f83233228f'
+readonly expected_scan_sha256='ce251960fdc20726a73fa49cc4f417761ee90c392592a3a5d7eeb6dae540971c'
 test_root="$(mktemp -d /tmp/ishikawa-carry-builder.XXXXXX)"
 real_df="$(command -v df)"
 real_cp="$(command -v cp)"
@@ -90,18 +92,16 @@ export PATH="$test_root/bin:$PATH"
 fixture="$test_root/repo"
 mkdir -p -- \
   "$fixture/deployment/scripts" "$fixture/deployment/carry" \
-  "$fixture/docs/decisions" \
-  "$fixture/Ishikawa/packaging/native-prerequisite-inventory" \
+  "$fixture/docs/decisions" "$fixture/deployment/evidence" \
+  "$fixture/local/reports/ishikawa-v1.3.1-security-review" \
   "$fixture/local/artifacts/ishikawa-v1.3.1-candidate-current" \
   "$fixture/local/artifacts/node-next-runtime-current" \
-  "$fixture/local/artifacts/emceedanko-v1.3.1-requalification-current" \
-  "$fixture/local/artifacts/emceedanko-v1.3.1-promotion-current"
-cp -- "$repo_root/deployment/scripts/11_assemble-ishikawa-v1.3.1-deployment-package.sh" \
+  "$fixture/local/artifacts/emceedanko-v1.3.1-runtime-requalification-current" \
+  "$fixture/local/artifacts/emceedanko-v1.3.1-corrected-runtime-promotion-current"
+cp -- "$repo_root/deployment/scripts/14_assemble-v1.3.1-corrected-deployment-package.sh" \
   "$fixture/deployment/scripts/"
 cp -- "$repo_root/deployment/carry/"* "$fixture/deployment/carry/"
 cp -- "$repo_root/docs/decisions/ISHIKAWA_RELEASE_DECISIONS.md" "$fixture/docs/decisions/"
-cp -- "$repo_root/Ishikawa/packaging/native-prerequisite-inventory/inspect-native-prerequisites" \
-  "$fixture/Ishikawa/packaging/native-prerequisite-inventory/"
 
 application="$fixture/local/artifacts/ishikawa-v1.3.1-candidate-current"
 mkdir -p -- "$test_root/application/ishikawa-v1.3.1"
@@ -154,6 +154,10 @@ Path(sys.argv[1]).write_text(json.dumps({
     "application_in_image": False,
     "archive_sha256": sys.argv[2],
     "architecture": "amd64",
+    "base_bundled_npm_executed": False,
+    "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
     "config_digest": "sha256:" + sys.argv[3],
     "generated_next_in_image": False,
     "history_sha256": sys.argv[4],
@@ -161,19 +165,20 @@ Path(sys.argv[1]).write_text(json.dumps({
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "next": "16.4.3",
     "node": "24.22.1",
-    "npm": "11.19.1",
     "platform": "linux/amd64",
     "react": "19.2.9",
     "react_dom": "19.2.9",
-    "schema": "node-next-runtime-image.v1",
-    "yarn": "1.22.22",
+    "runtime_npm": False,
+    "runtime_yarn": False,
+    "schema": "node-next-runtime-image.v3",
+    "tzdata": "2026e-0+deb12u1",
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
 printf '%s\n' \
-  '{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"component":{"properties":[{"name":"oci:image:config-digest","value":"sha256:'"$config_hex"'"}]}},"components":[{"name":"node","version":"24.22.1","licenses":[{"license":{"id":"MIT"}}]},{"name":"npm","version":"11.19.1","licenses":[{"license":{"id":"Artistic-2.0"}}]},{"name":"yarn","version":"1.22.22","licenses":[{"license":{"id":"BSD-2-Clause"}}]}]}' \
+  '{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"component":{"properties":[{"name":"oci:image:config-digest","value":"sha256:'"$config_hex"'"}]}},"components":[{"name":"node","version":"24.22.1","licenses":[{"license":{"id":"MIT"}}]}]}' \
   >"$runtime/sbom.cdx.json"
 printf '%s\n' \
-  '{"schema":"node-runtime-license-inventory.v1","runtime_tools":[{"name":"node","version":"24.22.1","license":"MIT","license_file":"/usr/local/LICENSE","license_sha256":"'"$(printf '%064d' 1)"'"},{"name":"npm","version":"11.19.1","license":"Artistic-2.0","license_file":"/usr/local/lib/node_modules/npm/LICENSE","license_sha256":"'"$(printf '%064d' 2)"'"},{"name":"yarn","version":"1.22.22","license":"BSD-2-Clause","license_file":"/opt/yarn-v1.22.22/LICENSE","license_sha256":"'"$(printf '%064d' 3)"'"}]}' \
+  '{"schema":"node-runtime-license-inventory.v2","build_tools":[{"name":"npm","version":"11.21.1","archive_sha256":"dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b","base_bundled_copy_executed":false,"retained_in_runtime":false}],"javascript_packages":[],"operating_system_packages":[],"runtime_tools":[{"name":"node","version":"24.22.1","license":"MIT","license_file":"/usr/local/LICENSE","license_sha256":"'"$(printf '%064d' 1)"'"}]}' \
   >"$runtime/licenses.json"
 sbom_sha="$(sha256sum "$runtime/sbom.cdx.json" | awk '{print $1}')"
 licenses_sha="$(sha256sum "$runtime/licenses.json" | awk '{print $1}')"
@@ -185,14 +190,21 @@ from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
     "archive_sha256": sys.argv[2],
     "architecture": "amd64",
+    "base_bundled_npm_executed": False,
+    "base_bundled_yarn_executed": False,
+    "build_npm": "11.21.1",
+    "build_npm_archive_sha256": "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b",
     "config_digest": "sha256:" + sys.argv[3],
     "history_sha256": sys.argv[4],
     "image_id": "sha256:" + "0" * 64,
     "image_reference": "node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64",
     "platform": "linux/amd64",
+    "runtime_npm": False,
+    "runtime_yarn": False,
     "sbom_sha256": sys.argv[5],
     "licenses_sha256": sys.argv[6],
-    "schema": "node-next-runtime-build-receipt.v1",
+    "schema": "node-next-runtime-build-receipt.v3",
+    "tzdata": "2026e-0+deb12u1",
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
 printf 'FROM scratch\n' >"$runtime/Dockerfile"
@@ -227,10 +239,10 @@ PY
     find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
   ) >SHA256SUMS
 )
-requalification="$fixture/local/artifacts/emceedanko-v1.3.1-requalification-current"
-promotion="$fixture/local/artifacts/emceedanko-v1.3.1-promotion-current"
+requalification="$fixture/local/artifacts/emceedanko-v1.3.1-runtime-requalification-current"
+promotion="$fixture/local/artifacts/emceedanko-v1.3.1-corrected-runtime-promotion-current"
 printf '%s\n' \
-  'schema=ishikawa.emceedanko-v1.3.1-qualification.v1' \
+  'schema=ishikawa.emceedanko-v1.3.1-runtime-qualification.v1' \
   "application_archive_sha256=$application_sha" \
   "runtime_archive_sha256=$image_sha" \
   "image_id=$fixture_image_id" \
@@ -238,7 +250,7 @@ printf '%s\n' \
   'frontier_cases=60/60' \
   >"$requalification/qualification-receipt.txt"
 printf '%s\n' \
-  'schema=ishikawa.emceedanko-v1.3.1-acceptance.v1' \
+  'schema=ishikawa.emceedanko-v1.3.1-runtime-qualification-acceptance.v1' \
   "application_archive_sha256=$application_sha" \
   "runtime_archive_sha256=$image_sha" \
   "image_id=$fixture_image_id" \
@@ -247,34 +259,57 @@ printf '%s\n' \
   'frontier_cases=60/60' \
   >"$requalification/acceptance-receipt.txt"
 printf '%s\n' \
-  'schema=ishikawa.emceedanko-v1.3.1-action.v1' \
+  'schema=ishikawa.emceedanko-v1.3.1-runtime-qualification-action.v1' \
+  'mode=cleanup' \
   'state=pass' \
-  "application_archive_sha256=$application_sha" \
+  'detail=candidate_removed=true' \
+  "image_id=$fixture_image_id" \
   >"$requalification/cleanup-receipt.txt"
 (
   cd -- "$requalification"
   sha256sum -- qualification-receipt.txt acceptance-receipt.txt cleanup-receipt.txt >SHA256SUMS
 )
 printf '%s\n' \
-  'schema=ishikawa.emceedanko-v1.3.1-promotion.v1' \
+  'schema=ishikawa.emceedanko-v1.3.1-runtime-promotion.v1' \
   "application_archive_sha256=$application_sha" \
   "runtime_archive_sha256=$image_sha" \
   "image_id=$fixture_image_id" \
   'production_build_start=pass' \
+  'human_ui_acceptance=pending' \
+  'application_mutated=false' \
+  'database_mutated=false' \
+  'boot_autostart=false' \
   >"$promotion/promotion-receipt.txt"
 (
   cd -- "$promotion"
   sha256sum -- promotion-receipt.txt >SHA256SUMS
 )
 
-builder="$fixture/deployment/scripts/11_assemble-ishikawa-v1.3.1-deployment-package.sh"
+printf '%s\n' \
+  '# Ishikawa v1.3.1 security review' \
+  "$image_sha" "$fixture_image_id" \
+  'production_promotion_and_acceptance=pass' \
+  >"$fixture/deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md"
+printf '%s\n' \
+  '# Ishikawa v1.3.1 security review' \
+  "$application_sha" "$image_sha" "$fixture_image_id" \
+  "sha256:$config_hex" \
+  >"$fixture/deployment/carry/SECURITY_REVIEW.md"
+printf '%s\n' \
+  '{"SchemaVersion":2,"ArtifactType":"container_image","Metadata":{"OS":{"Family":"debian","Name":"12.15"}},"Results":[{"Type":"debian","Vulnerabilities":[]},{"Type":"node-pkg","Vulnerabilities":[]}]}' \
+  >"$fixture/local/reports/ishikawa-v1.3.1-security-review/runtime-vulnerabilities-trivy-0.76.1-corrected-20261026.json"
+fixture_scan_sha="$(sha256sum "$fixture/local/reports/ishikawa-v1.3.1-security-review/runtime-vulnerabilities-trivy-0.76.1-corrected-20261026.json" | awk '{print $1}')"
+
+builder="$fixture/deployment/scripts/14_assemble-v1.3.1-corrected-deployment-package.sh"
 sed -i \
   -e "s/$expected_application_sha256/$application_sha/g" \
   -e "s/$expected_runtime_sha256/$image_sha/g" \
   -e "s/$expected_image_id/$fixture_image_id/g" \
+  -e "s/$expected_config_digest/sha256:$config_hex/g" \
+  -e "s/$expected_scan_sha256/$fixture_scan_sha/g" \
   "$builder"
 validation_output="$(bash "$builder" --validate-only 2>&1)" || fail validate_only_failed
-grep -Fxq 'ishikawa_deployment_package_assembly=ready' <<<"$validation_output" \
+grep -Fxq 'script_14_ishikawa_v1_3_1_corrected_package_assembly=ready' <<<"$validation_output" \
   || fail validate_ready_marker_missing
 
 set +e
@@ -282,18 +317,21 @@ acceptance_missing_output="$(bash "$builder" --run 2>&1)"
 acceptance_missing_status="$?"
 set -e
 (( acceptance_missing_status != 0 )) || fail missing_promotion_acceptance_reported_success
-grep -Fq 'reason=promotion_acceptance_missing' <<<"$acceptance_missing_output" \
+grep -Fq 'reason=script13_acceptance_invalid' <<<"$acceptance_missing_output" \
   || fail missing_promotion_acceptance_reason_missing
 printf '%s\n' \
-  'schema=ishikawa.emceedanko-v1.3.1-promotion-acceptance.v1' \
+  'schema=ishikawa.emceedanko-v1.3.1-runtime-promotion-acceptance.v1' \
   "application_archive_sha256=$application_sha" \
   "runtime_archive_sha256=$image_sha" \
   "image_id=$fixture_image_id" \
   'human_ui_acceptance=accepted' \
   'production_runtime=pass' \
   'frontier_cases=60/60' \
-  'superseded_v1_3_removed=true' \
-  'superseded_image_removed=true' \
+  'superseded_runtime_image_removed=true' \
+  'previous_runtime_rollback=retired' \
+  'application_mutated=false' \
+  'retrieval_api_restarted=false' \
+  'postgresql_restarted=false' \
   'database_mutated=false' \
   'schema_mutated=false' \
   'corpus_mutated=false' \
@@ -303,6 +341,72 @@ printf '%s\n' \
   cd -- "$promotion"
   sha256sum -- promotion-receipt.txt acceptance-receipt.txt >SHA256SUMS
 )
+
+portable_security="$fixture/deployment/carry/SECURITY_REVIEW.md"
+security_record="$fixture/deployment/evidence/ISHIKAWA_V1_3_1_SECURITY_REVIEW.md"
+security_scan="$fixture/local/reports/ishikawa-v1.3.1-security-review/runtime-vulnerabilities-trivy-0.76.1-corrected-20261026.json"
+cp -- "$portable_security" "$test_root/portable-security.md"
+rm -f -- "$portable_security"
+set +e
+security_source_output="$(bash "$builder" --run 2>&1)"
+security_source_status="$?"
+set -e
+(( security_source_status != 0 )) || fail missing_security_source_reported_success
+grep -Fq 'reason=carry_source_unsafe' <<<"$security_source_output" \
+  || fail missing_security_source_reason_missing
+mv -- "$test_root/portable-security.md" "$portable_security"
+
+cp -- "$security_scan" "$test_root/security-scan.json"
+printf '%s\n' altered-scan >"$security_scan"
+set +e
+security_hash_output="$(bash "$builder" --run 2>&1)"
+security_hash_status="$?"
+set -e
+(( security_hash_status != 0 )) || fail changed_security_scan_reported_success
+grep -Fq 'reason=security_scan_identity_mismatch' <<<"$security_hash_output" \
+  || fail changed_security_scan_reason_missing
+mv -- "$test_root/security-scan.json" "$security_scan"
+
+original_fixture_scan_sha="$fixture_scan_sha"
+printf '%s\n' \
+  '{"SchemaVersion":2,"ArtifactType":"container_image","Metadata":{"OS":{"Family":"debian","Name":"12.15"}},"Results":[{"Type":"debian","Vulnerabilities":[{"VulnerabilityID":"fixture","FixedVersion":"1"}]},{"Type":"node-pkg","Vulnerabilities":[]}]}' \
+  >"$security_scan"
+invalid_scan_sha="$(sha256sum "$security_scan" | awk '{print $1}')"
+sed -i "s/$original_fixture_scan_sha/$invalid_scan_sha/g" "$builder"
+set +e
+security_contract_output="$(bash "$builder" --run 2>&1)"
+security_contract_status="$?"
+set -e
+(( security_contract_status != 0 )) || fail invalid_security_contract_reported_success
+grep -Fq 'reason=security_scan_contract_invalid' <<<"$security_contract_output" \
+  || fail invalid_security_contract_reason_missing
+printf '%s\n' \
+  '{"SchemaVersion":2,"ArtifactType":"container_image","Metadata":{"OS":{"Family":"debian","Name":"12.15"}},"Results":[{"Type":"debian","Vulnerabilities":[]},{"Type":"node-pkg","Vulnerabilities":[]}]}' \
+  >"$security_scan"
+fixture_scan_sha="$(sha256sum "$security_scan" | awk '{print $1}')"
+sed -i "s/$invalid_scan_sha/$fixture_scan_sha/g" "$builder"
+
+cp -- "$security_record" "$test_root/security-record.md"
+sed -i '/production_promotion_and_acceptance=pass/d' "$security_record"
+set +e
+security_record_output="$(bash "$builder" --run 2>&1)"
+security_record_status="$?"
+set -e
+(( security_record_status != 0 )) || fail stale_security_record_reported_success
+grep -Fq 'reason=security_review_record_invalid' <<<"$security_record_output" \
+  || fail stale_security_record_reason_missing
+mv -- "$test_root/security-record.md" "$security_record"
+
+cp -- "$portable_security" "$test_root/portable-security.md"
+printf '%s\n' '-----BEGIN PRIVATE KEY-----' >>"$portable_security"
+set +e
+secret_shape_output="$(bash "$builder" --run 2>&1)"
+secret_shape_status="$?"
+set -e
+(( secret_shape_status != 0 )) || fail secret_shape_reported_success
+grep -Fq 'reason=secret_material_found' <<<"$secret_shape_output" \
+  || fail secret_shape_reason_missing
+mv -- "$test_root/portable-security.md" "$portable_security"
 
 set +e
 capacity_output="$(ISHIKAWA_TEST_LOW_CAPACITY=1 bash "$builder" --run 2>&1)"
@@ -340,7 +444,7 @@ grep -Fq 'reason=application_release_generation_failed' <<<"$record_output" \
 
 run_output="$(ISHIKAWA_TEST_CHMOD_FAIL=1 bash "$builder" --run 2>&1)" \
   || { printf '%s\n' "$run_output" >&2; fail success_path_failed; }
-grep -Fxq 'ishikawa_deployment_package_assembly=pass' <<<"$run_output" \
+grep -Fxq 'script_14_ishikawa_v1_3_1_corrected_package_assembly=pass' <<<"$run_output" \
   || fail success_marker_missing
 handoff="$fixture/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current"
 bash "$handoff/verify-deployment" >/dev/null || fail published_verification_failed
@@ -352,14 +456,14 @@ jq -e \
   || fail canonical_application_release_invalid
 jq -e \
   '.schema == "ishikawa.deployment-package-manifest.v1"
-   and .package_file_count == 25
-   and .payload_file_count == 23
+   and .package_file_count == 26
+   and .payload_file_count == 24
    and .primary_payloads == ["ishikawa-v1.3.1.tar.gz", "node-next-runtime-amd64.tar"]' \
   "$handoff/PACKAGE_MANIFEST.json" >/dev/null \
   || fail package_manifest_invalid
 
 second_output="$(bash "$builder" --run 2>&1)" || fail rerun_failed
-grep -Fxq 'ishikawa_deployment_package_assembly=pass' <<<"$second_output" \
+grep -Fxq 'script_14_ishikawa_v1_3_1_corrected_package_assembly=pass' <<<"$second_output" \
   || fail rerun_marker_missing
 [[ "$(find "$fixture/local/artifacts/superseded" -mindepth 1 -maxdepth 1 -type d | wc -l)" == 1 ]] \
   || fail superseded_count_invalid
@@ -371,7 +475,7 @@ checksum_output="$(bash "$builder" --run 2>&1)"
 checksum_status="$?"
 set -e
 (( checksum_status != 0 )) || fail checksum_failure_reported_success
-grep -Fq 'reason=application_handoff_checksum_failed' <<<"$checksum_output" \
+grep -Fq 'reason=handoff_checksum_failed' <<<"$checksum_output" \
   || fail checksum_failure_reason_missing
 mv -- "$test_root/application.sha256" "$application/ishikawa-v1.3.1.tar.gz.sha256"
 (
@@ -404,7 +508,7 @@ provenance_output="$(bash "$builder" --run 2>&1)"
 provenance_status="$?"
 set -e
 (( provenance_status != 0 )) || fail provenance_failure_reported_success
-grep -Fq 'reason=runtime_provenance_invalid' <<<"$provenance_output" \
+grep -Fq 'reason=portable_verification_failed' <<<"$provenance_output" \
   || fail provenance_failure_reason_missing
 mv -- "$test_root/provenance-image-identity.json" "$runtime/image-identity.json"
 mv -- "$test_root/provenance-build-receipt.json" "$runtime/build-receipt.json"
@@ -436,7 +540,7 @@ identity_output="$(bash "$builder" --run 2>&1)"
 identity_status="$?"
 set -e
 (( identity_status != 0 )) || fail identity_failure_reported_success
-grep -Fq 'reason=runtime_identity_invalid' <<<"$identity_output" \
+grep -Fq 'reason=runtime_identity_record_invalid' <<<"$identity_output" \
   || fail identity_failure_reason_missing
 mv -- "$test_root/image-identity.json" "$runtime/image-identity.json"
 (
@@ -452,11 +556,12 @@ language_output="$(bash "$builder" --run 2>&1)"
 language_status="$?"
 set -e
 (( language_status != 0 )) || fail language_failure_reported_success
-grep -Fq 'reason=publication_language_invalid' <<<"$language_output" \
+grep -Fq 'reason=package_language_invalid' <<<"$language_output" \
   || fail language_failure_reason_missing
 
 printf '%s\n' \
-  'acceptance_gate=pass;capacity_gate=pass;copy_failure=pass;record_failure=pass;mode_neutral_storage=pass' \
+  'acceptance_gate=pass;security_source_gate=pass;security_hash_gate=pass;security_contract_gate=pass;security_record_gate=pass;secret_scan_gate=pass' \
+  'capacity_gate=pass;copy_failure=pass;record_failure=pass;mode_neutral_storage=pass' \
   'success=pass;rerun=pass;supersession=pass;published_verification=pass' \
   'application_release=pass;classified_manifest=pass;checksum_refusal=pass' \
   'provenance_refusal=pass;identity_refusal=pass;terminology_refusal=pass'

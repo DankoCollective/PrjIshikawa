@@ -2,12 +2,13 @@
 
 ## Current disposition
 
-`corrected_runtime_scan=pass;remaining_gate=production_requalification_and_acceptance`
+`corrected_runtime_scan=pass;production_requalification_and_acceptance=pass;production_promotion_and_acceptance=pass;remaining_gate=carry_reassembly_and_final_review`
 
 The operator selected the smaller-runtime correction. Corrected Script 07
 completed on EmceeDanko and this review covers its exact returned archive. The
-previous assembled candidate and currently running pre-correction image remain
-carry-blocked; this scan does not promote or replace them.
+previous assembled candidate remains carry-blocked. Script 13 subsequently
+promoted and accepted the corrected runtime and retired the pre-correction
+image after proving it had no container consumers.
 
 ## Exact scan boundary
 
@@ -81,14 +82,48 @@ Moving from Bookworm slim to Trixie slim remains rejected: the same-day control
 scan retained 43 critical/high operating-system instances and would change the
 selected base without closing the privileged-code findings.
 
+## Corrected production requalification
+
+Script 12 bound the unchanged application to this exact corrected runtime on
+EmceeDanko, passed two fresh production build/start containers, passed all
+60/60 frontier cases, recorded attended UI acceptance, and removed only the
+isolated candidate. The accepted production application, Retrieval API,
+PostgreSQL cluster, corpus, and boot posture remained unchanged. Exact retained
+evidence SHA-256 identities are:
+
+- qualification report:
+  `da9a45651e76967b092c08acfd0c01518f3c2ec5808d039456608fe00abae4fa`;
+- qualification receipt:
+  `8849dd9f3544fe113b7db0c6e883b56b1470a7a4735251c0c88829814a382f2b`;
+- acceptance report:
+  `4b04fe5d675141a850caac854275fa89b05d76b18711aa4ff1b04896898df279`;
+- acceptance receipt:
+  `2659beb4420e2a67e19919f5766ef10fd66a82eb21be14757a8e72b22df50b10`;
+- cleanup report:
+  `d2d6673382681de424d93fcff12f174affbd02ea5f9444585abd1b9b1979053c`;
+- cleanup receipt:
+  `4e458ab6d6103d9a9b384876aa7a8c94bb63c9fa74d5fcae6878a499cf86c2ff`;
+  and
+- complete Script 12 evidence manifest:
+  `1c19a9a1941acf2682fa7424c3056f254adf2f2dd76c555495f538760b8e7ec6`.
+
+## Corrected production promotion
+
+Script 13 promoted the same exact corrected image to production port `3384`
+without replacing or restarting the application, Retrieval API, PostgreSQL, or
+corpus. Human UI acceptance passed, and the superseded runtime image was
+removed only after its consumer set was empty. The returned acceptance receipt
+SHA-256 is
+`abe406f6e55faa07ac922eca735732d890069553d7df2b9cf355bfc8438bb0f3`;
+the complete Script 13 evidence manifest verifies locally.
+
 ## Remaining gate
 
 The corrected artifact closes the action-required runtime-tool and timezone
-findings without changing the external-application architecture. It is not yet
-carry-ready. The unchanged application must be rebuilt/rebound to this exact
-image, the exact pair must pass production and frontier requalification on
-EmceeDanko, attended acceptance must be recorded, and only then may the
-superseded image/archive be removed and the carry candidate reassembled.
+findings without changing the external-application architecture. Production
+promotion and attended acceptance are complete. The exact carry must now be
+reassembled from the corrected archive and Script 12/13 evidence, then pass
+destination inventory, independent review, and stable-handoff publication.
 
 ## Primary sources
 

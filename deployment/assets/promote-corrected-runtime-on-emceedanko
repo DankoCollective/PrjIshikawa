@@ -1,0 +1,655 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Promote only the accepted corrected web-runtime image on EmceeDanko. The
+# external v1.3.1 application, Retrieval API, PostgreSQL cluster, corpus-v3
+# state, configuration, credentials, ports, and boot posture stay unchanged.
+
+readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
+readonly previous_runtime_archive_sha256='af95820f63798b39c6538e3f9b5653d47b07aed1d81625e2382485ff559eff3f'
+readonly previous_image_id='sha256:79f39435329920c9c834e55cf5e18528540220111ae2a35d779a86d0b539d298'
+readonly corrected_runtime_archive_sha256='b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1'
+readonly corrected_image_id='sha256:6c93bcb5ed22de92420c4de4892eecdd08f1badc8b19e4d6f4488711f8f7a31a'
+readonly corrected_image_reference='node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64'
+readonly application_root="$HOME/Documents/Ishikawa-v1.3.1"
+readonly qualification_root="$HOME/Documents/Ishikawa-v1.3.1-runtime-qualification"
+readonly production_container='ishikawa-v1.3.1-web'
+readonly qualification_container='ishikawa-v1.3.1-runtime-qualification-web'
+readonly ui_port=3384
+readonly retrieval_port=8384
+readonly postgresql_port=5432
+readonly web_tmpfs_bytes=536870912
+readonly promotion_receipt_rel='state/reports/runtime-promotion/emceedanko-v1.3.1-corrected-runtime-promotion.txt'
+readonly acceptance_receipt_rel='state/reports/runtime-promotion/emceedanko-v1.3.1-corrected-runtime-acceptance.txt'
+
+mode="${1:-}"
+shift || true
+payload_root=''
+result_path=''
+expected_hostname='EmceeDanko'
+expected_os_version='24.04'
+expected_architecture='amd64'
+expected_helper_sha256=''
+stage='argument_validation'
+complete=false
+mutation_started=false
+restoration_succeeded=false
+cleanup_failed=false
+docker_ready=false
+web_failure='none'
+image_preparation_mutated=false
+image_preparation_detail='not_started'
+acceptance_stage=''
+declare -a docker_command=(docker)
+
+usage() {
+  printf '%s\n' \
+    'Usage: promote-corrected-runtime-on-emceedanko --validate-only' \
+    '       promote-corrected-runtime-on-emceedanko {--run|--accept|--rollback}' \
+    '         --payload-root PATH --result-path PATH' \
+    '         --expected-hostname NAME --expected-os-version VERSION' \
+    '         --expected-architecture amd64 --expected-helper-sha256 SHA256'
+}
+
+emit() { printf '[%s] %s\n' "$1" "$2"; }
+
+write_action_result() {
+  local state="$1" reason="${2:-none}" detail="${3:-none}"
+  [[ -n "$result_path" ]] || return 0
+  {
+    printf 'schema=ishikawa.emceedanko-v1.3.1-runtime-promotion-action.v1\n'
+    printf 'mode=%s\nstate=%s\nreason=%s\ndetail=%s\n' \
+      "${mode#--}" "$state" "$reason" "$detail"
+    printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
+    printf 'previous_runtime_archive_sha256=%s\n' "$previous_runtime_archive_sha256"
+    printf 'previous_image_id=%s\n' "$previous_image_id"
+    printf 'runtime_archive_sha256=%s\nimage_id=%s\n' \
+      "$corrected_runtime_archive_sha256" "$corrected_image_id"
+    printf 'application_mutated=false\nretrieval_api_restarted=false\npostgresql_restarted=false\n'
+    printf 'database_mutated=false\nschema_mutated=false\ncorpus_mutated=false\nboot_autostart=false\n'
+  } >"$result_path"
+  chmod 0600 "$result_path"
+}
+
+http_status() {
+  curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --connect-timeout 2 --max-time 8 "$1" 2>/dev/null || printf 000
+}
+
+http_ready() { [[ "$(http_status "$1")" == 200 ]]; }
+
+wait_http() {
+  local url="$1" seconds="$2" label="$3" elapsed=0 next_heartbeat=15
+  while (( elapsed < seconds )); do
+    http_ready "$url" && return 0
+    sleep 1
+    elapsed=$((elapsed + 1))
+    if (( elapsed >= next_heartbeat )); then
+      emit "$label" "state=waiting;elapsed_seconds=$elapsed"
+      next_heartbeat=$((next_heartbeat + 15))
+    fi
+  done
+  return 1
+}
+
+port_listening() {
+  ss -H -ltn "( sport = :$1 )" 2>/dev/null | grep -q .
+}
+
+prepare_docker() {
+  [[ "$docker_ready" == true ]] && return 0
+  if ! docker info >/dev/null 2>&1; then
+    sudo -v >/dev/null || return 1
+    docker_command=(sudo docker)
+    "${docker_command[@]}" info >/dev/null 2>&1 || return 1
+  fi
+  docker_ready=true
+}
+
+image_architecture() {
+  "${docker_command[@]}" image inspect "$1" --format '{{.Architecture}}' 2>/dev/null || true
+}
+
+corrected_image_ready() {
+  [[ "$("${docker_command[@]}" image inspect "$corrected_image_reference" --format '{{.Id}}' 2>/dev/null || true)" == "$corrected_image_id" \
+      && "$(image_architecture "$corrected_image_id")" == amd64 ]]
+}
+
+previous_image_ready() {
+  [[ "$(image_architecture "$previous_image_id")" == amd64 ]]
+}
+
+prepare_exact_runtime_images() {
+  local docker_root available_bytes required_bytes=1073741824
+  local -a df_command=(df)
+  if previous_image_ready && corrected_image_ready; then
+    image_preparation_detail='both exact images were already available'
+    emit IMAGE 'state=pass;action=reuse;previous=exact;corrected=exact;canonical_reference=corrected'
+    return 0
+  fi
+  [[ -f "$payload_root/previous-node-next-runtime-amd64.tar" \
+      && ! -L "$payload_root/previous-node-next-runtime-amd64.tar" \
+      && -f "$payload_root/corrected-node-next-runtime-amd64.tar" \
+      && ! -L "$payload_root/corrected-node-next-runtime-amd64.tar" ]] \
+    || { image_preparation_detail='one or both transferred runtime archives are missing or linked'; return 10; }
+  [[ "$(sha256sum -- "$payload_root/previous-node-next-runtime-amd64.tar" | awk '{print $1}')" == "$previous_runtime_archive_sha256" ]] \
+    || { image_preparation_detail='the previous runtime archive checksum differs from the accepted identity'; return 11; }
+  [[ "$(sha256sum -- "$payload_root/corrected-node-next-runtime-amd64.tar" | awk '{print $1}')" == "$corrected_runtime_archive_sha256" ]] \
+    || { image_preparation_detail='the corrected runtime archive checksum differs from the qualified identity'; return 12; }
+  docker_root="$("${docker_command[@]}" info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+  [[ "$docker_root" == /* ]] \
+    || { image_preparation_detail='Docker did not report an accessible absolute data-root directory'; return 13; }
+  [[ "${docker_command[0]}" != sudo ]] || df_command=(sudo df)
+  available_bytes="$("${df_command[@]}" -PB1 "$docker_root" 2>/dev/null | awk 'NR == 2 {print $4}')"
+  [[ "$available_bytes" =~ ^[0-9]+$ && "$available_bytes" -ge "$required_bytes" ]] \
+    || { image_preparation_detail="Docker storage has ${available_bytes:-unknown} bytes available; $required_bytes are required"; return 14; }
+  emit IMAGE "state=start;action=restore_exact_images;docker_available_bytes=$available_bytes"
+  image_preparation_mutated=true
+  if ! "${docker_command[@]}" load --input "$payload_root/previous-node-next-runtime-amd64.tar" >/dev/null 2>&1; then
+    [[ "$(image_architecture "$corrected_image_id")" == amd64 ]] \
+      && "${docker_command[@]}" image tag "$corrected_image_id" "$corrected_image_reference" >/dev/null 2>&1 || true
+    image_preparation_detail='Docker could not load the checksum-verified previous runtime archive'
+    return 15
+  fi
+  if ! previous_image_ready; then
+    [[ "$(image_architecture "$corrected_image_id")" == amd64 ]] \
+      && "${docker_command[@]}" image tag "$corrected_image_id" "$corrected_image_reference" >/dev/null 2>&1 || true
+    image_preparation_detail='the loaded previous runtime did not resolve to its exact accepted image ID and AMD64 architecture'
+    return 16
+  fi
+  if ! "${docker_command[@]}" load --input "$payload_root/corrected-node-next-runtime-amd64.tar" >/dev/null 2>&1; then
+    [[ "$(image_architecture "$corrected_image_id")" == amd64 ]] \
+      && "${docker_command[@]}" image tag "$corrected_image_id" "$corrected_image_reference" >/dev/null 2>&1 || true
+    image_preparation_detail='Docker could not load the checksum-verified corrected runtime archive'
+    return 17
+  fi
+  if ! previous_image_ready || ! corrected_image_ready; then
+    [[ "$(image_architecture "$corrected_image_id")" == amd64 ]] \
+      && "${docker_command[@]}" image tag "$corrected_image_id" "$corrected_image_reference" >/dev/null 2>&1 || true
+    image_preparation_detail='post-load verification did not retain both exact AMD64 images with the canonical tag on the corrected image'
+    return 18
+  fi
+  image_preparation_detail='both exact runtime images were restored and the canonical tag resolves to the corrected image'
+  emit IMAGE 'state=pass;action=restored;previous=exact;corrected=exact;canonical_reference=corrected'
+}
+
+container_exists() {
+  "${docker_command[@]}" inspect "$1" >/dev/null 2>&1
+}
+
+container_running() {
+  [[ "$("${docker_command[@]}" inspect --format '{{.State.Running}}' "$1" 2>/dev/null || true)" == true ]]
+}
+
+container_image() {
+  "${docker_command[@]}" inspect --format '{{.Image}}' "$1" 2>/dev/null || true
+}
+
+container_contract_valid() {
+  local image_id="$1" operator_identity
+  operator_identity="$(id -u):$(id -g)"
+  [[ "$(container_image "$production_container")" == "$image_id" \
+      && "$("${docker_command[@]}" inspect --format '{{.Config.User}}' "$production_container" 2>/dev/null || true)" == "$operator_identity" \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$production_container" 2>/dev/null || true)" == true \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.NetworkMode}}' "$production_container" 2>/dev/null || true)" == host \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$production_container" 2>/dev/null || true)" == no \
+      && "$("${docker_command[@]}" inspect --format '{{.HostConfig.PidsLimit}}' "$production_container" 2>/dev/null || true)" == 512 \
+      && "$("${docker_command[@]}" inspect --format '{{json .HostConfig.CapDrop}}' "$production_container" 2>/dev/null || true)" == '["ALL"]' \
+      && "$("${docker_command[@]}" inspect --format '{{json .HostConfig.SecurityOpt}}' "$production_container" 2>/dev/null || true)" == '["no-new-privileges"]' \
+      && "$("${docker_command[@]}" inspect --format '{{index .HostConfig.Tmpfs "/opt/nextjs/.next"}}' "$production_container" 2>/dev/null || true)" == *"size=${web_tmpfs_bytes}"* ]]
+}
+
+remove_production_container() {
+  container_exists "$production_container" || return 0
+  if container_running "$production_container"; then
+    "${docker_command[@]}" stop --time 20 "$production_container" >/dev/null 2>&1 || return 1
+  fi
+  "${docker_command[@]}" rm --force "$production_container" >/dev/null 2>&1
+}
+
+web_configuration() {
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$application_root/application/python" \
+    python3 -B - "$application_root/config/product.yaml" <<'PY'
+import sys
+from pathlib import Path
+from ishikawa.product import validate_product_profile
+from ishikawa.yaml_loader import load_restricted_yaml
+
+profile = validate_product_profile(load_restricted_yaml(Path(sys.argv[1]), label="product profile"))
+print(profile.display_name)
+print(profile.browser_configuration_base64())
+PY
+}
+
+start_web() {
+  local image_id="$1" label="$2" values runtime_command started elapsed=0
+  local next_heartbeat=15 logs='' log_path operator_uid operator_gid
+  local -a config=()
+  web_failure='configuration'
+  values="$(web_configuration)" || return 1
+  mapfile -t config <<<"$values"
+  (( ${#config[@]} == 2 )) || return 1
+  runtime_command='
+set -eu
+mkdir -p -- "$HOME" "$TMPDIR"
+printf "[RUNTIME] stage=build;state=start\n"
+node_modules/.bin/next build
+test -f .next/BUILD_ID
+test -d .next/server
+printf "[RUNTIME] stage=build;state=pass\n"
+printf "[RUNTIME] stage=server;state=start\n"
+exec node_modules/.bin/next start --hostname "$1" --port "$2"
+'
+  operator_uid="$(id -u)"; operator_gid="$(id -g)"
+  mkdir -p -- "$application_root/state/logs"
+  log_path="$application_root/state/logs/runtime-promotion-${label}.log"
+  web_failure='container_create'
+  "${docker_command[@]}" run --detach --name "$production_container" --init \
+    --network host --read-only --restart no \
+    --security-opt no-new-privileges --cap-drop ALL --pids-limit 512 \
+    --user "$operator_uid:$operator_gid" \
+    --tmpfs "/opt/nextjs/.next:rw,nosuid,nodev,size=${web_tmpfs_bytes},mode=0700,uid=${operator_uid},gid=${operator_gid}" \
+    --env 'HOME=/opt/nextjs/.next/home' --env 'TMPDIR=/opt/nextjs/.next/tmp' \
+    --env 'TMP=/opt/nextjs/.next/tmp' --env 'TEMP=/opt/nextjs/.next/tmp' \
+    --env 'NEXT_TELEMETRY_DISABLED=1' --env 'NODE_ENV=production' \
+    --env "ISHIKAWA_PRODUCT_DISPLAY_NAME=${config[0]}" \
+    --env "ISHIKAWA_PRODUCT_UI_CONFIG_BASE64=${config[1]}" \
+    --env "ISHIKAWA_RETRIEVAL_BASE_URL=http://127.0.0.1:${retrieval_port}" \
+    --mount "type=bind,src=$application_root/application/web/app,dst=/opt/nextjs/app,readonly" \
+    --mount "type=bind,src=$application_root/application/web/components,dst=/opt/nextjs/components,readonly" \
+    --mount "type=bind,src=$application_root/application/web/lib,dst=/opt/nextjs/lib,readonly" \
+    --mount "type=bind,src=$application_root/application/web/public,dst=/opt/nextjs/public,readonly" \
+    --mount "type=bind,src=$application_root/application/web/package.json,dst=/opt/nextjs/package.json,readonly" \
+    --mount "type=bind,src=$application_root/application/web/next.config.mjs,dst=/opt/nextjs/next.config.mjs,readonly" \
+    "$image_id" sh -c "$runtime_command" runtime 127.0.0.1 "$ui_port" >/dev/null || return 1
+  started="$(date +%s)"
+  emit WEB "state=building;runtime=$label;elapsed_seconds=0"
+  web_failure='build_exit'
+  while (( elapsed < 300 )); do
+    logs="$("${docker_command[@]}" logs --tail 160 "$production_container" 2>&1 || true)"
+    printf '%s\n' "$logs" >"$log_path"
+    grep -Fxq '[RUNTIME] stage=build;state=pass' <<<"$logs" && break
+    container_running "$production_container" || return 1
+    sleep 1
+    elapsed=$(( $(date +%s) - started ))
+    if (( elapsed >= next_heartbeat )); then
+      emit WEB "state=building;runtime=$label;elapsed_seconds=$elapsed"
+      next_heartbeat=$((next_heartbeat + 15))
+    fi
+  done
+  web_failure='build_timeout'
+  grep -Fxq '[RUNTIME] stage=build;state=pass' <<<"$logs" || return 1
+  web_failure='liveness_timeout'
+  wait_http "http://127.0.0.1:${ui_port}/api/live" 160 WEB || return 1
+  web_failure='readiness_timeout'
+  wait_http "http://127.0.0.1:${ui_port}/api/ready" 120 WEB || return 1
+  web_failure='surface_http'
+  [[ "$(http_status "http://127.0.0.1:${ui_port}/")" == 200 \
+      && "$(http_status "http://127.0.0.1:${ui_port}/theme-init.js")" == 200 \
+      && "$(http_status "http://127.0.0.1:${ui_port}/api/dependencies")" == 200 ]] || return 1
+  web_failure='container_contract'
+  container_contract_valid "$image_id" || return 1
+  web_failure='none'
+}
+
+api_database_ready() {
+  [[ -d "$application_root" && ! -L "$application_root" ]] \
+    && pg_isready --quiet --host 127.0.0.1 --port "$postgresql_port" \
+    && http_ready "http://127.0.0.1:${retrieval_port}/ready"
+}
+
+runtime_ready() {
+  local image_id="$1"
+  api_database_ready \
+    && container_running "$production_container" \
+    && container_contract_valid "$image_id" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/live" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/ready" \
+    && http_ready "http://127.0.0.1:${ui_port}/" \
+    && http_ready "http://127.0.0.1:${ui_port}/theme-init.js" \
+    && http_ready "http://127.0.0.1:${ui_port}/api/dependencies"
+}
+
+check_boot_posture() {
+  [[ "$(systemctl --user is-enabled ishikawa-retrieval-api.service 2>/dev/null || true)" != enabled \
+      && "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled \
+      && "$(systemctl is-enabled postgresql@16-main.service 2>/dev/null || true)" != enabled ]]
+}
+
+promotion_receipt_valid() {
+  local receipt="$1"
+  [[ -f "$receipt" && ! -L "$receipt" ]] \
+    && grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-runtime-promotion.v1' "$receipt" \
+    && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt" \
+    && grep -Fxq "previous_image_id=$previous_image_id" "$receipt" \
+    && grep -Fxq "runtime_archive_sha256=$corrected_runtime_archive_sha256" "$receipt" \
+    && grep -Fxq "image_id=$corrected_image_id" "$receipt" \
+    && grep -Fxq 'production_build_start=pass' "$receipt" \
+    && grep -Fxq 'human_ui_acceptance=pending' "$receipt" \
+    && grep -Fxq 'previous_runtime_rollback=available' "$receipt" \
+    && grep -Fxq 'application_mutated=false' "$receipt" \
+    && grep -Fxq 'database_mutated=false' "$receipt" \
+    && grep -Fxq 'boot_autostart=false' "$receipt"
+}
+
+acceptance_receipt_valid() {
+  local receipt="$1"
+  [[ -f "$receipt" && ! -L "$receipt" ]] \
+    && grep -Fxq 'schema=ishikawa.emceedanko-v1.3.1-runtime-promotion-acceptance.v1' "$receipt" \
+    && grep -Fxq "application_archive_sha256=$expected_application_sha256" "$receipt" \
+    && grep -Fxq "runtime_archive_sha256=$corrected_runtime_archive_sha256" "$receipt" \
+    && grep -Fxq "image_id=$corrected_image_id" "$receipt" \
+    && grep -Fxq 'human_ui_acceptance=accepted' "$receipt" \
+    && grep -Fxq 'production_runtime=pass' "$receipt" \
+    && grep -Fxq 'superseded_runtime_image_removed=true' "$receipt" \
+    && grep -Fxq 'database_mutated=false' "$receipt" \
+    && grep -Fxq 'boot_autostart=false' "$receipt"
+}
+
+previous_image_consumer_ids() {
+  "${docker_command[@]}" ps -aq --filter "ancestor=$previous_image_id" 2>/dev/null \
+    | sort -u | sed '/^$/d'
+}
+
+previous_image_consumer_details() {
+  local consumer_id details
+  while IFS= read -r consumer_id; do
+    [[ -n "$consumer_id" ]] || continue
+    details="$("${docker_command[@]}" inspect --format \
+      'name={{.Name}};running={{.State.Running}};image={{.Image}}' \
+      "$consumer_id" 2>/dev/null || printf 'name=unresolved;running=unknown;image=unknown')"
+    printf '%s\n' "${details/name=\//name=}"
+  done
+}
+
+restore_previous_runtime() {
+  set +e
+  remove_production_container >/dev/null 2>&1 || { set -e; return 1; }
+  api_database_ready || { set -e; return 1; }
+  start_web "$previous_image_id" previous >/dev/null 2>&1 || { set -e; return 1; }
+  runtime_ready "$previous_image_id" || { set -e; return 1; }
+  [[ -z "${promotion_receipt:-}" ]] || rm -f -- "$promotion_receipt"
+  restoration_succeeded=true
+  set -e
+}
+
+cleanup() {
+  local status="$?"
+  trap - EXIT
+  set +e
+  if [[ -n "$acceptance_stage" \
+      && "$acceptance_stage" == "$application_root/state/reports/runtime-promotion/.acceptance."*.tmp \
+      && -f "$acceptance_stage" && ! -L "$acceptance_stage" ]]; then
+    rm -f -- "$acceptance_stage"
+  fi
+  exit "$status"
+}
+
+fail() {
+  local reason="$1" detail="$2" action="$3" status="${4:-1}"
+  trap - ERR
+  if [[ "$mode" == --run && "$mutation_started" == true \
+      && "$restoration_succeeded" == false ]]; then
+    restore_previous_runtime || cleanup_failed=true
+  fi
+  write_action_result blocked "$reason" \
+    "previous_runtime_restored=$restoration_succeeded;cleanup_failed=$cleanup_failed"
+  printf '%s\n' 'FAILURE DETAIL' "stage=$stage" "reason=$reason" "detail=$detail" \
+    "previous_runtime_restored=$restoration_succeeded" "cleanup_failed=$cleanup_failed" \
+    "operator_action=$action" >&2
+  printf '\nSCRIPT RESULT\nscript_13_v1_3_1_corrected_runtime_promotion=blocked\n' >&2
+  exit "$status"
+}
+
+unexpected_error() {
+  local status="$1" line="$2"
+  fail unexpected_command_failure \
+    "Unhandled corrected-runtime promotion failure at helper line $line with status $status." \
+    'Review the complete retained target milestones before retrying.' "$status"
+}
+
+trap cleanup EXIT
+trap 'unexpected_error "$?" "$LINENO"' ERR
+trap 'stage=interrupted; fail signal_hangup "Promotion connection closed." "Review automatic restoration and retry only after reconciliation." 129' HUP
+trap 'stage=interrupted; fail signal_interrupt "Promotion interrupted." "Review automatic restoration and retry only after reconciliation." 130' INT
+trap 'stage=interrupted; fail signal_termination "Promotion terminated." "Review automatic restoration and retry only after reconciliation." 143' TERM
+
+if [[ "$mode" == --validate-only ]]; then
+  [[ $# -eq 0 ]] || exit 2
+  printf '%s\n' \
+    'v1_3_1_corrected_runtime_promotion_helper=ready' \
+    'scope=web_runtime_only;application=unchanged;retrieval_api=unchanged;postgresql=unchanged' \
+    'ports=3384,8384,5432;autostart=false;automatic_restoration=previous_runtime'
+  exit 0
+fi
+
+while (( $# > 0 )); do
+  case "$1" in
+    --payload-root) payload_root="${2:-}"; shift 2 ;;
+    --result-path) result_path="${2:-}"; shift 2 ;;
+    --expected-hostname) expected_hostname="${2:-}"; shift 2 ;;
+    --expected-os-version) expected_os_version="${2:-}"; shift 2 ;;
+    --expected-architecture) expected_architecture="${2:-}"; shift 2 ;;
+    --expected-helper-sha256) expected_helper_sha256="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) exit 2 ;;
+  esac
+done
+case "$mode" in --run|--accept|--rollback) ;; *) usage >&2; exit 2 ;; esac
+[[ "$payload_root" == /tmp/ishikawa-runtime-promotion-*'/payload' \
+    && -d "$payload_root" && ! -L "$payload_root" \
+    && "$result_path" == "$payload_root/"* && ! -e "$result_path" \
+    && "$expected_helper_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || fail target_paths_invalid 'The private payload or result path is outside the target contract.' 'Rerun through Script 13.'
+
+stage='target_preflight'
+for required in awk bash chmod cmp cp curl date df docker dpkg find grep hostname id jq mkdir mv paste pg_isready python3 rm sed sha256sum sleep sort ss stat sudo systemctl tr; do
+  command -v "$required" >/dev/null 2>&1 \
+    || fail "command_missing_${required}" "Required target command unavailable: $required." 'Restore the named prerequisite.'
+done
+[[ "$(sha256sum -- "$0" | awk '{print $1}')" == "$expected_helper_sha256" ]] \
+  || fail helper_identity_mismatch 'Transferred helper identity mismatch.' 'Rerun Script 13 from the reviewed repository.'
+[[ "$(hostname -s)" == "$expected_hostname" \
+    && "$(. /etc/os-release; printf '%s' "$VERSION_ID")" == "$expected_os_version" \
+    && "$(dpkg --print-architecture)" == "$expected_architecture" ]] \
+  || fail target_identity_mismatch 'Target hostname, OS, or architecture differs from frozen EmceeDanko.' 'Use the frozen target.'
+(cd -- "$payload_root" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail payload_checksum_failed 'Promotion payload checksum verification failed.' 'Rerun Script 13.'
+if [[ "$mode" != --accept ]]; then
+  [[ -f "$payload_root/previous-node-next-runtime-amd64.tar" \
+      && ! -L "$payload_root/previous-node-next-runtime-amd64.tar" \
+      && -f "$payload_root/corrected-node-next-runtime-amd64.tar" \
+      && ! -L "$payload_root/corrected-node-next-runtime-amd64.tar" ]] \
+    || fail runtime_archives_missing 'The exact runtime image archives are absent or unsafe.' 'Rerun Script 13.'
+fi
+jq -e --arg image "$corrected_image_id" --arg archive "$corrected_runtime_archive_sha256" '
+  .image_id == $image and .archive_sha256 == $archive
+  and .architecture == "amd64" and .platform == "linux/amd64"
+  and .application_in_image == false and .generated_next_in_image == false
+  and .runtime_npm == false and .runtime_yarn == false
+  and .base_bundled_npm_executed == false and .base_bundled_yarn_executed == false' \
+  "$payload_root/image-identity.json" >/dev/null \
+  || fail image_identity_record_invalid 'Corrected runtime identity record mismatch.' 'Restore the exact corrected Script 07 handoff.'
+grep -Fxq "application_archive_sha256=$expected_application_sha256" "$payload_root/baseline-acceptance-receipt.txt" \
+  && grep -Fxq "runtime_archive_sha256=$previous_runtime_archive_sha256" "$payload_root/baseline-acceptance-receipt.txt" \
+  && grep -Fxq "image_id=$previous_image_id" "$payload_root/baseline-acceptance-receipt.txt" \
+  && grep -Fxq 'human_ui_acceptance=accepted' "$payload_root/baseline-acceptance-receipt.txt" \
+  || fail baseline_evidence_invalid 'Accepted production baseline evidence is incomplete.' 'Restore exact Script 10 acceptance evidence.'
+grep -Fxq "application_archive_sha256=$expected_application_sha256" "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq "runtime_archive_sha256=$corrected_runtime_archive_sha256" "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq "image_id=$corrected_image_id" "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq 'frontier_cases=60/60' "$payload_root/qualification-receipt.txt" \
+  && grep -Fxq 'human_ui_acceptance=accepted' "$payload_root/acceptance-receipt.txt" \
+  && grep -Fxq "image_id=$corrected_image_id" "$payload_root/acceptance-receipt.txt" \
+  && grep -Fxq 'mode=cleanup' "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq 'state=pass' "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq 'detail=candidate_removed=true' "$payload_root/cleanup-receipt.txt" \
+  && grep -Fxq "image_id=$corrected_image_id" "$payload_root/cleanup-receipt.txt" \
+  || fail script12_evidence_invalid 'Script 12 qualification, acceptance, or cleanup evidence is incomplete.' 'Complete the full Script 12 lifecycle first.'
+[[ -d "$application_root" && ! -L "$application_root" \
+    && ! -L "$application_root/config/product.yaml" \
+    && -z "$(find "$application_root/application" -type l -print -quit 2>/dev/null)" ]] \
+  || fail application_layout_unsafe 'The accepted application root is missing, linked, or contains an application symlink.' 'Inspect the accepted installation before promotion.'
+(cd -- "$application_root" && {
+  find application/web/app application/web/components application/web/lib application/web/public -type f -print
+  printf '%s\n' application/web/package.json application/web/next.config.mjs config/product.yaml
+} | sort | cmp -- "$payload_root/web-layout-paths.txt" - >/dev/null) \
+  || fail installed_web_path_set_mismatch 'The production web path set differs from the exact v1.3.1 application handoff.' 'Remove no files; reconcile the accepted installation before promotion.'
+(cd -- "$application_root" && sha256sum --check --strict "$payload_root/web-layout-SHA256SUMS" >/dev/null) \
+  || fail installed_web_layout_mismatch 'The production web source differs from the exact v1.3.1 application handoff.' 'Do not swap runtimes until the accepted application is reconciled.'
+target_baseline_receipt="$application_root/state/reports/promotion/emceedanko-v1.3.1-acceptance.txt"
+[[ -f "$target_baseline_receipt" && ! -L "$target_baseline_receipt" ]] \
+  && cmp -- "$target_baseline_receipt" "$payload_root/baseline-acceptance-receipt.txt" >/dev/null \
+  || fail target_baseline_receipt_mismatch 'The target acceptance receipt differs from the exact returned Script 10 evidence.' 'Do not change the production runtime.'
+prepare_docker || fail container_runtime_unavailable 'Docker is unavailable.' 'Restore Docker access.'
+check_boot_posture || fail boot_posture_enabled 'An Ishikawa dependency is boot-enabled.' 'Restore disabled boot posture.'
+
+promotion_receipt="$application_root/$promotion_receipt_rel"
+acceptance_receipt="$application_root/$acceptance_receipt_rel"
+
+if [[ "$mode" == --accept ]]; then
+  stage='acceptance_preflight'
+  promotion_receipt_valid "$promotion_receipt" \
+    || fail promotion_receipt_invalid 'The corrected-runtime production receipt is absent or incomplete.' 'Run Script 13 --run first.'
+  if [[ -f "$acceptance_receipt" && ! -L "$acceptance_receipt" ]]; then
+    acceptance_receipt_valid "$acceptance_receipt" \
+      || fail acceptance_receipt_invalid 'The existing acceptance receipt is incomplete.' 'Inspect production state.'
+    runtime_ready "$corrected_image_id" && check_boot_posture \
+      || fail accepted_runtime_not_ready 'The already-accepted corrected runtime is not completely ready.' 'Reconcile production state.'
+    ! "${docker_command[@]}" image inspect "$previous_image_id" >/dev/null 2>&1 \
+      || fail superseded_image_still_present 'The superseded runtime image remains after recorded acceptance.' 'Inspect its consumers and image references.'
+    cp -- "$acceptance_receipt" "$result_path"
+    complete=true
+    emit SUMMARY 'state=pass;human_ui_acceptance=already_recorded;superseded_runtime_image_removed=true'
+    printf '%s\n' 'v1_3_1_corrected_runtime_promotion_acceptance=pass'
+    exit 0
+  fi
+  runtime_ready "$corrected_image_id" \
+    || fail promoted_runtime_not_ready 'The corrected production runtime is not completely ready.' 'Do not accept; use Script 13 --rollback if necessary.'
+  consumers="$(previous_image_consumer_ids)"
+  if [[ -n "$consumers" ]]; then
+    consumer_details="$(previous_image_consumer_details <<<"$consumers" | paste -sd '|' -)"
+    fail superseded_image_in_use \
+      "Superseded-runtime consumers remain: ${consumer_details:-unresolved}." \
+      'Reconcile every reported consumer before acceptance.'
+  fi
+  acceptance_stage="$application_root/state/reports/runtime-promotion/.acceptance.$$.tmp"
+  mkdir -m 0700 -p -- "$application_root/state/reports/runtime-promotion"
+  [[ ! -e "$acceptance_stage" && ! -L "$acceptance_stage" ]] \
+    || fail acceptance_stage_exists 'The bounded acceptance stage already exists.' 'Inspect the runtime-promotion report directory.'
+  {
+    printf 'schema=ishikawa.emceedanko-v1.3.1-runtime-promotion-acceptance.v1\n'
+    printf 'accepted_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
+    printf 'runtime_archive_sha256=%s\nimage_id=%s\n' \
+      "$corrected_runtime_archive_sha256" "$corrected_image_id"
+    printf 'human_ui_acceptance=accepted\nproduction_runtime=pass\nfrontier_cases=60/60\n'
+    printf 'superseded_runtime_image_removed=true\nprevious_runtime_rollback=retired\n'
+    printf 'application_mutated=false\nretrieval_api_restarted=false\npostgresql_restarted=false\n'
+    printf 'database_mutated=false\nschema_mutated=false\ncorpus_mutated=false\nboot_autostart=false\n'
+  } >"$acceptance_stage"
+  chmod 0600 "$acceptance_stage"
+  mutation_started=true
+  if "${docker_command[@]}" image inspect "$previous_image_id" >/dev/null 2>&1; then
+    "${docker_command[@]}" image rm "$previous_image_id" >/dev/null \
+      || fail superseded_image_removal_failed 'The superseded runtime image could not be removed.' 'Inspect all reported consumers and image references.'
+  fi
+  ! "${docker_command[@]}" image inspect "$previous_image_id" >/dev/null 2>&1 \
+    || fail superseded_image_still_present 'The superseded runtime image remains after removal.' 'Inspect Docker image references.'
+  mv -- "$acceptance_stage" "$acceptance_receipt" \
+    || fail acceptance_publication_failed 'The prepared acceptance receipt could not be published after image retirement.' 'Rerun acceptance; production remains on the corrected runtime.'
+  acceptance_stage=''
+  cp -- "$acceptance_receipt" "$result_path"
+  complete=true
+  emit SUMMARY 'state=pass;human_ui_acceptance=accepted;superseded_runtime_image_removed=true;application_api_database_unchanged=true'
+  printf '%s\n' 'v1_3_1_corrected_runtime_promotion_acceptance=pass'
+  exit 0
+fi
+
+if [[ "$mode" == --rollback ]]; then
+  stage='rollback_preflight'
+  promotion_receipt_valid "$promotion_receipt" \
+    || fail promotion_receipt_invalid 'The corrected-runtime production receipt is absent or incomplete.' 'Rollback is available only after Script 13 --run.'
+  [[ ! -e "$acceptance_receipt" && ! -L "$acceptance_receipt" ]] \
+    || fail rollback_after_acceptance_forbidden 'Corrected-runtime acceptance is already recorded.' 'Do not restore a retired runtime.'
+  if prepare_exact_runtime_images; then :; else
+    image_prepare_status="$?"
+    fail runtime_image_preparation_failed \
+      "Exact rollback/corrected image preparation failed: $image_preparation_detail (status $image_prepare_status)." \
+      'Do not stop the corrected runtime; correct storage or archive loading and retry.'
+  fi
+  mutation_started=true
+  restore_previous_runtime \
+    || fail rollback_failed "Previous runtime restoration failed at web boundary ${web_failure}." 'Preserve all image and application state and inspect the reported runtime.'
+  rm -f -- "$promotion_receipt"
+  write_action_result pass none 'previous_runtime_restored=true'
+  complete=true
+  emit SUMMARY 'state=pass;previous_runtime_restored=true;ports_3384_8384_5432=ready;application_api_database_unchanged=true'
+  printf '%s\n' 'v1_3_1_corrected_runtime_promotion_rollback=pass'
+  exit 0
+fi
+
+stage='run_preflight'
+[[ ! -e "$promotion_receipt" && ! -L "$promotion_receipt" \
+    && ! -e "$acceptance_receipt" && ! -L "$acceptance_receipt" ]] \
+  || fail prior_promotion_state_exists 'A corrected-runtime promotion or acceptance receipt already exists.' 'Use --accept or --rollback after reviewing production state.'
+[[ ! -e "$qualification_root" && ! -L "$qualification_root" ]] \
+  || fail qualification_cleanup_incomplete 'The Script 12 qualification root still exists.' 'Run Script 12 --cleanup first.'
+container_exists "$qualification_container" \
+  && fail qualification_container_exists 'The Script 12 qualification container still exists.' 'Run Script 12 --cleanup first.'
+for port in 3385 8385; do
+  ! port_listening "$port" \
+    || fail qualification_port_in_use "Qualification port $port remains occupied." 'Complete Script 12 cleanup first.'
+done
+runtime_ready "$previous_image_id" \
+  || fail accepted_runtime_not_ready 'The accepted v1.3.1 production runtime is not exact and ready.' 'Reconcile production before changing its web runtime.'
+if prepare_exact_runtime_images; then :; else
+  image_prepare_status="$?"
+  fail runtime_image_preparation_failed \
+    "Exact rollback/corrected image preparation failed: $image_preparation_detail (status $image_prepare_status)." \
+    'Correct Docker storage or archive loading and rerun; production was not changed.'
+fi
+"${docker_command[@]}" run --rm --network none --read-only \
+  --security-opt no-new-privileges --cap-drop ALL \
+  --entrypoint sh "$corrected_image_id" -c \
+  'test ! -e /opt/nextjs/app && test ! -e /opt/nextjs/components && test ! -e /opt/nextjs/lib && test ! -e /opt/nextjs/public && test ! -e /opt/nextjs/next.config.mjs && test ! -e /opt/nextjs/.next' \
+  >/dev/null 2>&1 \
+  || fail runtime_image_application_boundary_failed 'The corrected runtime image is not application-free.' 'Rebuild Script 07; do not promote this image.'
+emit PREFLIGHT 'state=pass;accepted_v1_3_1=ready;script12_lifecycle=complete;installed_web_layout=exact;required_images=exact;boot_autostart=false'
+emit BOUNDARY 'application_mutation=false;retrieval_api_restart=false;postgresql_restart=false;database_mutation=false;schema_mutation=false;corpus_mutation=false'
+
+stage='runtime_switch'
+mutation_started=true
+emit SWITCH 'state=start;next=replace_web_container;automatic_restoration=previous_runtime'
+remove_production_container \
+  || fail accepted_web_stop_failed 'The accepted web container did not stop and remove cleanly.' 'Review automatic restoration before retrying.'
+! port_listening "$ui_port" \
+  || fail ui_port_still_in_use 'UI port 3384 remained occupied after removing the accepted web container.' 'Review automatic restoration and the exact port owner.'
+api_database_ready \
+  || fail unchanged_backend_lost 'Retrieval API or PostgreSQL readiness changed during the UI-only switch.' 'Automatic previous-runtime restoration is required.'
+start_web "$corrected_image_id" corrected \
+  || fail corrected_web_launch_failed \
+    "The corrected production web runtime failed at boundary ${web_failure}." \
+    'Automatic previous-runtime restoration is required.'
+runtime_ready "$corrected_image_id" && check_boot_posture \
+  || fail corrected_runtime_not_ready 'The corrected runtime did not preserve the complete production readiness contract.' 'Automatic previous-runtime restoration is required.'
+mkdir -m 0700 -p -- "$application_root/state/reports/runtime-promotion"
+{
+  printf 'schema=ishikawa.emceedanko-v1.3.1-runtime-promotion.v1\n'
+  printf 'promoted_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'application_archive_sha256=%s\n' "$expected_application_sha256"
+  printf 'previous_runtime_archive_sha256=%s\nprevious_image_id=%s\n' \
+    "$previous_runtime_archive_sha256" "$previous_image_id"
+  printf 'runtime_archive_sha256=%s\nimage_id=%s\n' \
+    "$corrected_runtime_archive_sha256" "$corrected_image_id"
+  printf 'ui_port=3384\nretrieval_api_port=8384\npostgresql_port=5432\n'
+  printf 'production_build_start=pass\nhuman_ui_acceptance=pending\nprevious_runtime_rollback=available\n'
+  printf 'application_mutated=false\nretrieval_api_restarted=false\npostgresql_restarted=false\n'
+  printf 'database_mutated=false\nschema_mutated=false\ncorpus_mutated=false\nboot_autostart=false\n'
+} >"$promotion_receipt"
+chmod 0600 "$promotion_receipt"
+cp -- "$promotion_receipt" "$result_path"
+complete=true
+emit SUMMARY 'state=pass;corrected_runtime=ready;ui=http://127.0.0.1:3384;application_api_database_unchanged=true;previous_runtime_rollback=available;next=human_accept_or_rollback'
+printf '%s\n' 'v1_3_1_corrected_runtime_promotion=pass'

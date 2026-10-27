@@ -156,9 +156,30 @@
     Script 12 `--accept`, then remove only that candidate with `--cleanup`.
 22. Do not rerun the original Script 10 promotion or Script 11 assembly after
     V13-92: both remain deliberately pinned to the superseded image and refuse
-    the corrected handoff. The next numbered promotion and assembly steps must
-    consume the complete Script 12 lifecycle evidence and corrected image
-    identity before replacing accepted v1.3.1 or publishing a new carry.
+    the corrected handoff. After the complete Script 12 lifecycle, run Script
+    13 `--run`. Script 13 verifies the exact accepted application, installed
+    web path set and bytes, current production receipt, both runtime images,
+    all Script 12 receipts, ports, readiness, and disabled boot posture before
+    service mutation. The run carries both checksum-bound runtime archives and,
+    if either recreatable Docker image is absent, loads the previous archive
+    first and the corrected archive last so the canonical tag remains on the
+    corrected image. It then removes only the production web container and
+    recreates it on `3384` with the corrected image. It does not replace or
+    restart the application, Retrieval API, PostgreSQL, or corpus. A failed
+    switch or interrupted run automatically recreates the previous production
+    web runtime. Record human acceptance with Script 13 `--accept`, which
+    refuses unknown superseded-image consumers before removing the old image;
+    or use Script 13 `--rollback` before acceptance.
+23. After Script 13 acceptance, run Script 14 `--run`. It binds the unchanged
+    application, corrected image, complete Script 12/13 lifecycle receipts,
+    exact corrected-image scan, durable and portable security dispositions,
+    SBOM/license records, and frozen V13-79 through V13-93 decisions. It
+    independently verifies the resulting 26-file package, preserves the
+    verified Script 11 candidate under `local/artifacts/superseded/`, and
+    atomically publishes only the corrected candidate at
+    `local/artifacts/ishikawa-deployment-v1.3.1-candidate-current/`. The
+    candidate remains non-installable until Tech inventory and independent
+    final review authorize stable publication.
 
 ## Active commands
 
@@ -174,6 +195,8 @@
 - `deployment/scripts/10_promote-v1.3.1-on-emceedanko.sh`
 - `deployment/scripts/11_assemble-ishikawa-v1.3.1-deployment-package.sh`
 - `deployment/scripts/12_requalify-v1.3.1-corrected-runtime-on-emceedanko.sh`
+- `deployment/scripts/13_promote-v1.3.1-corrected-runtime-on-emceedanko.sh`
+- `deployment/scripts/14_assemble-v1.3.1-corrected-deployment-package.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`
 
@@ -251,3 +274,27 @@ hidden inputs and requires the operator-managed Gemma/Nomic forwards on
 EmceeDanko ports `18000`/`18001`. A passing run leaves only the isolated
 corrected-runtime candidate on `3385`/`8385`; accepted v1.3.1 and its database
 remain unchanged until a later promotion step.
+
+Script 13 is the corrected-runtime production promotion. It requires no model
+or database secret because the accepted Retrieval API and PostgreSQL process
+remain running. Only the exact production web container is replaced. Its
+`--run` action transfers and verifies both exact image archives, restores a
+missing recreatable image before the switch, and retains the previous image
+for automatic or explicit rollback. `--accept` retires that image only after
+proving it has no container consumer.
+
+Script 14 is local corrected-carry assembly. It contacts no target, reads no
+credential or corpus, and mutates no service, listener, database, or boot
+state. Its output is deliberately a review-pending candidate, not the stable
+deployment handoff. Run the portable verifier from the resulting directory
+before the separate Tech inventory and independent-review gates.
+
+The carried deploy entrypoint's inventory action verifies the complete package
+before invoking the read-only inspector. Supply all five selected ports and
+use its attended-sudo inventory option when the installing operator needs
+sudo for Docker and an already-online PostgreSQL catalog. The inspector never
+starts PostgreSQL. It records package/runtime availability, apt/dpkg health,
+capacity, paths, user units, user-manager/lingering posture, Docker
+image/container facts, PostgreSQL clusters and clean-target counts, all five
+listener counts, and an optional protected-source-root usability result
+without retaining the hostname, account, protected path, or document names.

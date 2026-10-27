@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Purpose:
+#   Capture bounded read-only native prerequisite facts for one Ishikawa host.
+#
+# Mental model:
+#   Verify the expected host platform, read existing package metadata and
+#   runtime state, write content-free evidence into one new protected temporary
+#   directory, and make no operating-system or application change.
+#
+# Inputs or prerequisites:
+#   Ubuntu package metadata already present on the host and an absolute absent
+#   output directory under /tmp owned by the invoking non-root operator.
+#
+# Outputs:
+#   A host summary, package inventory, report, and checksum manifest. No package
+#   is updated, downloaded, installed, removed, configured, or started. The
+#   retained files contain no hostname, account, address, serial, document, or
+#   credential value.
+#
+# Usage:
+#   bash ./inspect-native-prerequisites --expected-os-version 26.04 \
+#     --expected-architecture amd64 --postgresql-port 5432 \
+#     --retrieval-port 8384 --web-port 3384 --gemma-port 8000 \
+#     --nomic-port 8001 \
+#     --output-dir /tmp/ishikawa-native-prerequisite-inventory
+
+usage() {
+  sed -n '3,21p' "${BASH_SOURCE[0]}"
+  printf '%s\n' \
+    'Options:' \
+    '  --expected-hostname NAME       Optional exact target short hostname.' \
+    '  --expected-os-version VERSION  Exact Ubuntu major.minor version.' \
+    '  --expected-architecture ARCH    Exact Debian architecture.' \
+    '  --postgresql-port PORT           Planned loopback PostgreSQL port.' \
+    '  --retrieval-port PORT            Planned loopback Retrieval API port.' \
+    '  --web-port PORT                  Planned loopback web UI port.' \
+    '  --gemma-port PORT                Planned loopback Gemma port.' \
+    '  --nomic-port PORT                Planned loopback Nomic port.' \
+    '  --protected-source-root PATH     Optional protected corpus root check.' \
+    '  --use-sudo-inspection            Attended Docker/PostgreSQL inspection.' \
+    '  --output-dir PATH               New absolute output directory under /tmp.'
+}
+
+fail() {
+  printf '%s\n' \
+    'FAILURE DETAIL' \
+    "stage=${current_stage:-argument_validation}" \
+    "reason=$1" \
+    'operator_action=Correct the reported condition and rerun the same command.' \
+    '' \
+    'SCRIPT RESULT' \
+    'ishikawa_native_prerequisite_inventory=blocked' >&2
+  exit 1
+}
+
+current_stage='argument_validation'
+expected_hostname=''
+expected_os_version='26.04'
+expected_architecture='amd64'
+postgresql_port='5432'
+retrieval_port='8384'
+web_port='3384'
+gemma_port='8000'
+nomic_port='8001'
+protected_source_root=''
+use_sudo_inspection=false
+output_dir=''
+while (( $# > 0 )); do
+  case "$1" in
+    --expected-hostname) expected_hostname="${2:-}"; shift 2 ;;
+    --expected-os-version) expected_os_version="${2:-}"; shift 2 ;;
+    --expected-architecture) expected_architecture="${2:-}"; shift 2 ;;
+    --postgresql-port) postgresql_port="${2:-}"; shift 2 ;;
+    --retrieval-port) retrieval_port="${2:-}"; shift 2 ;;
+    --web-port) web_port="${2:-}"; shift 2 ;;
+    --gemma-port) gemma_port="${2:-}"; shift 2 ;;
+    --nomic-port) nomic_port="${2:-}"; shift 2 ;;
+    --protected-source-root) protected_source_root="${2:-}"; shift 2 ;;
+    --use-sudo-inspection) use_sudo_inspection=true; shift ;;
+    --output-dir) output_dir="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) fail argument_invalid ;;
+  esac
+done
+
+(( EUID != 0 )) || fail non_root_operator_required
+[[ -z "$expected_hostname" || "$expected_hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail expected_hostname_invalid
+[[ "$expected_os_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]] || fail expected_os_version_invalid
+[[ "$expected_architecture" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || fail expected_architecture_invalid
+for selected_port in "$postgresql_port" "$retrieval_port" "$web_port" \
+  "$gemma_port" "$nomic_port"; do
+  [[ "$selected_port" =~ ^[0-9]+$ && "$selected_port" -ge 1 && "$selected_port" -le 65535 ]] \
+    || fail planned_port_invalid
+done
+[[ "$(printf '%s\n' "$postgresql_port" "$retrieval_port" "$web_port" \
+  "$gemma_port" "$nomic_port" | sort -u | awk 'END {print NR}')" == 5 ]] \
+  || fail planned_ports_collide
+[[ "$output_dir" == /tmp/* && "$output_dir" != /tmp/ && ! -e "$output_dir" && ! -L "$output_dir" ]] || fail output_directory_invalid
+[[ -z "$protected_source_root" || "$protected_source_root" == /* ]] \
+  || fail protected_source_root_invalid
+
+for required in apt-cache apt-get awk date df dpkg dpkg-query find grep hostname \
+  id loginctl mkdir python3 rm sed sha256sum sort ss stat systemctl uname; do
+  command -v "$required" >/dev/null 2>&1 || fail "command_missing_$required"
+done
+if [[ "$use_sudo_inspection" == true ]]; then
+  command -v sudo >/dev/null 2>&1 || fail command_missing_sudo
+fi
+
+printf '[READINESS] state=start;mutation=false;network_contact=false;credential_access=false\n'
+current_stage='platform_validation'
+# shellcheck disable=SC1091
+source /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$expected_os_version" ]] || fail operating_system_mismatch
+architecture="$(dpkg --print-architecture)"
+[[ "$architecture" == "$expected_architecture" ]] || fail architecture_mismatch
+actual_hostname="$(hostname -s)"
+[[ -z "$expected_hostname" || "$actual_hostname" == "$expected_hostname" ]] || fail hostname_mismatch
+hostname_check=not_requested
+[[ -z "$expected_hostname" ]] || hostname_check=pass
+printf '[READINESS] state=pass;os=ubuntu_%s;architecture=%s;hostname_check=%s\n' \
+  "$VERSION_ID" "$architecture" "$hostname_check"
+
+current_stage='evidence_setup'
+umask 077
+mkdir -m 0700 -- "$output_dir"
+summary_path="$output_dir/host-summary.env"
+packages_path="$output_dir/package-inventory.tsv"
+report_path="$output_dir/inventory-report.txt"
+checksum_path="$output_dir/SHA256SUMS"
+
+cleanup_on_failure() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if (( status != 0 )) && [[ -d "$output_dir" ]]; then
+    printf 'inventory_incomplete=true\n' >>"$report_path" 2>/dev/null || true
+  fi
+  exit "$status"
+}
+trap cleanup_on_failure EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+readonly -a package_names=(
+  python3
+  python3-yaml
+  python3-psycopg
+  poppler-utils
+  postgresql-common
+  postgresql-client-16
+  postgresql-16
+  postgresql-16-pgvector
+  libpq5
+  docker.io
+  docker-ce
+)
+
+current_stage='package_inventory'
+printf '[PACKAGES] state=start;selected=%s;metadata_refresh=false\n' "${#package_names[@]}"
+printf 'package\tinstalled_version\tcandidate_version\tarchitecture\tsource\tfilename\tsha256\tsize\tpolicy_sha256\n' >"$packages_path"
+missing_candidate_count=0
+installed_selected_count=0
+for package_name in "${package_names[@]}"; do
+  installed_record="$(dpkg-query -W -f='${db:Status-Abbrev}|${Version}|${Architecture}\n' "$package_name" 2>/dev/null || true)"
+  installed_version="$(awk -F'|' '$1 ~ /^ii/ {print $2; exit}' <<<"$installed_record")"
+  installed_architecture="$(awk -F'|' '$1 ~ /^ii/ {print $3; exit}' <<<"$installed_record")"
+  [[ -n "$installed_version" ]] && (( installed_selected_count += 1 ))
+  policy_output="$(LC_ALL=C apt-cache policy "$package_name" 2>/dev/null || true)"
+  candidate_version="$(sed -n 's/^[[:space:]]*Candidate:[[:space:]]*//p' <<<"$policy_output" | sed -n '1p')"
+  if [[ -z "$candidate_version" || "$candidate_version" == '(none)' ]]; then
+    candidate_version='none'
+    (( missing_candidate_count += 1 ))
+    metadata=''
+  else
+    metadata="$(LC_ALL=C apt-cache show "$package_name=$candidate_version" 2>/dev/null || true)"
+  fi
+  package_architecture="$(sed -n 's/^Architecture:[[:space:]]*//p' <<<"$metadata" | sed -n '1p')"
+  package_source="$(sed -n 's/^Source:[[:space:]]*//p' <<<"$metadata" | sed -n '1p')"
+  package_filename="$(sed -n 's/^Filename:[[:space:]]*//p' <<<"$metadata" | sed -n '1p')"
+  package_sha256="$(sed -n 's/^SHA256:[[:space:]]*//p' <<<"$metadata" | sed -n '1p')"
+  package_size="$(sed -n 's/^Size:[[:space:]]*//p' <<<"$metadata" | sed -n '1p')"
+  policy_sha256="$(printf '%s' "$policy_output" | sha256sum | awk '{print $1}')"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$package_name" "${installed_version:-none}" "$candidate_version" \
+    "${package_architecture:-${installed_architecture:-none}}" "${package_source:-none}" \
+    "${package_filename:-none}" "${package_sha256:-none}" "${package_size:-none}" "$policy_sha256" >>"$packages_path"
+done
+printf '[PACKAGES] state=pass;selected=%s;installed=%s;missing_candidates=%s\n' \
+  "${#package_names[@]}" "$installed_selected_count" "$missing_candidate_count"
+
+current_stage='runtime_inventory'
+printf '[RUNTIME] state=start;docker=true;postgresql=true;python=true\n'
+if [[ "$use_sudo_inspection" == true ]]; then
+  printf '[INPUT REQUIRED] Attended sudo authorization for read-only runtime inventory.\n'
+  sudo -v || fail privilege_authorization_failed
+fi
+python_version="$(python3 -c 'import platform; print(platform.python_version())')"
+python_yaml_available=false
+python_psycopg_available=false
+python3 -c 'import yaml' >/dev/null 2>&1 && python_yaml_available=true
+python3 -c 'import psycopg' >/dev/null 2>&1 && python_psycopg_available=true
+poppler_text_version='none'
+psql_version='none'
+if command -v pdftotext >/dev/null 2>&1; then
+  poppler_text_version="$(pdftotext -v 2>&1 | sed -n '1s/[^0-9]*\([0-9][0-9.]*\).*/\1/p')"
+fi
+if command -v psql >/dev/null 2>&1; then
+  psql_version="$(psql --version 2>/dev/null | awk '{print $3}' || true)"
+fi
+docker_command_available=false
+docker_accessible=false
+docker_access_mode=unavailable
+docker_server_version='none'
+node_image_present=false
+node_image_id='none'
+node_image_consumer_count=0
+ishikawa_named_container_count=0
+declare -a docker_command=(docker)
+if command -v docker >/dev/null 2>&1; then
+  docker_command_available=true
+  if [[ "$use_sudo_inspection" == true ]]; then
+    docker_command=(sudo docker)
+    docker_access_mode=sudo
+  else
+    docker_access_mode=direct
+  fi
+  if "${docker_command[@]}" version --format '{{.Server.Version}}' \
+      >"$output_dir/.docker-version" 2>/dev/null; then
+    docker_accessible=true
+    docker_server_version="$(sed -n '1p' "$output_dir/.docker-version")"
+    if "${docker_command[@]}" image inspect \
+        node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64 \
+        --format '{{.Id}}' >"$output_dir/.node-image" 2>/dev/null; then
+      node_image_present=true
+      node_image_id="$(sed -n '1p' "$output_dir/.node-image")"
+    fi
+    node_image_consumer_count="$("${docker_command[@]}" ps -a \
+      --filter 'ancestor=node-next-runtime:24.22.1-next16.4.3-react19.2.9-amd64' \
+      --format '{{.ID}}' 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+    ishikawa_named_container_count="$("${docker_command[@]}" ps -a \
+      --filter 'name=^/ishikawa-web$' \
+      --format '{{.ID}}' 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+  fi
+fi
+rm -f -- "$output_dir/.docker-version" "$output_dir/.node-image"
+
+dpkg_audit_output="$(dpkg --audit 2>&1 || true)"
+dpkg_audit_sha256="$(printf '%s' "$dpkg_audit_output" | sha256sum | awk '{print $1}')"
+dpkg_audit_clean=false
+[[ -z "$dpkg_audit_output" ]] && dpkg_audit_clean=true
+apt_check_clean=false
+if apt_check_output="$(apt-get -s -o Debug::NoLocking=1 check 2>&1)"; then
+  apt_check_clean=true
+fi
+apt_check_sha256="$(printf '%s' "$apt_check_output" | sha256sum | awk '{print $1}')"
+apt_lists_latest_epoch="$(find /var/lib/apt/lists -maxdepth 1 -type f -printf '%T@\n' 2>/dev/null | sort -nr | sed -n '1s/\..*//p' || true)"
+root_available_bytes="$(df -B1 --output=avail / | awk 'NR == 2 {print $1}')"
+home_available_bytes="$(df -B1 --output=avail "$HOME" | awk 'NR == 2 {print $1}')"
+temporary_available_bytes="$(df -B1 --output=avail /tmp | awk 'NR == 2 {print $1}')"
+memory_available_bytes="$(awk '/^MemAvailable:/ {print $2 * 1024; exit}' /proc/meminfo)"
+listening_postgresql="$(ss -H -ltn "sport = :$postgresql_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+listening_retrieval="$(ss -H -ltn "sport = :$retrieval_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+listening_web="$(ss -H -ltn "sport = :$web_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+listening_gemma="$(ss -H -ltn "sport = :$gemma_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+listening_nomic="$(ss -H -ltn "sport = :$nomic_port" 2>/dev/null | awk 'NF {count++} END {print count+0}')"
+postgresql_service_enabled="$(systemctl is-enabled postgresql.service 2>/dev/null || true)"
+postgresql_service_active="$(systemctl is-active postgresql.service 2>/dev/null || true)"
+
+postgresql_cluster_command_available=false
+postgresql_cluster_count=0
+postgresql_16_main_count=0
+postgresql_selected_port_count=0
+postgresql_16_main_online=false
+postgresql_catalog_checked=false
+rag_role_count=unknown
+rag_database_count=unknown
+vector_available_count=unknown
+if command -v pg_lsclusters >/dev/null 2>&1; then
+  postgresql_cluster_command_available=true
+  cluster_inventory="$(pg_lsclusters --no-header 2>/dev/null || true)"
+  postgresql_cluster_count="$(awk 'NF {count++} END {print count+0}' <<<"$cluster_inventory")"
+  postgresql_16_main_count="$(awk '$1 == 16 && $2 == "main" {count++} END {print count+0}' <<<"$cluster_inventory")"
+  postgresql_selected_port_count="$(awk -v port="$postgresql_port" '$3 == port {count++} END {print count+0}' <<<"$cluster_inventory")"
+  if awk '$1 == 16 && $2 == "main" && $4 == "online" {found=1} END {exit !found}' \
+      <<<"$cluster_inventory"; then
+    postgresql_16_main_online=true
+  fi
+fi
+if [[ "$use_sudo_inspection" == true && "$postgresql_16_main_online" == true \
+    && "$listening_postgresql" -ge 1 && -x "$(command -v psql 2>/dev/null || true)" ]]; then
+  catalog_counts="$(sudo -u postgres -- psql --no-psqlrc \
+    --port "$postgresql_port" --dbname=postgres --tuples-only --no-align \
+    --command="SELECT (SELECT count(*) FROM pg_roles WHERE rolname IN ('rag_owner','rag_ingest','rag_retrieval')) || '|' || (SELECT count(*) FROM pg_database WHERE datname = 'rag_catalog') || '|' || (SELECT count(*) FROM pg_available_extensions WHERE name = 'vector');" \
+    2>/dev/null || true)"
+  if [[ "$catalog_counts" =~ ^([0-9]+)\|([0-9]+)\|([0-9]+)$ ]]; then
+    postgresql_catalog_checked=true
+    rag_role_count="${BASH_REMATCH[1]}"
+    rag_database_count="${BASH_REMATCH[2]}"
+    vector_available_count="${BASH_REMATCH[3]}"
+  fi
+fi
+
+operator_home_absolute=false
+operator_home_owned=false
+[[ "$HOME" == /* ]] && operator_home_absolute=true
+[[ "$(stat -Lc %u -- "$HOME")" == "$(id -u)" ]] && operator_home_owned=true
+install_root_exists=false
+[[ -e "$HOME/Documents/Ishikawa" || -L "$HOME/Documents/Ishikawa" ]] \
+  && install_root_exists=true
+unit_target_count=0
+for unit_name in ishikawa-observability-retention.service \
+  ishikawa-observability-retention.timer ishikawa-retrieval-api.service; do
+  [[ -e "$HOME/.config/systemd/user/$unit_name" \
+      || -L "$HOME/.config/systemd/user/$unit_name" ]] \
+    && (( unit_target_count += 1 ))
+done
+user_lingering_enabled=false
+[[ "$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null || true)" == yes ]] \
+  && user_lingering_enabled=true
+user_manager_available=false
+systemctl --user show-environment >/dev/null 2>&1 && user_manager_available=true
+protected_source_check=not_requested
+if [[ -n "$protected_source_root" ]]; then
+  protected_source_check=unavailable
+  [[ -d "$protected_source_root" && ! -L "$protected_source_root" \
+      && -r "$protected_source_root" && -x "$protected_source_root" ]] \
+    && protected_source_check=pass
+fi
+printf '[RUNTIME] state=pass;docker_accessible=%s;postgresql_clusters=%s;python_yaml=%s;python_psycopg=%s\n' \
+  "$docker_accessible" "$postgresql_cluster_count" "$python_yaml_available" \
+  "$python_psycopg_available"
+
+started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+current_stage='host_inventory'
+printf '[HOST] state=start;paths=true;capacity=true;listeners=5;boot_posture=true\n'
+{
+  printf 'inventory_schema_version=2\n'
+  printf 'captured_utc=%s\n' "$started_utc"
+  printf 'hostname_check=%s\n' "$hostname_check"
+  printf 'os_id=ubuntu\n'
+  printf 'os_version=%s\n' "$VERSION_ID"
+  printf 'os_codename=%s\n' "${VERSION_CODENAME:-unknown}"
+  printf 'architecture=%s\n' "$architecture"
+  printf 'kernel_machine=%s\n' "$(uname -m)"
+  printf 'python_version=%s\n' "$python_version"
+  printf 'python_yaml_available=%s\n' "$python_yaml_available"
+  printf 'python_psycopg_available=%s\n' "$python_psycopg_available"
+  printf 'poppler_text_version=%s\n' "${poppler_text_version:-none}"
+  printf 'psql_version=%s\n' "${psql_version:-none}"
+  printf 'docker_command_available=%s\n' "$docker_command_available"
+  printf 'docker_accessible=%s\n' "$docker_accessible"
+  printf 'docker_access_mode=%s\n' "$docker_access_mode"
+  printf 'docker_server_version=%s\n' "$docker_server_version"
+  printf 'node_image_present=%s\n' "$node_image_present"
+  printf 'node_image_id=%s\n' "$node_image_id"
+  printf 'node_image_consumer_count=%s\n' "$node_image_consumer_count"
+  printf 'ishikawa_named_container_count=%s\n' "$ishikawa_named_container_count"
+  printf 'selected_package_count=%s\n' "${#package_names[@]}"
+  printf 'installed_selected_package_count=%s\n' "$installed_selected_count"
+  printf 'missing_candidate_count=%s\n' "$missing_candidate_count"
+  printf 'dpkg_audit_clean=%s\n' "$dpkg_audit_clean"
+  printf 'dpkg_audit_sha256=%s\n' "$dpkg_audit_sha256"
+  printf 'apt_check_clean=%s\n' "$apt_check_clean"
+  printf 'apt_check_sha256=%s\n' "$apt_check_sha256"
+  printf 'apt_lists_latest_epoch=%s\n' "${apt_lists_latest_epoch:-0}"
+  printf 'root_available_bytes=%s\n' "$root_available_bytes"
+  printf 'home_available_bytes=%s\n' "$home_available_bytes"
+  printf 'temporary_available_bytes=%s\n' "$temporary_available_bytes"
+  printf 'memory_available_bytes=%s\n' "$memory_available_bytes"
+  printf 'operator_home_absolute=%s\n' "$operator_home_absolute"
+  printf 'operator_home_owned=%s\n' "$operator_home_owned"
+  printf 'install_root_exists=%s\n' "$install_root_exists"
+  printf 'user_unit_target_count=%s\n' "$unit_target_count"
+  printf 'user_lingering_enabled=%s\n' "$user_lingering_enabled"
+  printf 'user_manager_available=%s\n' "$user_manager_available"
+  printf 'protected_source_check=%s\n' "$protected_source_check"
+  printf 'postgresql_port=%s\n' "$postgresql_port"
+  printf 'retrieval_port=%s\n' "$retrieval_port"
+  printf 'web_port=%s\n' "$web_port"
+  printf 'gemma_port=%s\n' "$gemma_port"
+  printf 'nomic_port=%s\n' "$nomic_port"
+  printf 'listener_postgresql_count=%s\n' "$listening_postgresql"
+  printf 'listener_retrieval_count=%s\n' "$listening_retrieval"
+  printf 'listener_web_count=%s\n' "$listening_web"
+  printf 'listener_gemma_count=%s\n' "$listening_gemma"
+  printf 'listener_nomic_count=%s\n' "$listening_nomic"
+  printf 'postgresql_service_enabled=%s\n' "${postgresql_service_enabled:-unknown}"
+  printf 'postgresql_service_active=%s\n' "${postgresql_service_active:-unknown}"
+  printf 'postgresql_cluster_command_available=%s\n' "$postgresql_cluster_command_available"
+  printf 'postgresql_cluster_count=%s\n' "$postgresql_cluster_count"
+  printf 'postgresql_16_main_count=%s\n' "$postgresql_16_main_count"
+  printf 'postgresql_selected_port_count=%s\n' "$postgresql_selected_port_count"
+  printf 'postgresql_16_main_online=%s\n' "$postgresql_16_main_online"
+  printf 'postgresql_catalog_checked=%s\n' "$postgresql_catalog_checked"
+  printf 'rag_role_count=%s\n' "$rag_role_count"
+  printf 'rag_database_count=%s\n' "$rag_database_count"
+  printf 'vector_available_count=%s\n' "$vector_available_count"
+} >"$summary_path"
+printf '[HOST] state=pass;install_root_exists=%s;unit_targets=%s;protected_source=%s\n' \
+  "$install_root_exists" "$unit_target_count" "$protected_source_check"
+
+current_stage='evidence_finalization'
+printf '[EVIDENCE] state=start;content_free=true;checksums=true\n'
+summary_sha256="$(sha256sum "$summary_path" | awk '{print $1}')"
+packages_sha256="$(sha256sum "$packages_path" | awk '{print $1}')"
+{
+  printf 'purpose=capture_ishikawa_native_prerequisite_inventory\n'
+  printf 'hostname_check=%s;os_version=%s;architecture=%s\n' "$hostname_check" "$VERSION_ID" "$architecture"
+  printf 'summary_sha256=%s;package_inventory_sha256=%s\n' "$summary_sha256" "$packages_sha256"
+  printf 'selected_packages=%s;installed_selected_packages=%s;missing_candidates=%s\n' "${#package_names[@]}" "$installed_selected_count" "$missing_candidate_count"
+  printf 'dpkg_audit_clean=%s;apt_check_clean=%s\n' "$dpkg_audit_clean" "$apt_check_clean"
+  printf 'docker_accessible=%s;node_image_present=%s;existing_install=%s;unit_targets=%s\n' \
+    "$docker_accessible" "$node_image_present" "$install_root_exists" "$unit_target_count"
+  printf 'listeners=postgresql:%s,retrieval:%s,web:%s,gemma:%s,nomic:%s\n' \
+    "$listening_postgresql" "$listening_retrieval" "$listening_web" \
+    "$listening_gemma" "$listening_nomic"
+  printf 'postgresql_clusters=%s;postgresql_16_main=%s;selected_port_clusters=%s\n' \
+    "$postgresql_cluster_count" "$postgresql_16_main_count" \
+    "$postgresql_selected_port_count"
+  printf 'postgresql_catalog_checked=%s;rag_roles=%s;rag_database=%s;vector_available=%s\n' \
+    "$postgresql_catalog_checked" "$rag_role_count" "$rag_database_count" \
+    "$vector_available_count"
+  printf 'protected_source_check=%s\n' "$protected_source_check"
+  printf 'network_contact=false;package_metadata_updated=false;package_downloaded=false;package_installed=false;service_changed=false\n'
+  printf 'ishikawa_native_prerequisite_inventory=pass;qualification_status=not_run\n'
+} >"$report_path"
+
+(
+  cd -- "$output_dir"
+  sha256sum host-summary.env inventory-report.txt package-inventory.tsv >SHA256SUMS
+  sha256sum --check --strict SHA256SUMS >/dev/null
+)
+printf '[EVIDENCE] state=pass;summary_sha256=%s;package_inventory_sha256=%s\n' \
+  "$summary_sha256" "$packages_sha256"
+printf '[SUMMARY] state=pass;output_dir=%s;mutation=false;qualification_status=not_run\n' \
+  "$output_dir"
+printf '\nSCRIPT RESULT\nishikawa_native_prerequisite_inventory=pass\n'
+
+

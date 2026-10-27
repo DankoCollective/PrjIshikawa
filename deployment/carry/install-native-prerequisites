@@ -14,19 +14,21 @@ set -Eeuo pipefail
 #      leave PostgreSQL stopped and disabled at boot.
 #
 # Usage:
-#   bash ./install-native-prerequisites --deb-dir /pce/import/deb/debs --plan
-#   bash ./install-native-prerequisites --deb-dir /pce/import/deb/debs --apply
+#   bash ./install-native-prerequisites \
+#     --package-directory /pce/import/deb/debs --plan
+#   bash ./install-native-prerequisites \
+#     --package-directory /pce/import/deb/debs --apply
 
 umask 077
 
-action=""
-deb_dir=""
-runtime_root=""
-policy_installed=false
-apply_started=false
-result_emitted=false
+execution_action=""
+package_directory_path=""
+temporary_runtime_directory=""
+service_start_policy_installed=false
+package_application_started=false
+script_result_emitted=false
 
-required_packages=(
+required_package_version_pins=(
   'python3-psycopg=3.3.2-1build1'
   'postgresql-common=293.pgdg26.04+1'
   'postgresql-client-common=293.pgdg26.04+1'
@@ -36,207 +38,249 @@ required_packages=(
   'postgresql-16-pgvector=0.8.7-1.pgdg26.04+1'
 )
 
-emit_result() {
-  if [[ "$result_emitted" == false ]]; then
+emit_script_result() {
+  if [[ "$script_result_emitted" == false ]]; then
     printf '\nSCRIPT RESULT\ninstall-native-prerequisites=%s\n' "$1"
-    result_emitted=true
+    script_result_emitted=true
   fi
 }
 
-fail() {
+fail_with_detail() {
   printf '\nFAILURE DETAIL\nreason=%s\ndetail=%s\n' "$1" "$2" >&2
-  emit_result "blocked;reason=$1"
+  emit_script_result "blocked;reason=$1"
   exit 1
 }
 
-on_error() {
+handle_unexpected_error() {
   local exit_status=$?
   local line_number="$1"
-  if [[ "$result_emitted" == false ]]; then
+  if [[ "$script_result_emitted" == false ]]; then
     printf '\nFAILURE DETAIL\nreason=unexpected_error\ndetail=Command failed at line %s with status %s.\n' \
       "$line_number" "$exit_status" >&2
-    emit_result 'blocked;reason=unexpected_error'
+    emit_script_result 'blocked;reason=unexpected_error'
   fi
   exit "$exit_status"
 }
 
-on_signal() {
-  emit_result "blocked;reason=$1"
+handle_signal() {
+  emit_script_result "blocked;reason=$1"
   exit "$2"
 }
 
-cleanup() {
+cleanup_temporary_state() {
   local exit_status=$?
   trap - EXIT
-  if [[ "$policy_installed" == true ]]; then
+  if [[ "$service_start_policy_installed" == true ]]; then
     sudo rm -f -- /usr/sbin/policy-rc.d >/dev/null 2>&1 || true
   fi
-  if [[ "$apply_started" == true ]]; then
+  if [[ "$package_application_started" == true ]]; then
     sudo systemctl stop postgresql@16-main.service postgresql.service \
       >/dev/null 2>&1 || true
     sudo systemctl disable postgresql@16-main.service postgresql.service \
       >/dev/null 2>&1 || true
   fi
-  if [[ -n "$runtime_root" && "$runtime_root" == /tmp/native-prerequisite-install.* ]]; then
-    rm -rf -- "$runtime_root"
+  if [[ -n "$temporary_runtime_directory" \
+    && "$temporary_runtime_directory" == /tmp/native-prerequisite-install.* ]]; then
+    rm -rf -- "$temporary_runtime_directory"
   fi
   exit "$exit_status"
 }
-trap cleanup EXIT
-trap 'on_error "$LINENO"' ERR
-trap 'on_signal interrupted 130' INT
-trap 'on_signal terminated 143' TERM
+trap cleanup_temporary_state EXIT
+trap 'handle_unexpected_error "$LINENO"' ERR
+trap 'handle_signal interrupted 130' INT
+trap 'handle_signal terminated 143' TERM
 
 while (($#)); do
   case "$1" in
-    --deb-dir)
-      (($# >= 2)) || fail invalid_arguments '--deb-dir requires a directory.'
-      [[ -z "$deb_dir" ]] || fail invalid_arguments '--deb-dir was provided more than once.'
-      deb_dir="$2"
-      [[ -n "$deb_dir" ]] || fail invalid_arguments '--deb-dir requires a directory.'
+    --package-directory)
+      (($# >= 2)) \
+        || fail_with_detail invalid_arguments '--package-directory requires a directory.'
+      [[ -z "$package_directory_path" ]] \
+        || fail_with_detail invalid_arguments \
+          '--package-directory was provided more than once.'
+      package_directory_path="$2"
+      [[ -n "$package_directory_path" ]] \
+        || fail_with_detail invalid_arguments \
+          '--package-directory requires a directory.'
       shift 2
       ;;
     --plan|--apply)
-      [[ -z "$action" ]] || fail invalid_arguments 'Select one action.'
-      action="${1#--}"
+      [[ -z "$execution_action" ]] \
+        || fail_with_detail invalid_arguments 'Select one action.'
+      execution_action="${1#--}"
       shift
       ;;
     --help) sed -n '4,18p' "$0"; exit 0 ;;
-    *) fail invalid_arguments "Unsupported argument: $1" ;;
+    *) fail_with_detail invalid_arguments "Unsupported argument: $1" ;;
   esac
 done
 
-[[ -n "$deb_dir" && -n "$action" ]] \
-  || fail invalid_arguments '--deb-dir and --plan or --apply are required.'
-(( EUID != 0 )) || fail root_operator_forbidden 'Run as the Tech operator, not root.'
+[[ -n "$package_directory_path" && -n "$execution_action" ]] \
+  || fail_with_detail invalid_arguments \
+    '--package-directory and --plan or --apply are required.'
+(( EUID != 0 )) \
+  || fail_with_detail root_operator_forbidden 'Run as the Tech operator, not root.'
 
 for command_name in apt-get awk dpkg dpkg-deb dpkg-query find grep install ln \
-  mktemp pg_lsclusters python3 readlink rm sort stat sudo systemctl tee; do
+  mktemp python3 readlink rm sort stat sudo systemctl tee; do
   command -v "$command_name" >/dev/null \
-    || fail missing_command "Missing command: $command_name"
+    || fail_with_detail missing_command "Missing command: $command_name"
 done
 
-os_id="$(awk -F= '$1=="ID" {gsub(/\"/,"",$2); print $2}' /etc/os-release)"
-os_version="$(awk -F= '$1=="VERSION_ID" {gsub(/\"/,"",$2); print $2}' /etc/os-release)"
-[[ "$os_id" == ubuntu && "$os_version" == 26.04 ]] \
-  || fail target_os_wrong "Expected Ubuntu 26.04; observed $os_id $os_version."
+operating_system_id="$(awk -F= '$1=="ID" {gsub(/\"/,"",$2); print $2}' /etc/os-release)"
+operating_system_version="$(awk -F= '$1=="VERSION_ID" {gsub(/\"/,"",$2); print $2}' /etc/os-release)"
+[[ "$operating_system_id" == ubuntu && "$operating_system_version" == 26.04 ]] \
+  || fail_with_detail target_os_wrong \
+    "Expected Ubuntu 26.04; observed $operating_system_id $operating_system_version."
 [[ "$(dpkg --print-architecture)" == amd64 ]] \
-  || fail target_architecture_wrong 'Expected AMD64.'
+  || fail_with_detail target_architecture_wrong 'Expected AMD64.'
 
-[[ -d "$deb_dir" ]] || fail deb_directory_missing "Missing directory: $deb_dir"
-deb_dir="$(readlink -f -- "$deb_dir")" \
-  || fail deb_directory_unreadable "Could not resolve directory: $deb_dir"
-mapfile -d '' deb_files < <(find "$deb_dir" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
-[[ "${#deb_files[@]}" == 97 ]] \
-  || fail deb_count_wrong "Expected 97 .deb files; observed ${#deb_files[@]}."
+[[ -d "$package_directory_path" ]] \
+  || fail_with_detail package_directory_missing \
+    "Missing directory: $package_directory_path"
+package_directory_path="$(readlink -f -- "$package_directory_path")" \
+  || fail_with_detail package_directory_unreadable \
+    "Could not resolve directory: $package_directory_path"
+mapfile -d '' package_archive_paths < <(
+  find "$package_directory_path" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
+)
+[[ "${#package_archive_paths[@]}" == 97 ]] \
+  || fail_with_detail package_archive_count_wrong \
+    "Expected 97 .deb files; observed ${#package_archive_paths[@]}."
 
-declare -A carried_versions=()
-for deb_file in "${deb_files[@]}"; do
-  package_name="$(dpkg-deb -f "$deb_file" Package)"
-  package_arch="$(dpkg-deb -f "$deb_file" Architecture)"
-  [[ "$package_arch" == amd64 || "$package_arch" == all ]] \
-    || fail deb_architecture_wrong "Wrong architecture in ${deb_file##*/}: $package_arch"
-  [[ -z "${carried_versions[$package_name]+present}" ]] \
-    || fail duplicate_package "More than one .deb provides $package_name."
-  carried_versions[$package_name]="$(dpkg-deb -f "$deb_file" Version)"
+declare -A carried_package_versions=()
+for package_archive_path in "${package_archive_paths[@]}"; do
+  package_name="$(dpkg-deb -f "$package_archive_path" Package)"
+  package_architecture="$(dpkg-deb -f "$package_archive_path" Architecture)"
+  [[ "$package_architecture" == amd64 || "$package_architecture" == all ]] \
+    || fail_with_detail package_architecture_wrong \
+      "Wrong architecture in ${package_archive_path##*/}: $package_architecture"
+  [[ -z "${carried_package_versions[$package_name]+present}" ]] \
+    || fail_with_detail duplicate_package "More than one .deb provides $package_name."
+  carried_package_versions[$package_name]="$(dpkg-deb -f "$package_archive_path" Version)"
 done
-for package_pin in "${required_packages[@]}"; do
-  package_name="${package_pin%%=*}"
-  expected_version="${package_pin#*=}"
-  [[ "${carried_versions[$package_name]:-missing}" == "$expected_version" ]] \
-    || fail direct_package_wrong "Expected $package_pin; found ${carried_versions[$package_name]:-missing}."
+for package_version_pin in "${required_package_version_pins[@]}"; do
+  package_name="${package_version_pin%%=*}"
+  expected_version="${package_version_pin#*=}"
+  [[ "${carried_package_versions[$package_name]:-missing}" == "$expected_version" ]] \
+    || fail_with_detail direct_package_wrong \
+      "Expected $package_version_pin; found ${carried_package_versions[$package_name]:-missing}."
 done
-[[ -z "$(dpkg --audit)" ]] || fail dpkg_state_unclean 'dpkg reports an incomplete transaction.'
-printf '[READINESS] state=pass;debs=97;os=ubuntu-26.04;architecture=amd64\n'
+[[ -z "$(dpkg --audit)" ]] \
+  || fail_with_detail dpkg_state_unclean 'dpkg reports an incomplete transaction.'
+printf '[READINESS] state=pass;package_archives=97;os=ubuntu-26.04;architecture=amd64\n'
 
 # Build a private file-only catalog so APT retains compatible packages that
 # are already installed instead of forcing every clean-system closure file.
-runtime_root="$(mktemp -d /tmp/native-prerequisite-install.XXXXXX)"
-mkdir -p "$runtime_root"/{repo,apt-conf,source-parts,lists/partial,cache/archives/partial,log}
-for deb_file in "${deb_files[@]}"; do
-  ln -s "$deb_file" "$runtime_root/repo/${deb_file##*/}"
+temporary_runtime_directory="$(mktemp -d /tmp/native-prerequisite-install.XXXXXX)"
+mkdir -p \
+  "$temporary_runtime_directory/package-repository" \
+  "$temporary_runtime_directory/package-manager-configuration" \
+  "$temporary_runtime_directory/source-list-parts" \
+  "$temporary_runtime_directory/package-lists/partial" \
+  "$temporary_runtime_directory/package-cache/archives/partial" \
+  "$temporary_runtime_directory/package-manager-log"
+for package_archive_path in "${package_archive_paths[@]}"; do
+  ln -s "$package_archive_path" \
+    "$temporary_runtime_directory/package-repository/${package_archive_path##*/}"
 done
 (
-  for deb_file in "$runtime_root/repo"/*.deb; do
-    dpkg-deb -f "$deb_file"
+  for package_archive_path in \
+    "$temporary_runtime_directory/package-repository"/*.deb; do
+    dpkg-deb -f "$package_archive_path"
     printf 'Filename: %s\nSize: %s\n\n' \
-      "${deb_file##*/}" "$(stat -Lc '%s' "$deb_file")"
+      "${package_archive_path##*/}" "$(stat -Lc '%s' "$package_archive_path")"
   done
-) > "$runtime_root/repo/Packages"
-printf 'deb [trusted=yes] file:%s ./\n' "$runtime_root/repo" > "$runtime_root/sources.list"
+) > "$temporary_runtime_directory/package-repository/Packages"
+printf 'deb [trusted=yes] file:%s ./\n' \
+  "$temporary_runtime_directory/package-repository" \
+  > "$temporary_runtime_directory/sources.list"
 
-apt_options=(
+local_package_manager_options=(
   -o 'Dir::Etc::main=/dev/null'
-  -o "Dir::Etc::parts=$runtime_root/apt-conf"
-  -o "Dir::Etc::sourcelist=$runtime_root/sources.list"
-  -o "Dir::Etc::sourceparts=$runtime_root/source-parts"
-  -o "Dir::State::lists=$runtime_root/lists"
-  -o "Dir::Cache=$runtime_root/cache"
-  -o "Dir::Log=$runtime_root/log"
+  -o "Dir::Etc::parts=$temporary_runtime_directory/package-manager-configuration"
+  -o "Dir::Etc::sourcelist=$temporary_runtime_directory/sources.list"
+  -o "Dir::Etc::sourceparts=$temporary_runtime_directory/source-list-parts"
+  -o "Dir::State::lists=$temporary_runtime_directory/package-lists"
+  -o "Dir::Cache=$temporary_runtime_directory/package-cache"
+  -o "Dir::Log=$temporary_runtime_directory/package-manager-log"
   -o 'APT::Sandbox::User=root'
   -o 'Acquire::Languages=none'
 )
 
 printf '[CATALOG] action=load;source=file;network_sources=none\n'
-apt-get "${apt_options[@]}" update >/dev/null \
-  || fail local_catalog_failed 'APT could not load the local package catalog.'
+apt-get "${local_package_manager_options[@]}" update >/dev/null \
+  || fail_with_detail local_catalog_failed 'APT could not load the local package catalog.'
 printf '[PLAN] action=simulate\n'
-apt-get "${apt_options[@]}" --simulate --no-remove --no-install-recommends \
-  install "${required_packages[@]}" | tee "$runtime_root/plan.txt" \
-  || fail dependency_plan_failed 'The seven packages do not resolve against Tech.'
-grep -Eq '^Remv |DOWNGRADED|^Inst [^ ]+ \[[^]]+\]' "$runtime_root/plan.txt" \
-  && fail installed_package_change_planned 'The plan would change an installed Tech package.'
+apt-get "${local_package_manager_options[@]}" --simulate --no-remove \
+  --no-install-recommends install "${required_package_version_pins[@]}" \
+  | tee "$temporary_runtime_directory/plan.txt" \
+  || fail_with_detail dependency_plan_failed \
+    'The seven packages do not resolve against Tech.'
+grep -Eq '^Remv |DOWNGRADED|^Inst [^ ]+ \[[^]]+\]' \
+  "$temporary_runtime_directory/plan.txt" \
+  && fail_with_detail installed_package_change_planned \
+    'The plan would change an installed Tech package.'
 printf '[PLAN] state=pass;installed_package_changes=0\n'
 
-if [[ "$action" == plan ]]; then
-  emit_result plan_pass
+if [[ "$execution_action" == plan ]]; then
+  emit_script_result plan_pass
   exit 0
 fi
 
 [[ ! -e /usr/sbin/policy-rc.d ]] \
-  || fail existing_service_policy '/usr/sbin/policy-rc.d already exists.'
-for unit_name in postgresql.service postgresql@16-main.service; do
-  [[ "$(systemctl is-active "$unit_name" 2>/dev/null || true)" != active ]] \
-    || fail postgresql_already_active "$unit_name is active."
-  [[ "$(systemctl is-enabled "$unit_name" 2>/dev/null || true)" != enabled ]] \
-    || fail postgresql_already_enabled "$unit_name is enabled."
+  || fail_with_detail existing_service_policy '/usr/sbin/policy-rc.d already exists.'
+for service_unit_name in postgresql.service postgresql@16-main.service; do
+  [[ "$(systemctl is-active "$service_unit_name" 2>/dev/null || true)" != active ]] \
+    || fail_with_detail postgresql_already_active "$service_unit_name is active."
+  [[ "$(systemctl is-enabled "$service_unit_name" 2>/dev/null || true)" != enabled ]] \
+    || fail_with_detail postgresql_already_enabled "$service_unit_name is enabled."
 done
 
 printf '[PRIVILEGE] action=attended_sudo\n'
-sudo -v || fail sudo_failed 'Attended sudo validation failed.'
-printf '#!/bin/sh\nexit 101\n' > "$runtime_root/policy-rc.d"
-sudo install -m 0755 "$runtime_root/policy-rc.d" /usr/sbin/policy-rc.d
-policy_installed=true
-apply_started=true
+sudo -v || fail_with_detail sudo_failed 'Attended sudo validation failed.'
+printf '#!/bin/sh\nexit 101\n' > "$temporary_runtime_directory/policy-rc.d"
+sudo install -m 0755 "$temporary_runtime_directory/policy-rc.d" /usr/sbin/policy-rc.d
+service_start_policy_installed=true
+package_application_started=true
 
 printf '[INSTALL] action=apply;source=file;network_sources=none\n'
-sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" \
-  --yes --no-remove --no-install-recommends install "${required_packages[@]}" \
-  || fail package_install_failed 'Local package installation failed.'
+sudo env DEBIAN_FRONTEND=noninteractive apt-get "${local_package_manager_options[@]}" \
+  --yes --no-remove --no-install-recommends \
+  install "${required_package_version_pins[@]}" \
+  || fail_with_detail package_install_failed 'Local package installation failed.'
 sudo rm -f -- /usr/sbin/policy-rc.d
-policy_installed=false
+service_start_policy_installed=false
 sudo systemctl stop postgresql@16-main.service postgresql.service >/dev/null 2>&1 || true
 sudo systemctl disable postgresql@16-main.service postgresql.service >/dev/null 2>&1 \
-  || fail postgresql_disable_failed 'Could not disable PostgreSQL boot units.'
+  || fail_with_detail postgresql_disable_failed 'Could not disable PostgreSQL boot units.'
 
-[[ -z "$(dpkg --audit)" ]] || fail dpkg_state_unclean 'dpkg is incomplete after installation.'
-for package_pin in "${required_packages[@]}"; do
-  package_name="${package_pin%%=*}"
-  expected_version="${package_pin#*=}"
+[[ -z "$(dpkg --audit)" ]] \
+  || fail_with_detail dpkg_state_unclean 'dpkg is incomplete after installation.'
+for package_version_pin in "${required_package_version_pins[@]}"; do
+  package_name="${package_version_pin%%=*}"
+  expected_version="${package_version_pin#*=}"
   [[ "$(dpkg-query -W -f='${Version}' "$package_name")" == "$expected_version" ]] \
-    || fail installed_version_wrong "Installed version is wrong: $package_name"
+    || fail_with_detail installed_version_wrong "Installed version is wrong: $package_name"
 done
 python3 -c 'import psycopg; assert psycopg.__version__ == "3.3.2"' \
-  || fail psycopg_import_failed 'Psycopg 3.3.2 import failed.'
-cluster="$(pg_lsclusters --no-header | awk '$1=="16" && $2=="main" {print $1,$2,$3,$4}')"
-[[ "$cluster" == '16 main 5432 down' ]] \
-  || fail postgresql_cluster_wrong "Expected '16 main 5432 down'; observed '${cluster:-missing}'."
-for unit_name in postgresql.service postgresql@16-main.service; do
-  [[ "$(systemctl is-active "$unit_name" 2>/dev/null || true)" != active ]] \
-    || fail postgresql_active_after_install "$unit_name is active."
-  [[ "$(systemctl is-enabled "$unit_name" 2>/dev/null || true)" != enabled ]] \
-    || fail postgresql_enabled_after_install "$unit_name is enabled."
+  || fail_with_detail psycopg_import_failed 'Psycopg 3.3.2 import failed.'
+command -v pg_lsclusters >/dev/null \
+  || fail_with_detail missing_installed_command \
+    'postgresql-common did not install pg_lsclusters.'
+postgresql_cluster_summary="$(
+  pg_lsclusters --no-header \
+    | awk '$1=="16" && $2=="main" {print $1,$2,$3,$4}'
+)"
+[[ "$postgresql_cluster_summary" == '16 main 5432 down' ]] \
+  || fail_with_detail postgresql_cluster_wrong \
+    "Expected '16 main 5432 down'; observed '${postgresql_cluster_summary:-missing}'."
+for service_unit_name in postgresql.service postgresql@16-main.service; do
+  [[ "$(systemctl is-active "$service_unit_name" 2>/dev/null || true)" != active ]] \
+    || fail_with_detail postgresql_active_after_install "$service_unit_name is active."
+  [[ "$(systemctl is-enabled "$service_unit_name" 2>/dev/null || true)" != enabled ]] \
+    || fail_with_detail postgresql_enabled_after_install "$service_unit_name is enabled."
 done
-apply_started=false
+package_application_started=false
 printf '[VALIDATION] state=pass;postgresql=16.15;pgvector=0.8.7;psycopg=3.3.2;boot=disabled\n'
-emit_result pass
+emit_script_result pass

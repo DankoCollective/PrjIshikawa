@@ -22,6 +22,10 @@ cat > "$MOCK_BIN/docker" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 action="${1:-}"
+if [[ "$action" == info ]]; then
+  [[ "${MOCK_DOCKER_ACCESS_FAIL:-false}" != true ]] || exit 1
+  exit 0
+fi
 if [[ "$action" == image && "${2:-}" == inspect ]]; then
   [[ "${MOCK_IMAGE_MISSING:-false}" != true ]] || exit 1
   format=""
@@ -146,6 +150,18 @@ fi
 grep -Fq 'reason=qualification_image_missing' "$missing_image_log" \
   || fail "missing_image_reason_wrong"
 
+docker_access_shelf="$TEST_ROOT/docker-access-shelf"
+make_shelf "$docker_access_shelf"
+docker_access_log="$TEST_ROOT/docker-access.log"
+if (
+  cd "$docker_access_shelf"
+  MOCK_DOCKER_ACCESS_FAIL=true run_qualifier
+) > "$docker_access_log" 2>&1; then
+  fail "docker_access_failure_was_accepted"
+fi
+grep -Fq 'reason=docker_access_failed' "$docker_access_log" \
+  || fail "docker_access_reason_wrong"
+
 container_failure_shelf="$TEST_ROOT/container-failure-shelf"
 make_shelf "$container_failure_shelf"
 container_failure_log="$TEST_ROOT/container-failure.log"
@@ -159,5 +175,5 @@ grep -Fq 'reason=offline_qualification_failed' "$container_failure_log" \
   || fail "container_failure_reason_wrong"
 
 printf 'happy_path=pass;sudo_docker=pass;qualification_receipt=pass\n'
-printf 'checksum_refusal=pass;missing_image_refusal=pass;container_failure=pass\n'
+printf 'checksum_refusal=pass;docker_access_refusal=pass;missing_image_refusal=pass;container_failure=pass\n'
 printf '\nSCRIPT RESULT\nnative_package_qualification_test=pass\n'

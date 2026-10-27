@@ -134,9 +134,23 @@ if [[ "$USE_SUDO_DOCKER" == true ]]; then
   DOCKER=(sudo docker)
 fi
 
-if ! "${DOCKER[@]}" image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
-  fail "qualification_image_missing" "${DOCKER_IMAGE} is not present locally; pull it before qualification."
+if ! "${DOCKER[@]}" info >/dev/null 2>&1; then
+  if [[ "$USE_SUDO_DOCKER" == true ]]; then
+    fail "docker_access_failed" "Attended sudo succeeded, but sudo docker cannot contact the Docker daemon."
+  fi
+  fail "docker_access_failed" "Docker daemon access failed. Rerun with --sudo-docker when this account requires sudo."
 fi
+
+selected_image=""
+for image_candidate in "$DOCKER_IMAGE" "docker.io/library/${DOCKER_IMAGE}"; do
+  if "${DOCKER[@]}" image inspect "$image_candidate" >/dev/null 2>&1; then
+    selected_image="$image_candidate"
+    break
+  fi
+done
+[[ -n "$selected_image" ]] \
+  || fail "qualification_image_missing" "Neither ${DOCKER_IMAGE} nor docker.io/library/${DOCKER_IMAGE} is present in the selected Docker daemon."
+DOCKER_IMAGE="$selected_image"
 
 image_os="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Os}}')"
 image_arch="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Architecture}}')"

@@ -148,7 +148,9 @@ readonly -a package_names=(
   python3-yaml
   python3-psycopg
   poppler-utils
+  libjson-perl
   postgresql-common
+  postgresql-client-common
   postgresql-client-16
   postgresql-16
   postgresql-16-pgvector

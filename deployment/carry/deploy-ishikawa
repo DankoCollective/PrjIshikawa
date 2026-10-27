@@ -8,8 +8,9 @@ umask 077
 #
 # Mental model:
 #   Verify immutable package bytes before every mutation. Keep application,
-#   image, database, user-unit, and runtime transitions explicit and refuse
-#   drift. Roll back only objects created by the current failed action.
+#   image, database, user-unit, and runtime transitions explicit. Generate a
+#   complete non-secret installation plan, bind apply to its reviewed SHA-256,
+#   refuse drift, and roll back only objects created by a failed action.
 #
 # Inputs or prerequisites:
 #   A deployment-ready package, Ubuntu 26.04 AMD64, reviewed native
@@ -27,12 +28,13 @@ usage() {
   printf '%s\n' \
     'Usage: deploy-ishikawa verify' \
     '       deploy-ishikawa inventory --output-dir /tmp/NAME [port and host options]' \
-    '       deploy-ishikawa install [port and host options]' \
+    '       deploy-ishikawa plan --output-plan FILE [port and host options]' \
+    '       deploy-ishikawa apply --plan-file FILE --plan-sha256 SHA256' \
     '       deploy-ishikawa install-schema' \
     '       deploy-ishikawa start|status|stop' \
     '       deploy-ishikawa remove --confirm-empty-installation' \
     '' \
-    'Options for inventory, install, and install-schema where applicable:' \
+    'Options for inventory, plan, and install-schema where applicable:' \
     '  --expected-hostname NAME' \
     '  --expected-os-version VERSION       Default: 26.04' \
     '  --postgresql-port PORT              Default: 5432' \
@@ -40,6 +42,11 @@ usage() {
     '  --web-port PORT                     Default: 3384' \
     '  --gemma-port PORT                   Default: 8000' \
     '  --nomic-port PORT                   Default: 8001' \
+    'Options for plan:' \
+    '  --output-plan FILE                  New absolute plan path' \
+    'Options for apply:' \
+    '  --plan-file FILE                    Reviewed plan path' \
+    '  --plan-sha256 SHA256                Reviewed plan identity' \
     'Options for inventory only:' \
     '  --protected-source-root PATH        Optional protected corpus root check' \
     '  --use-sudo-inspection               Attended Docker/PostgreSQL inspection'
@@ -57,12 +64,25 @@ fail() {
   exit 1
 }
 
+fail_for_signal() {
+  local failure_reason="$1" signal_status="$2"
+  printf '%s\n' \
+    'FAILURE DETAIL' \
+    "action=${action:-argument_validation}" \
+    "reason=$failure_reason" \
+    'operator_action=Review cleanup state, correct the interruption cause, and rerun.' \
+    '' \
+    'SCRIPT RESULT' \
+    "ishikawa_deployment_${action:-command}=blocked" >&2
+  exit "$signal_status"
+}
+
 (( $# >= 1 )) || { usage >&2; exit 2; }
 action="$1"
 shift
 readonly action_argument_count="$#"
 case "$action" in
-  verify|inventory|install|install-schema|start|status|stop|remove) ;;
+  verify|inventory|plan|apply|install-schema|start|status|stop|remove) ;;
   --help|-h) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -103,6 +123,9 @@ web_port='3384'
 gemma_port='8000'
 nomic_port='8001'
 output_dir=''
+output_plan=''
+plan_file=''
+reviewed_plan_sha256=''
 protected_source_root=''
 use_sudo_inspection=false
 confirm_remove=false
@@ -114,6 +137,9 @@ web_port_supplied=false
 gemma_port_supplied=false
 nomic_port_supplied=false
 output_dir_supplied=false
+output_plan_supplied=false
+plan_file_supplied=false
+reviewed_plan_sha256_supplied=false
 protected_source_root_supplied=false
 while (( $# > 0 )); do
   case "$1" in
@@ -127,14 +153,77 @@ while (( $# > 0 )); do
     --protected-source-root) protected_source_root="${2:-}"; protected_source_root_supplied=true; shift 2 ;;
     --use-sudo-inspection) use_sudo_inspection=true; shift ;;
     --output-dir) output_dir="${2:-}"; output_dir_supplied=true; shift 2 ;;
+    --output-plan) output_plan="${2:-}"; output_plan_supplied=true; shift 2 ;;
+    --plan-file) plan_file="${2:-}"; plan_file_supplied=true; shift 2 ;;
+    --plan-sha256) reviewed_plan_sha256="${2:-}"; reviewed_plan_sha256_supplied=true; shift 2 ;;
     --confirm-empty-installation) confirm_remove=true; shift ;;
     *) fail arguments_invalid ;;
   esac
 done
 
+if [[ "$action" == apply ]]; then
+  [[ "$plan_file_supplied" == true && "$reviewed_plan_sha256_supplied" == true \
+      && "$expected_hostname_supplied" == false \
+      && "$expected_os_version_supplied" == false \
+      && "$postgresql_port_supplied" == false \
+      && "$retrieval_port_supplied" == false && "$web_port_supplied" == false \
+      && "$gemma_port_supplied" == false && "$nomic_port_supplied" == false \
+      && "$output_dir_supplied" == false && "$output_plan_supplied" == false \
+      && "$protected_source_root_supplied" == false \
+      && "$use_sudo_inspection" == false && "$confirm_remove" == false ]] \
+    || fail arguments_invalid
+  [[ "$plan_file" == /* && -f "$plan_file" && ! -L "$plan_file" \
+      && -r "$plan_file" ]] || fail reviewed_plan_invalid
+  [[ "$reviewed_plan_sha256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail reviewed_plan_sha256_invalid
+  for required_command in awk python3 sha256sum; do
+    command -v "$required_command" >/dev/null 2>&1 \
+      || fail "command_missing_${required_command}"
+  done
+  actual_plan_sha256="$(sha256sum -- "$plan_file" | awk '{print $1}')"
+  [[ "$actual_plan_sha256" == "$reviewed_plan_sha256" ]] \
+    || fail reviewed_plan_sha256_mismatch
+  mapfile -t reviewed_plan_values < <(python3 -B - "$plan_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+plan = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if plan.get("schema") != "ishikawa.installation-plan.v1":
+    raise SystemExit(1)
+target = plan.get("target", {})
+ports = plan.get("ports", {})
+values = (
+    target.get("hostname"),
+    target.get("os_version"),
+    ports.get("postgresql"),
+    ports.get("retrieval"),
+    ports.get("web"),
+    ports.get("gemma"),
+    ports.get("nomic"),
+)
+if not isinstance(values[0], str) or not isinstance(values[1], str):
+    raise SystemExit(1)
+if any(type(value) is not int for value in values[2:]):
+    raise SystemExit(1)
+print(*values, sep="\n")
+PY
+  ) || fail reviewed_plan_invalid
+  (( ${#reviewed_plan_values[@]} == 7 )) || fail reviewed_plan_invalid
+  expected_hostname="${reviewed_plan_values[0]}"
+  expected_os_version="${reviewed_plan_values[1]}"
+  postgresql_port="${reviewed_plan_values[2]}"
+  retrieval_port="${reviewed_plan_values[3]}"
+  web_port="${reviewed_plan_values[4]}"
+  gemma_port="${reviewed_plan_values[5]}"
+  nomic_port="${reviewed_plan_values[6]}"
+fi
+
 if [[ "$action" == inventory ]]; then
   [[ -n "$output_dir" ]] || fail output_directory_required
-  [[ "$confirm_remove" == false ]] || fail arguments_invalid
+  [[ "$confirm_remove" == false && "$output_plan_supplied" == false \
+      && "$plan_file_supplied" == false \
+      && "$reviewed_plan_sha256_supplied" == false ]] || fail arguments_invalid
   printf '[VERIFY] state=start;mutation=false\n'
   bash "$verifier" >/dev/null || fail carry_verification_failed
   printf '[VERIFY] state=pass;release=v1.3.1;mutation=false\n'
@@ -166,6 +255,8 @@ if [[ "$action" == install-schema ]]; then
       && "$retrieval_port_supplied" == false && "$web_port_supplied" == false \
       && "$gemma_port_supplied" == false && "$nomic_port_supplied" == false \
       && "$output_dir_supplied" == false && "$protected_source_root_supplied" == false \
+      && "$output_plan_supplied" == false && "$plan_file_supplied" == false \
+      && "$reviewed_plan_sha256_supplied" == false \
       && "$use_sudo_inspection" == false && "$confirm_remove" == false ]] \
     || fail arguments_invalid
   [[ "$postgresql_port" =~ ^[0-9]+$ && "$postgresql_port" -ge 1 \
@@ -234,8 +325,8 @@ PY
     exit "$status"
   }
   trap cleanup_schema EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'fail_for_signal signal_interrupt 130' INT
+  trap 'fail_for_signal signal_termination 143' TERM
   tar --no-same-owner --no-same-permissions -xzf "$application_archive" \
     -C "$temporary_schema_root" \
     || fail application_extraction_failed
@@ -316,7 +407,9 @@ PY
 fi
 
 if [[ "$action" == remove ]]; then
-  [[ "$confirm_remove" == true && "$action_argument_count" == 1 ]] \
+  [[ "$confirm_remove" == true && "$action_argument_count" == 1 \
+      && "$output_plan_supplied" == false && "$plan_file_supplied" == false \
+      && "$reviewed_plan_sha256_supplied" == false ]] \
     || fail explicit_empty_removal_confirmation_required
   [[ -d "$install_root" && ! -L "$install_root" ]] || fail application_not_installed
   [[ "$(cd -- "$install_root" && pwd -P)" == "$(cd -- "$HOME/Documents" && pwd -P)/Ishikawa" ]] \
@@ -344,10 +437,20 @@ if [[ "$action" == remove ]]; then
   exit 0
 fi
 
-[[ "$action" == install ]] || fail arguments_invalid
-[[ "$output_dir_supplied" == false && "$protected_source_root_supplied" == false \
-    && "$use_sudo_inspection" == false && "$confirm_remove" == false ]] \
-  || fail arguments_invalid
+[[ "$action" == plan || "$action" == apply ]] || fail arguments_invalid
+if [[ "$action" == plan ]]; then
+  [[ "$output_plan_supplied" == true && -n "$output_plan" \
+      && "$output_plan" == /* && "$plan_file_supplied" == false \
+      && "$reviewed_plan_sha256_supplied" == false \
+      && "$output_dir_supplied" == false \
+      && "$protected_source_root_supplied" == false \
+      && "$use_sudo_inspection" == false && "$confirm_remove" == false ]] \
+    || fail arguments_invalid
+  [[ ! -e "$output_plan" && ! -L "$output_plan" \
+      && -d "$(dirname -- "$output_plan")" \
+      && ! -L "$(dirname -- "$output_plan")" ]] \
+    || fail output_plan_path_invalid
+fi
 (( EUID != 0 )) || fail non_root_operator_required
 [[ "$HOME" == /* && "$install_root" == "$HOME/Documents/Ishikawa" ]] \
   || fail operator_home_invalid
@@ -360,19 +463,23 @@ for selected_port in "$postgresql_port" "$retrieval_port" "$web_port" "$gemma_po
 done
 [[ "$(printf '%s\n' "$postgresql_port" "$retrieval_port" "$web_port" "$gemma_port" "$nomic_port" \
   | sort -u | awk 'END {print NR}')" == 5 ]] || fail ports_collide
-for required in bash cp docker find grep install jq loginctl mkdir mktemp mv python3 rm \
-  sha256sum sort sudo systemctl tar; do
+for required in awk bash cmp cp docker find grep hostname id install jq loginctl \
+  mkdir mktemp mv python3 rm sha256sum sort sudo systemctl tar; do
   command -v "$required" >/dev/null 2>&1 || fail "command_missing_${required}"
 done
 printf '[PREFLIGHT] state=start;mutation=false\n'
 bash "$verifier" >/dev/null || fail carry_verification_failed
 [[ "$(jq -r '.release_state' "$package_receipt")" == deployment_ready ]] \
   || fail carry_not_final
-[[ ! -e "$install_root" && ! -L "$install_root" ]] || fail installation_exists
-for unit_name in "${unit_names[@]}"; do
-  [[ ! -e "$user_unit_root/$unit_name" && ! -L "$user_unit_root/$unit_name" ]] \
-    || fail user_unit_target_exists
-done
+if [[ "$action" == plan ]]; then
+  [[ ! -e "$install_root" && ! -L "$install_root" ]] || fail installation_exists
+  for unit_name in "${unit_names[@]}"; do
+    [[ ! -e "$user_unit_root/$unit_name" && ! -L "$user_unit_root/$unit_name" ]] \
+      || fail user_unit_target_exists
+  done
+else
+  [[ ! -L "$install_root" ]] || fail installation_path_unsafe
+fi
 [[ "$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null || true)" != yes ]] \
   || fail user_lingering_enabled
 [[ "$(systemctl is-enabled postgresql.service 2>/dev/null || true)" != enabled ]] \
@@ -396,9 +503,12 @@ inventory_arguments=(
 bash "$inspector" "${inventory_arguments[@]}" >/dev/null \
   || fail native_prerequisite_inventory_failed
 
-python3 -B - "$inventory_root/host-summary.env" "$inventory_root/package-inventory.tsv" <<'PY' \
+native_package_versions_path="$inventory_root/native-package-versions.json"
+python3 -B - "$inventory_root/host-summary.env" \
+  "$inventory_root/package-inventory.tsv" "$native_package_versions_path" <<'PY' \
   || fail native_prerequisites_incompatible
 import csv
+import json
 import sys
 from pathlib import Path
 
@@ -414,18 +524,342 @@ if not summary.get("psql_version", "").startswith("16."):
     raise SystemExit(1)
 required = {
     "python3", "python3-yaml", "python3-psycopg", "poppler-utils",
-    "postgresql-common", "postgresql-client-16", "postgresql-16",
-    "postgresql-16-pgvector", "libpq5",
+    "libjson-perl", "postgresql-common", "postgresql-client-common",
+    "postgresql-client-16", "postgresql-16", "postgresql-16-pgvector",
+    "libpq5",
 }
 with Path(sys.argv[2]).open(encoding="utf-8", newline="") as stream:
     installed = {
-        row["package"] for row in csv.DictReader(stream, delimiter="\t")
+        row["package"]: row["installed_version"]
+        for row in csv.DictReader(stream, delimiter="\t")
         if row["installed_version"] != "none"
     }
-if not required.issubset(installed):
+if not required.issubset(installed.keys()):
     raise SystemExit(1)
+expected_versions = {
+    "python3-psycopg": "3.3.2-1build1",
+    "postgresql-common": "293.pgdg26.04+1",
+    "postgresql-client-common": "293.pgdg26.04+1",
+    "libpq5": "18.6-1.pgdg26.04+2",
+    "postgresql-client-16": "16.15-1.pgdg26.04+2",
+    "postgresql-16": "16.15-1.pgdg26.04+2",
+    "postgresql-16-pgvector": "0.8.7-1.pgdg26.04+1",
+}
+if any(installed.get(name) != version for name, version in expected_versions.items()):
+    raise SystemExit(1)
+Path(sys.argv[3]).write_text(
+    json.dumps(
+        {name: installed[name] for name in sorted(required)},
+        sort_keys=True,
+        separators=(",", ":"),
+    ) + "\n",
+    encoding="utf-8",
+)
 PY
 printf '[INVENTORY] state=pass;platform=linux/amd64;native_dependencies=compatible\n'
+
+actual_hostname="$(hostname --short)"
+operator_uid="$(id -u)"
+operator_gid="$(id -g)"
+application_archive_sha256="$(sha256sum -- "$application_archive" | awk '{print $1}')"
+runtime_image_archive_sha256="$(sha256sum -- "$image_archive" | awk '{print $1}')"
+package_manifest_sha256="$(sha256sum -- "$carry_root/PACKAGE_MANIFEST.json" | awk '{print $1}')"
+package_receipt_sha256="$(sha256sum -- "$package_receipt" | awk '{print $1}')"
+expected_image_id="$(jq -r '.image_id' "$image_identity")"
+
+if [[ "$action" == plan ]]; then
+  python3 -B - "$output_plan" "$native_package_versions_path" \
+    "$actual_hostname" "$expected_os_version" "$USER" "$operator_uid" \
+    "$operator_gid" "$HOME" "$install_root" "$user_unit_root" \
+    "$postgresql_port" "$retrieval_port" "$web_port" "$gemma_port" \
+    "$nomic_port" "$application_archive_sha256" \
+    "$runtime_image_archive_sha256" "$package_manifest_sha256" \
+    "$package_receipt_sha256" "$image_reference" "$expected_image_id" <<'PY' \
+    || fail installation_plan_generation_failed
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+(
+    output_name,
+    native_versions_name,
+    hostname,
+    os_version,
+    operator_name,
+    operator_uid,
+    operator_gid,
+    operator_home,
+    install_root,
+    user_unit_root,
+    postgresql_port,
+    retrieval_port,
+    web_port,
+    gemma_port,
+    nomic_port,
+    application_sha256,
+    image_sha256,
+    manifest_sha256,
+    receipt_sha256,
+    image_reference,
+    image_id,
+) = sys.argv[1:]
+output = Path(output_name)
+native_versions = json.loads(Path(native_versions_name).read_text(encoding="utf-8"))
+ports = {
+    "postgresql": int(postgresql_port),
+    "retrieval": int(retrieval_port),
+    "web": int(web_port),
+    "gemma": int(gemma_port),
+    "nomic": int(nomic_port),
+}
+plan = {
+    "actions": [
+        "verify deployment package",
+        "revalidate target and native prerequisites",
+        "load exact local runtime image when absent",
+        "install exact external application archive",
+        "atomically render and validate five configuration consumers",
+        "install boot-disabled systemd user units",
+        "write installation receipt",
+    ],
+    "carry": {
+        "application_archive_sha256": application_sha256,
+        "image_archive_sha256": image_sha256,
+        "image_id": image_id,
+        "image_reference": image_reference,
+        "package_manifest_sha256": manifest_sha256,
+        "package_receipt_sha256": receipt_sha256,
+        "release": "Ishikawa v1.3.1",
+    },
+    "endpoints": {
+        "gemma": f"http://127.0.0.1:{ports['gemma']}",
+        "nomic": f"http://127.0.0.1:{ports['nomic']}",
+        "postgresql": f"127.0.0.1:{ports['postgresql']}",
+        "retrieval": f"http://127.0.0.1:{ports['retrieval']}",
+        "web": f"http://127.0.0.1:{ports['web']}",
+    },
+    "native_package_versions": native_versions,
+    "ports": ports,
+    "safety": {
+        "boot_autostart": False,
+        "database_changed": False,
+        "network_download": False,
+        "user_lingering": False,
+    },
+    "schema": "ishikawa.installation-plan.v1",
+    "target": {
+        "architecture": "amd64",
+        "hostname": hostname,
+        "install_root": install_root,
+        "operator_gid": int(operator_gid),
+        "operator_home": operator_home,
+        "operator_name": operator_name,
+        "operator_uid": int(operator_uid),
+        "os_version": os_version,
+        "user_unit_root": user_unit_root,
+    },
+    "user_units": [
+        "ishikawa-observability-retention.service",
+        "ishikawa-observability-retention.timer",
+        "ishikawa-retrieval-api.service",
+    ],
+}
+payload = json.dumps(plan, sort_keys=True, separators=(",", ":")) + "\n"
+temporary_name = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=output.parent,
+        prefix=f".{output.name}.",
+        delete=False,
+    ) as stream:
+        temporary_name = stream.name
+        os.chmod(temporary_name, 0o600)
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary_name, output)
+except BaseException:
+    if temporary_name is not None:
+        Path(temporary_name).unlink(missing_ok=True)
+    raise
+PY
+  installation_plan_sha256="$(sha256sum -- "$output_plan" | awk '{print $1}')"
+  printf '[PLAN] state=pass;mutation=false;file=%s;sha256=%s\n' \
+    "$output_plan" "$installation_plan_sha256"
+  jq --sort-keys . "$output_plan"
+  rm -rf -- "$inventory_parent"
+  printf '\nSCRIPT RESULT\nishikawa_deployment_plan=pass;plan_sha256=%s\n' \
+    "$installation_plan_sha256"
+  exit 0
+fi
+
+python3 -B - "$plan_file" "$native_package_versions_path" \
+  "$actual_hostname" "$expected_os_version" "$USER" "$operator_uid" \
+  "$operator_gid" "$HOME" "$install_root" "$user_unit_root" \
+  "$application_archive_sha256" "$runtime_image_archive_sha256" \
+  "$package_manifest_sha256" "$package_receipt_sha256" \
+  "$image_reference" "$expected_image_id" <<'PY' \
+  || fail reviewed_plan_drift_detected
+import json
+import sys
+from pathlib import Path
+
+(
+    plan_name,
+    native_versions_name,
+    hostname,
+    os_version,
+    operator_name,
+    operator_uid,
+    operator_gid,
+    operator_home,
+    install_root,
+    user_unit_root,
+    application_sha256,
+    image_sha256,
+    manifest_sha256,
+    receipt_sha256,
+    image_reference,
+    image_id,
+) = sys.argv[1:]
+plan = json.loads(Path(plan_name).read_text(encoding="utf-8"))
+expected_native_versions = json.loads(
+    Path(native_versions_name).read_text(encoding="utf-8")
+)
+expected = {
+    "carry": {
+        "application_archive_sha256": application_sha256,
+        "image_archive_sha256": image_sha256,
+        "image_id": image_id,
+        "image_reference": image_reference,
+        "package_manifest_sha256": manifest_sha256,
+        "package_receipt_sha256": receipt_sha256,
+        "release": "Ishikawa v1.3.1",
+    },
+    "native_package_versions": expected_native_versions,
+    "safety": {
+        "boot_autostart": False,
+        "database_changed": False,
+        "network_download": False,
+        "user_lingering": False,
+    },
+    "target": {
+        "architecture": "amd64",
+        "hostname": hostname,
+        "install_root": install_root,
+        "operator_gid": int(operator_gid),
+        "operator_home": operator_home,
+        "operator_name": operator_name,
+        "operator_uid": int(operator_uid),
+        "os_version": os_version,
+        "user_unit_root": user_unit_root,
+    },
+    "user_units": [
+        "ishikawa-observability-retention.service",
+        "ishikawa-observability-retention.timer",
+        "ishikawa-retrieval-api.service",
+    ],
+}
+if plan.get("schema") != "ishikawa.installation-plan.v1":
+    raise SystemExit(1)
+if any(plan.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+ports = plan.get("ports", {})
+expected_endpoints = {
+    "gemma": f"http://127.0.0.1:{ports.get('gemma')}",
+    "nomic": f"http://127.0.0.1:{ports.get('nomic')}",
+    "postgresql": f"127.0.0.1:{ports.get('postgresql')}",
+    "retrieval": f"http://127.0.0.1:{ports.get('retrieval')}",
+    "web": f"http://127.0.0.1:{ports.get('web')}",
+}
+if plan.get("endpoints") != expected_endpoints:
+    raise SystemExit(1)
+expected_actions = [
+    "verify deployment package",
+    "revalidate target and native prerequisites",
+    "load exact local runtime image when absent",
+    "install exact external application archive",
+    "atomically render and validate five configuration consumers",
+    "install boot-disabled systemd user units",
+    "write installation receipt",
+]
+if plan.get("actions") != expected_actions:
+    raise SystemExit(1)
+PY
+printf '[PLAN] state=pass;sha256=%s;drift=false\n' "$reviewed_plan_sha256"
+rm -rf -- "$inventory_parent"
+
+if [[ -e "$install_root" ]]; then
+  [[ -d "$install_root" && ! -L "$install_root" \
+      && -f "$install_root/installation-receipt.json" \
+      && ! -L "$install_root/installation-receipt.json" ]] \
+    || fail installation_drift_detected
+  python3 -B - "$install_root" "$reviewed_plan_sha256" \
+    "$application_archive_sha256" "$runtime_image_archive_sha256" \
+    "$package_manifest_sha256" <<'PY' \
+    || fail installation_drift_detected
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+plan_sha256, application_sha256, image_sha256, manifest_sha256 = sys.argv[2:]
+receipt = json.loads(
+    (root / "installation-receipt.json").read_text(encoding="utf-8")
+)
+if receipt.get("schema") != "ishikawa.installation-receipt.v1":
+    raise SystemExit(1)
+if receipt.get("plan_sha256") != plan_sha256:
+    raise SystemExit(1)
+if receipt.get("application_archive_sha256") != application_sha256:
+    raise SystemExit(1)
+if receipt.get("image_archive_sha256") != image_sha256:
+    raise SystemExit(1)
+if receipt.get("package_manifest_sha256") != manifest_sha256:
+    raise SystemExit(1)
+recorded_files = receipt.get("installed_file_sha256", {})
+required_paths = {
+    "config/deployment.yaml",
+    "config/ingestion_dependencies.yaml",
+    "config/retrieval_service_profile.yaml",
+    "config/runtime_dependencies.yaml",
+    "docs/COMMAND_SHEET.md",
+}
+if not required_paths.issubset(recorded_files):
+    raise SystemExit(1)
+if any(
+    not (name.startswith("config/") or name.startswith("docs/"))
+    for name in recorded_files
+):
+    raise SystemExit(1)
+for relative_name, expected_sha256 in recorded_files.items():
+    path = root / relative_name
+    if not path.is_file() or path.is_symlink():
+        raise SystemExit(1)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise SystemExit(1)
+PY
+  PYTHONDONTWRITEBYTECODE=1 "$install_root/scripts/ishikawa-retrieval-api" \
+    --check-config >/dev/null || fail installation_drift_detected
+  for unit_name in "${unit_names[@]}"; do
+    cmp -s -- "$install_root/systemd/$unit_name" "$user_unit_root/$unit_name" \
+      || fail installation_drift_detected
+  done
+  printf '[APPLICATION] state=pass;replay=exact;mutation=false\n'
+  printf '\nSCRIPT RESULT\nishikawa_deployment_apply=pass;state=already_applied;plan_sha256=%s\n' \
+    "$reviewed_plan_sha256"
+  exit 0
+fi
+
+for unit_name in "${unit_names[@]}"; do
+  [[ ! -e "$user_unit_root/$unit_name" && ! -L "$user_unit_root/$unit_name" ]] \
+    || fail user_unit_target_exists
+done
 
 temporary_root="$(mktemp -d "$temporary_base/ishikawa-deployment-install.XXXXXX")"
 application_installed=false
@@ -452,8 +886,8 @@ cleanup_install() {
   exit "$status"
 }
 trap cleanup_install EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'fail_for_signal signal_interrupt 130' INT
+trap 'fail_for_signal signal_termination 143' TERM
 
 tar --no-same-owner --no-same-permissions -xzf "$application_archive" \
   -C "$temporary_root" || fail application_extraction_failed
@@ -483,40 +917,51 @@ fi
     == amd64 ]] || fail runtime_image_architecture_mismatch
 printf '[IMAGE] state=pass;architecture=amd64;application_in_image=false\n'
 
-printf '[APPLICATION] state=installing;root=%s\n' "$install_root"
+staged_install_root="$temporary_root/installed-application"
+printf '[APPLICATION] state=staging;target_root=%s\n' "$install_root"
 bash "$temporary_root/ishikawa-v1.3.1/application/install-ishikawa" \
-  --install-root "$install_root" >/dev/null || fail application_install_failed
-application_installed=true
+  --install-root "$staged_install_root" >/dev/null || fail application_install_failed
 
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$install_root/application/python" python3 -B - \
-  "$install_root" "$postgresql_port" "$retrieval_port" "$web_port" \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$staged_install_root/application/python" python3 -B - \
+  "$staged_install_root" "$postgresql_port" "$retrieval_port" "$web_port" \
   "$gemma_port" "$nomic_port" <<'PY' || fail configuration_install_failed
 import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 from ishikawa.deployment import validate_deployment_profile
 from ishikawa.ingestion_runtime import validate_ingestion_dependencies
+from ishikawa.retrieval_service import validate_retrieval_service_profile
 from ishikawa.runtime import validate_runtime_dependencies
 
 root = Path(sys.argv[1])
 postgresql_port, retrieval_port, web_port, gemma_port, nomic_port = map(int, sys.argv[2:])
 deployment_path = root / "config/deployment.yaml"
+retrieval_service_path = root / "config/retrieval_service_profile.yaml"
 runtime_path = root / "config/runtime_dependencies.yaml"
 ingestion_path = root / "config/ingestion_dependencies.yaml"
 docs_root = root / "docs"
 deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+retrieval_service = yaml.safe_load(
+    retrieval_service_path.read_text(encoding="utf-8")
+)
 runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
 ingestion = yaml.safe_load(ingestion_path.read_text(encoding="utf-8"))
 source_postgresql_port = int(deployment["postgresql"]["port"])
 source_retrieval_port = int(deployment["retrieval"]["port"])
 source_web_port = int(deployment["web"]["port"])
+source_gemma_port = urlparse(runtime["gemma"]["chat_endpoint_url"]).port
+source_nomic_port = urlparse(runtime["nomic"]["embedding_endpoint_url"]).port
+if source_gemma_port is None or source_nomic_port is None:
+    raise SystemExit(1)
 deployment["postgresql"]["port"] = postgresql_port
 deployment["retrieval"]["port"] = retrieval_port
 deployment["web"]["port"] = web_port
 deployment["web"]["retrieval_base_url"] = f"http://127.0.0.1:{retrieval_port}"
+retrieval_service["network"]["default_port"] = retrieval_port
 runtime["gemma"]["chat_endpoint_url"] = f"http://127.0.0.1:{gemma_port}/v1/chat/completions"
 runtime["gemma"]["tokenization_endpoint_url"] = f"http://127.0.0.1:{gemma_port}/tokenize"
 runtime["gemma"]["health_endpoint_url"] = f"http://127.0.0.1:{gemma_port}/health"
@@ -525,9 +970,15 @@ runtime["nomic"]["health_endpoint_url"] = f"http://127.0.0.1:{nomic_port}/health
 ingestion["nomic"]["embedding_endpoint_url"] = f"http://127.0.0.1:{nomic_port}/v1/embeddings"
 ingestion["nomic"]["tokenization_endpoint_url"] = f"http://127.0.0.1:{nomic_port}/tokenize"
 validate_deployment_profile(deployment)
+validate_retrieval_service_profile(retrieval_service)
 validate_runtime_dependencies(runtime)
 validate_ingestion_dependencies(ingestion)
-for path, value in ((deployment_path, deployment), (runtime_path, runtime), (ingestion_path, ingestion)):
+for path, value in (
+    (deployment_path, deployment),
+    (retrieval_service_path, retrieval_service),
+    (runtime_path, runtime),
+    (ingestion_path, ingestion),
+):
     temporary = path.with_name(f".{path.name}.new")
     temporary.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
     os.chmod(temporary, 0o644)
@@ -538,6 +989,9 @@ if not docs_root.is_dir() or docs_root.is_symlink():
 endpoint_replacements = {
     f"127.0.0.1:{source_web_port}": f"127.0.0.1:{web_port}",
     f"127.0.0.1:{source_retrieval_port}": f"127.0.0.1:{retrieval_port}",
+    f"127.0.0.1:{source_postgresql_port}": f"127.0.0.1:{postgresql_port}",
+    f"127.0.0.1:{source_gemma_port}": f"127.0.0.1:{gemma_port}",
+    f"127.0.0.1:{source_nomic_port}": f"127.0.0.1:{nomic_port}",
 }
 endpoint_pattern = re.compile(
     "|".join(re.escape(source) for source in endpoint_replacements)
@@ -561,21 +1015,64 @@ for path in sorted(docs_root.glob("*.md")):
         temporary.write_text(updated, encoding="utf-8")
         os.chmod(temporary, 0o644)
         os.replace(temporary, path)
-source_web_endpoint = f"127.0.0.1:{source_web_port}"
-source_retrieval_endpoint = f"127.0.0.1:{source_retrieval_port}"
-if replacement_counts[source_web_endpoint] == 0 \
-        or replacement_counts[source_retrieval_endpoint] == 0:
+if any(count == 0 for count in replacement_counts.values()):
     raise SystemExit(1)
 PY
-PYTHONDONTWRITEBYTECODE=1 "$install_root/scripts/ishikawa-retrieval-api" --check-config >/dev/null \
+PYTHONDONTWRITEBYTECODE=1 "$staged_install_root/scripts/ishikawa-retrieval-api" \
+  --check-config >/dev/null \
   || fail installed_configuration_invalid
-printf '[APPLICATION] state=pass;configuration=validated;operator_ports=materialized\n'
+
+python3 -B - "$staged_install_root" "$reviewed_plan_sha256" \
+  "$application_archive_sha256" "$runtime_image_archive_sha256" \
+  "$package_manifest_sha256" <<'PY' || fail installation_receipt_generation_failed
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+plan_sha256, application_sha256, image_sha256, manifest_sha256 = sys.argv[2:]
+paths = [
+    root / "config/deployment.yaml",
+    root / "config/ingestion_dependencies.yaml",
+    root / "config/retrieval_service_profile.yaml",
+    root / "config/runtime_dependencies.yaml",
+    *sorted((root / "docs").glob("*.md")),
+]
+installed_file_sha256 = {}
+for path in paths:
+    if not path.is_file() or path.is_symlink():
+        raise SystemExit(1)
+    installed_file_sha256[str(path.relative_to(root))] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+receipt = {
+    "application_archive_sha256": application_sha256,
+    "image_archive_sha256": image_sha256,
+    "installed_file_sha256": installed_file_sha256,
+    "package_manifest_sha256": manifest_sha256,
+    "plan_sha256": plan_sha256,
+    "schema": "ishikawa.installation-receipt.v1",
+}
+temporary_path = root / ".installation-receipt.json.new"
+temporary_path.write_text(
+    json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+os.chmod(temporary_path, 0o600)
+os.replace(temporary_path, root / "installation-receipt.json")
+PY
+
+mv -- "$staged_install_root" "$install_root" || fail application_publication_failed
+application_installed=true
+printf '[APPLICATION] state=pass;configuration=validated;consumers=5;publication=atomic\n'
 
 mkdir -p -- "$user_unit_root"
+units_installed=true
 for unit_name in "${unit_names[@]}"; do
   install -m 0644 -- "$install_root/systemd/$unit_name" "$user_unit_root/$unit_name"
 done
-units_installed=true
 systemctl --user daemon-reload >/dev/null 2>&1 || fail user_manager_reload_failed
 for unit_name in "${unit_names[@]}"; do
   [[ "$(systemctl --user is-enabled "$unit_name" 2>/dev/null || true)" != enabled ]] \
@@ -587,6 +1084,6 @@ printf '[UNITS] state=pass;installed=true;enabled=false;lingering=false\n'
 
 trap - EXIT INT TERM
 rm -rf -- "$temporary_root"
-printf 'ishikawa_deployment=install;state=pass;install_root=%s;inventory=%s;boot_enabled=false;database_changed=false\n' \
-  "$install_root" "$inventory_root"
-printf '\nSCRIPT RESULT\nishikawa_deployment_install=pass\n'
+printf 'ishikawa_deployment=apply;state=pass;install_root=%s;plan_sha256=%s;boot_enabled=false;database_changed=false\n' \
+  "$install_root" "$reviewed_plan_sha256"
+printf '\nSCRIPT RESULT\nishikawa_deployment_apply=pass\n'

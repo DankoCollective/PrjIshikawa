@@ -11,12 +11,9 @@ not preserve Unix permission bits are supported: the verifier checks the
 classified intended modes, and installation materializes them on the native
 target filesystem.
 
-The assembly lane publishes these files first as a local package candidate.
-`deployment-package-receipt.json` must say `deployment_ready` before install or
-schema initialization is permitted. Exact-artifact security review is complete;
-approved destination inventory, independent review, and stable-handoff
-publication are separate remaining gates. Renaming or copying an assembled
-candidate does not satisfy them.
+`deployment-package-receipt.json` must say `deployment_ready` before planning,
+apply, or schema initialization is permitted. Renaming or copying an assembled
+candidate does not satisfy the final-package gate.
 
 `SECURITY_REVIEW.md` records the completed exact-payload vulnerability
 disposition. The assembled candidate remains non-installable until destination
@@ -77,27 +74,44 @@ SCRIPT RESULT
 ishikawa_native_prerequisite_inventory=pass
 ```
 
-After the inventory is reviewed, install the image, application, and
-boot-disabled user units:
+After the inventory is reviewed, generate a complete non-secret installation
+plan. The plan command performs the same package and target preflight that
+apply will repeat:
 
 ```bash
-bash ./deploy-ishikawa install
+bash ./deploy-ishikawa plan \
+  --output-plan /tmp/ishikawa-installation-plan.json \
+  --postgresql-port 5432 \
+  --retrieval-port 8384 \
+  --web-port 3384 \
+  --gemma-port 8000 \
+  --nomic-port 8001
+```
+
+Review the printed plan and its SHA-256. Apply accepts no port or host override;
+it consumes only that exact reviewed plan:
+
+```bash
+PLAN_SHA256="$(sha256sum /tmp/ishikawa-installation-plan.json | awk '{print $1}')"
+bash ./deploy-ishikawa apply \
+  --plan-file /tmp/ishikawa-installation-plan.json \
+  --plan-sha256 "$PLAN_SHA256"
 ```
 
 The installation root is always `$HOME/Documents/Ishikawa`. The selected Tech
 loopback ports are web `3384`, Retrieval API `8384`, PostgreSQL `5432`, Gemma
-`8000`, and Nomic `8001`. Supply explicit port options to `inventory` and
-`install` when the reviewed destination topology differs. Installation writes
-the selected endpoints into the installed YAML and operator documents so the
-installed command sheet cannot direct the operator to the archive's generic
-source defaults.
+`8000`, and Nomic `8001`. The plan may instead select the supported forwarded
+model ports `18000` and `18001`. Apply atomically writes the selected endpoints
+into `deployment.yaml`, `retrieval_service_profile.yaml`,
+`runtime_dependencies.yaml`, `ingestion_dependencies.yaml`, and the installed
+operator documentation.
 
-The install command completes every preflight before loading the image or
-creating the application root. It prints bounded stage markers and ends with:
+Apply repeats every preflight before loading the image or publishing the
+application root. It prints bounded stage markers and ends with:
 
 ```text
 SCRIPT RESULT
-ishikawa_deployment_install=pass
+ishikawa_deployment_apply=pass
 ```
 
 An existing application root, unit file, conflicting image tag, wrong host,

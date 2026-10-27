@@ -20,6 +20,7 @@ set -Eeuo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
+readonly carry_source_root="${ISHIKAWA_TEST_CARRY_SOURCE_ROOT:-$repo_root/deployment/carry}"
 test_root="$(mktemp -d /tmp/ishikawa-deployment-entrypoint.XXXXXX)"
 
 fail() {
@@ -48,10 +49,12 @@ mkdir -p -- "$carry" "$home/Documents" "$test_root/bin" "$test_root/tmp" \
   "$test_root/application/ishikawa-v1.3.1/application/payload/scripts" \
   "$test_root/application/ishikawa-v1.3.1/application/payload/systemd" \
   "$test_root/application/ishikawa-v1.3.1/database"
-cp -- "$repo_root/deployment/carry/README.md" "$carry/README.md"
-cp -- "$repo_root/deployment/carry/SECURITY_REVIEW.md" "$carry/SECURITY_REVIEW.md"
-cp -- "$repo_root/deployment/carry/deploy-ishikawa" "$carry/deploy-ishikawa"
-cp -- "$repo_root/deployment/carry/verify-deployment" "$carry/verify-deployment"
+for carry_source_name in README.md SECURITY_REVIEW.md deploy-ishikawa verify-deployment; do
+  [[ -f "$carry_source_root/$carry_source_name" \
+      && ! -L "$carry_source_root/$carry_source_name" ]] \
+    || fail carry_source_invalid
+  cp -- "$carry_source_root/$carry_source_name" "$carry/$carry_source_name"
+done
 
 cat >"$test_root/application/ishikawa-v1.3.1/verify-ishikawa-release" <<'MOCK'
 #!/usr/bin/env bash
@@ -63,6 +66,10 @@ set -Eeuo pipefail
 [[ "${1:-}" == --install-root && -n "${2:-}" && ! -e "$2" ]] || exit 1
 mkdir -p -- "$(dirname -- "$2")"
 cp -a -- "$(dirname -- "${BASH_SOURCE[0]}")/payload/." "$2/"
+if [[ "${MOCK_APPLICATION_INSTALL_BLOCK:-false}" == true ]]; then
+  : >"${MOCK_STATE:?}/application-install-blocked"
+  while true; do sleep 1; done
+fi
 printf 'ishikawa_install=pass;install_root=%s\n' "$2"
 MOCK
 cat >"$test_root/application/ishikawa-v1.3.1/database/install-schema" <<'MOCK'
@@ -83,11 +90,12 @@ chmod 0755 \
 
 python_package="$test_root/application/ishikawa-v1.3.1/application/payload/application/python/ishikawa"
 : >"$python_package/__init__.py"
-for module in deployment runtime ingestion_runtime; do
+for module in deployment runtime ingestion_runtime retrieval_service; do
   function_name="validate_${module}"
   [[ "$module" != deployment ]] || function_name=validate_deployment_profile
   [[ "$module" != runtime ]] || function_name=validate_runtime_dependencies
   [[ "$module" != ingestion_runtime ]] || function_name=validate_ingestion_dependencies
+  [[ "$module" != retrieval_service ]] || function_name=validate_retrieval_service_profile
   printf 'def %s(value):\n    return value\n' "$function_name" >"$python_package/$module.py"
 done
 
@@ -105,6 +113,12 @@ gemma: {chat_endpoint_url: 'http://127.0.0.1:8000/v1/chat/completions', tokeniza
 nomic: {embedding_endpoint_url: 'http://127.0.0.1:8001/v1/embeddings', health_endpoint_url: 'http://127.0.0.1:8001/health'}
 postgresql: {database_name: rag_catalog}
 YAML
+cat >"$config/retrieval_service_profile.yaml" <<'YAML'
+schema_version: 1
+identity: {display_name: Ishikawa Retrieval API, component_id: ishikawa-retrieval-api, package_owner: Ishikawa}
+runtime: {implementation: native_python, process_model: separate_process, lifecycle: start_on_demand}
+network: {default_bind_address: 127.0.0.1, default_port: 1384, allowed_client: ishikawa_nextjs_server}
+YAML
 cat >"$config/ingestion_dependencies.yaml" <<'YAML'
 schema_version: 1
 nomic: {embedding_endpoint_url: 'http://127.0.0.1:8001/v1/embeddings', tokenization_endpoint_url: 'http://127.0.0.1:8001/tokenize'}
@@ -113,6 +127,9 @@ YAML
 cat >"$test_root/application/ishikawa-v1.3.1/application/payload/docs/COMMAND_SHEET.md" <<'DOC'
 Web: http://127.0.0.1:3000
 Retrieval: http://127.0.0.1:1384/ready
+PostgreSQL: 127.0.0.1:5432
+Gemma: 127.0.0.1:8000
+Nomic: 127.0.0.1:8001
 Do not expose ports `3000`, `1384`, or `5432` beyond loopback.
 DOC
 
@@ -144,6 +161,13 @@ mkdir -p -- \
   "$test_root/application/ishikawa-v1.3.1/application/payload/config/ingestion/rejected" \
   "$test_root/application/ishikawa-v1.3.1/application/payload/state/run"
 tar -czf "$carry/ishikawa-v1.3.1.tar.gz" -C "$test_root/application" ishikawa-v1.3.1
+if [[ -n "${ISHIKAWA_TEST_EXACT_APPLICATION_ARCHIVE:-}" ]]; then
+  [[ -f "$ISHIKAWA_TEST_EXACT_APPLICATION_ARCHIVE" \
+      && ! -L "$ISHIKAWA_TEST_EXACT_APPLICATION_ARCHIVE" ]] \
+    || fail exact_application_archive_invalid
+  cp -- "$ISHIKAWA_TEST_EXACT_APPLICATION_ARCHIVE" \
+    "$carry/ishikawa-v1.3.1.tar.gz"
+fi
 (cd -- "$carry" && sha256sum ishikawa-v1.3.1.tar.gz >ishikawa-v1.3.1.tar.gz.sha256)
 printf '%064d  Ishikawa/fixture\n' 0 >"$carry/ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS"
 printf '%s\n' \
@@ -326,9 +350,19 @@ printf '%s\n' \
   "gemma_port=$gemma_port" \
   "nomic_port=$nomic_port" >>"$output/host-summary.env"
 printf 'package\tinstalled_version\tcandidate_version\tarchitecture\tsource\tfilename\tsha256\tsize\tpolicy_sha256\n' >"$output/package-inventory.tsv"
-for package in python3 python3-yaml python3-psycopg poppler-utils postgresql-common \
-  postgresql-client-16 postgresql-16 postgresql-16-pgvector libpq5; do
-  printf '%s\t1\t1\tamd64\tnone\tnone\tnone\tnone\tnone\n' "$package" \
+for package in python3 python3-yaml python3-psycopg poppler-utils libjson-perl \
+  postgresql-common postgresql-client-common postgresql-client-16 postgresql-16 \
+  postgresql-16-pgvector libpq5; do
+  case "$package" in
+    python3-psycopg) package_version='3.3.2-1build1' ;;
+    postgresql-common|postgresql-client-common) package_version='293.pgdg26.04+1' ;;
+    libpq5|postgresql-client-16|postgresql-16) package_version='16.15-1.pgdg26.04+2' ;;
+    postgresql-16-pgvector) package_version='0.8.7-1.pgdg26.04+1' ;;
+    *) package_version='1' ;;
+  esac
+  [[ "$package" != libpq5 ]] || package_version='18.6-1.pgdg26.04+2'
+  printf '%s\t%s\t%s\tamd64\tnone\tnone\tnone\tnone\tnone\n' \
+    "$package" "$package_version" "$package_version" \
     >>"$output/package-inventory.tsv"
 done
 printf '[SUMMARY] state=pass;output_dir=%s;mutation=false\n' "$output"
@@ -496,6 +530,18 @@ export MOCK_STATE="$mock_state"
 export PATH="$test_root/bin:$PATH"
 deploy="$carry/deploy-ishikawa"
 
+create_installation_plan() {
+  local plan_path="$1"
+  shift
+  bash "$deploy" plan --output-plan "$plan_path" "$@"
+}
+
+apply_installation_plan() {
+  local plan_path="$1" plan_sha256
+  plan_sha256="$(sha256sum -- "$plan_path" | awk '{print $1}')"
+  bash "$deploy" apply --plan-file "$plan_path" --plan-sha256 "$plan_sha256"
+}
+
 verify_output="$(bash "$deploy" verify 2>&1)" || fail verify_failed
 grep -Fq 'ishikawa_deployment_verification=pass;' <<<"$verify_output" \
   || fail verify_marker_missing
@@ -513,6 +559,75 @@ grep -Fxq 'ishikawa_native_prerequisite_inventory=pass' <<<"$inventory_output" \
 [[ -f "$test_root/tmp/operator-inventory/host-summary.env" \
     && -f "$test_root/tmp/operator-inventory/package-inventory.tsv" ]] \
   || fail inventory_evidence_missing
+
+if [[ -n "${ISHIKAWA_TEST_EXACT_APPLICATION_ARCHIVE:-}" ]]; then
+  exact_gemma_port="${ISHIKAWA_TEST_EXACT_GEMMA_PORT:-18000}"
+  exact_nomic_port="${ISHIKAWA_TEST_EXACT_NOMIC_PORT:-18001}"
+  exact_plan_path="$test_root/tmp/exact-application-installation-plan.json"
+  exact_plan_output="$(create_installation_plan "$exact_plan_path" \
+    --postgresql-port 5432 --retrieval-port 8384 --web-port 3384 \
+    --gemma-port "$exact_gemma_port" --nomic-port "$exact_nomic_port" 2>&1)" \
+    || fail exact_application_plan_failed
+  grep -Fq 'ishikawa_deployment_plan=pass;plan_sha256=' <<<"$exact_plan_output" \
+    || fail exact_application_plan_marker_missing
+  exact_apply_output="$(apply_installation_plan "$exact_plan_path" 2>&1)" \
+    || fail exact_application_apply_failed
+  grep -Fq 'ishikawa_deployment=apply;state=pass;' <<<"$exact_apply_output" \
+    || fail exact_application_apply_marker_missing
+  python3 -B - "$home/Documents/Ishikawa" "$exact_plan_path" \
+    "$exact_gemma_port" "$exact_nomic_port" <<'PY' \
+    || fail exact_application_configuration_invalid
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import yaml
+
+root = Path(sys.argv[1])
+plan_path = Path(sys.argv[2])
+gemma_port = int(sys.argv[3])
+nomic_port = int(sys.argv[4])
+deployment = yaml.safe_load((root / "config/deployment.yaml").read_text())
+retrieval_service = yaml.safe_load(
+    (root / "config/retrieval_service_profile.yaml").read_text()
+)
+runtime = yaml.safe_load((root / "config/runtime_dependencies.yaml").read_text())
+ingestion = yaml.safe_load(
+    (root / "config/ingestion_dependencies.yaml").read_text()
+)
+assert deployment["postgresql"]["port"] == 5432
+assert deployment["retrieval"]["port"] == 8384
+assert deployment["web"]["port"] == 3384
+assert deployment["web"]["retrieval_base_url"] == "http://127.0.0.1:8384"
+assert retrieval_service["network"]["default_port"] == 8384
+assert runtime["gemma"]["chat_endpoint_url"].startswith(f"http://127.0.0.1:{gemma_port}/")
+assert runtime["nomic"]["embedding_endpoint_url"].startswith(f"http://127.0.0.1:{nomic_port}/")
+assert ingestion["nomic"]["tokenization_endpoint_url"].startswith(f"http://127.0.0.1:{nomic_port}/")
+receipt = json.loads((root / "installation-receipt.json").read_text())
+assert receipt["plan_sha256"] == hashlib.sha256(plan_path.read_bytes()).hexdigest()
+assert receipt["schema"] == "ishikawa.installation-receipt.v1"
+PY
+  for expected_endpoint in 127.0.0.1:3384 127.0.0.1:8384 127.0.0.1:5432 \
+    "127.0.0.1:$exact_gemma_port" "127.0.0.1:$exact_nomic_port"; do
+    grep -R -Fq "$expected_endpoint" "$home/Documents/Ishikawa/docs" \
+      || fail exact_application_documentation_endpoint_missing
+  done
+  if grep -ERn '127\.0\.0\.1:(3000|1384)' \
+      "$home/Documents/Ishikawa/docs" >/dev/null; then
+    fail exact_application_stale_endpoint_found
+  fi
+  if [[ "$exact_gemma_port" != 8000 || "$exact_nomic_port" != 8001 ]] \
+      && grep -ERn '127\.0\.0\.1:(8000|8001)' \
+        "$home/Documents/Ishikawa/docs" >/dev/null; then
+    fail exact_application_stale_model_endpoint_found
+  fi
+  printf '%s\n' \
+    'exact_application_archive=pass;real_validators=pass;configuration_consumers=5' \
+    "tech_ports=3384/8384/5432;model_ports=${exact_gemma_port}/${exact_nomic_port};stale_endpoints=absent"
+  printf '\nSCRIPT RESULT\nishikawa_exact_application_installation_test=pass\n'
+  exit 0
+fi
 
 cp -- "$carry/deployment-package-receipt.json" "$test_root/deployment-package-receipt.json"
 python3 -B - "$carry/deployment-package-receipt.json" <<'PY'
@@ -535,19 +650,43 @@ grep -Fxq 'ishikawa_deployment_verification=blocked;reason=identity_record_inval
 mv -- "$test_root/deployment-package-receipt.json" "$carry/deployment-package-receipt.json"
 write_manifest
 
-default_install_output="$(bash "$deploy" install 2>&1)" \
-  || fail default_install_failed
-grep -Fq 'ishikawa_deployment=install;state=pass;' <<<"$default_install_output" \
-  || fail default_install_marker_missing
-default_inventory_path="$(sed -n 's/.*;inventory=\([^;]*\);boot_enabled=.*/\1/p' \
-  <<<"$default_install_output")"
-[[ -n "$default_inventory_path" && -f "$default_inventory_path/host-summary.env" ]] \
-  || fail default_install_inventory_missing
-for expected in postgresql_port=5432 retrieval_port=8384 web_port=3384 \
-  gemma_port=8000 nomic_port=8001; do
-  grep -Fxq "$expected" "$default_inventory_path/host-summary.env" \
-    || fail default_install_inventory_port_invalid
-done
+default_plan_path="$test_root/tmp/default-installation-plan.json"
+default_plan_output="$(create_installation_plan "$default_plan_path" 2>&1)" \
+  || fail default_plan_failed
+grep -Fq 'ishikawa_deployment_plan=pass;plan_sha256=' <<<"$default_plan_output" \
+  || fail default_plan_marker_missing
+[[ ! -e "$home/Documents/Ishikawa" ]] || fail default_plan_mutated
+python3 -B - "$default_plan_path" <<'PY' || fail default_plan_invalid
+import json
+import sys
+from pathlib import Path
+plan = json.loads(Path(sys.argv[1]).read_text())
+assert plan["ports"] == {
+    "gemma": 8000,
+    "nomic": 8001,
+    "postgresql": 5432,
+    "retrieval": 8384,
+    "web": 3384,
+}
+assert plan["safety"] == {
+    "boot_autostart": False,
+    "database_changed": False,
+    "network_download": False,
+    "user_lingering": False,
+}
+PY
+default_install_output="$(apply_installation_plan "$default_plan_path" 2>&1)" \
+  || fail default_apply_failed
+grep -Fq 'ishikawa_deployment=apply;state=pass;' <<<"$default_install_output" \
+  || fail default_apply_marker_missing
+set +e
+plan_hash_failure_output="$(bash "$deploy" apply --plan-file "$default_plan_path" \
+  --plan-sha256 "$(printf '%064d' 0)" 2>&1)"
+plan_hash_failure_status="$?"
+set -e
+(( plan_hash_failure_status != 0 )) || fail plan_hash_mismatch_reported_success
+grep -Fxq 'reason=reviewed_plan_sha256_mismatch' <<<"$plan_hash_failure_output" \
+  || fail plan_hash_mismatch_reason_missing
 python3 -B - "$home/Documents/Ishikawa/config/deployment.yaml" <<'PY' \
   || fail default_configured_ports_invalid
 import sys
@@ -558,6 +697,14 @@ assert deployment["postgresql"]["port"] == 5432
 assert deployment["retrieval"]["port"] == 8384
 assert deployment["web"]["port"] == 3384
 assert deployment["web"]["retrieval_base_url"] == "http://127.0.0.1:8384"
+PY
+python3 -B - "$home/Documents/Ishikawa/config/retrieval_service_profile.yaml" <<'PY' \
+  || fail default_retrieval_service_port_invalid
+import sys
+from pathlib import Path
+import yaml
+profile = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert profile["network"]["default_port"] == 8384
 PY
 grep -Fq 'Web: http://127.0.0.1:3384' \
   "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
@@ -579,20 +726,16 @@ grep -Fq 'ishikawa_deployment=remove;state=application_removed;' \
 [[ ! -e "$home/Documents/Ishikawa" && -f "$mock_state/image" ]] \
   || fail default_remove_boundary_invalid
 
-install_output="$(bash "$deploy" install \
+override_plan_path="$test_root/tmp/override-installation-plan.json"
+override_plan_output="$(create_installation_plan "$override_plan_path" \
   --postgresql-port 55432 --retrieval-port 11384 --web-port 13000 \
-  --gemma-port 18000 --nomic-port 18001 2>&1)" || fail install_failed
-grep -Fq 'ishikawa_deployment=install;state=pass;' <<<"$install_output" \
-  || fail install_marker_missing
-override_inventory_path="$(sed -n 's/.*;inventory=\([^;]*\);boot_enabled=.*/\1/p' \
-  <<<"$install_output")"
-[[ -n "$override_inventory_path" && -f "$override_inventory_path/host-summary.env" ]] \
-  || fail override_install_inventory_missing
-for expected in postgresql_port=55432 retrieval_port=11384 web_port=13000 \
-  gemma_port=18000 nomic_port=18001; do
-  grep -Fxq "$expected" "$override_inventory_path/host-summary.env" \
-    || fail override_install_inventory_port_invalid
-done
+  --gemma-port 18000 --nomic-port 18001 2>&1)" || fail override_plan_failed
+grep -Fq 'ishikawa_deployment_plan=pass;plan_sha256=' <<<"$override_plan_output" \
+  || fail override_plan_marker_missing
+install_output="$(apply_installation_plan "$override_plan_path" 2>&1)" \
+  || fail apply_failed
+grep -Fq 'ishikawa_deployment=apply;state=pass;' <<<"$install_output" \
+  || fail apply_marker_missing
 [[ -d "$home/Documents/Ishikawa" && -f "$mock_state/image" ]] \
   || fail install_state_missing
 for unit in ishikawa-observability-retention.service \
@@ -607,9 +750,11 @@ root = Path(sys.argv[1])
 deployment = yaml.safe_load((root / "deployment.yaml").read_text())
 runtime = yaml.safe_load((root / "runtime_dependencies.yaml").read_text())
 ingestion = yaml.safe_load((root / "ingestion_dependencies.yaml").read_text())
+retrieval_service = yaml.safe_load((root / "retrieval_service_profile.yaml").read_text())
 assert deployment["postgresql"]["port"] == 55432
 assert deployment["retrieval"]["port"] == 11384
 assert deployment["web"]["port"] == 13000
+assert retrieval_service["network"]["default_port"] == 11384
 assert runtime["gemma"]["chat_endpoint_url"].startswith("http://127.0.0.1:18000/")
 assert runtime["nomic"]["embedding_endpoint_url"].startswith("http://127.0.0.1:18001/")
 assert ingestion["nomic"]["tokenization_endpoint_url"].startswith("http://127.0.0.1:18001/")
@@ -623,6 +768,11 @@ grep -Fq 'Retrieval: http://127.0.0.1:11384/ready' \
 grep -Fq 'ports `13000`, `11384`, or `55432`' \
   "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
   || fail override_operator_port_warning_invalid
+for expected_endpoint in 'PostgreSQL: 127.0.0.1:55432' \
+  'Gemma: 127.0.0.1:18000' 'Nomic: 127.0.0.1:18001'; do
+  grep -Fq "$expected_endpoint" "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
+    || fail override_operator_dependency_endpoint_invalid
+done
 
 export ISHIKAWA_POSTGRESQL_INGEST_PASSWORD='fixture-ingestion-password'
 export ISHIKAWA_POSTGRESQL_PASSWORD='fixture-retrieval-password'
@@ -651,13 +801,18 @@ for action in start status stop; do
   grep -Fq "ishikawa_stack=${action};" <<<"$action_output" \
     || fail "${action}_wrapper_marker_missing"
 done
+replay_output="$(apply_installation_plan "$override_plan_path" 2>&1)" \
+  || fail exact_replay_failed
+grep -Fq 'ishikawa_deployment_apply=pass;state=already_applied;' <<<"$replay_output" \
+  || fail exact_replay_marker_missing
+printf '\n# injected drift\n' >>"$home/Documents/Ishikawa/config/deployment.yaml"
 set +e
-replay_output="$(bash "$deploy" install 2>&1)"
-replay_status="$?"
+drift_output="$(apply_installation_plan "$override_plan_path" 2>&1)"
+drift_status="$?"
 set -e
-(( replay_status != 0 )) || fail replay_reported_success
-grep -Fxq 'reason=installation_exists' <<<"$replay_output" \
-  || fail replay_refusal_missing
+(( drift_status != 0 )) || fail drift_reported_success
+grep -Fxq 'reason=installation_drift_detected' <<<"$drift_output" \
+  || fail drift_refusal_missing
 
 remove_output="$(bash "$deploy" remove --confirm-empty-installation 2>&1)" \
   || fail remove_failed
@@ -666,11 +821,16 @@ grep -Fq 'ishikawa_deployment=remove;state=application_removed;' <<<"$remove_out
 [[ ! -e "$home/Documents/Ishikawa" && -f "$mock_state/image" ]] \
   || fail remove_boundary_invalid
 
-swapped_install_output="$(bash "$deploy" install \
+swapped_plan_path="$test_root/tmp/swapped-installation-plan.json"
+swapped_plan_output="$(create_installation_plan "$swapped_plan_path" \
   --retrieval-port 3000 --web-port 1384 2>&1)" \
-  || fail swapped_port_install_failed
-grep -Fq 'ishikawa_deployment=install;state=pass;' <<<"$swapped_install_output" \
-  || fail swapped_port_install_marker_missing
+  || fail swapped_port_plan_failed
+grep -Fq 'ishikawa_deployment_plan=pass;plan_sha256=' <<<"$swapped_plan_output" \
+  || fail swapped_port_plan_marker_missing
+swapped_install_output="$(apply_installation_plan "$swapped_plan_path" 2>&1)" \
+  || fail swapped_port_apply_failed
+grep -Fq 'ishikawa_deployment=apply;state=pass;' <<<"$swapped_install_output" \
+  || fail swapped_port_apply_marker_missing
 grep -Fq 'Web: http://127.0.0.1:1384' \
   "$home/Documents/Ishikawa/docs/COMMAND_SHEET.md" \
   || fail swapped_operator_web_port_invalid
@@ -688,9 +848,14 @@ grep -Fq 'ishikawa_deployment=remove;state=application_removed;' \
   || fail swapped_remove_boundary_invalid
 
 rm -f -- "$mock_state/image"
+failure_plan_path="$test_root/tmp/failure-installation-plan.json"
+failure_plan_output="$(create_installation_plan "$failure_plan_path" 2>&1)" \
+  || fail failure_plan_failed
+grep -Fq 'ishikawa_deployment_plan=pass;plan_sha256=' <<<"$failure_plan_output" \
+  || fail failure_plan_marker_missing
 export MOCK_CONFIG_FAIL=true
 set +e
-failure_output="$(bash "$deploy" install 2>&1)"
+failure_output="$(apply_installation_plan "$failure_plan_path" 2>&1)"
 failure_status="$?"
 set -e
 unset MOCK_CONFIG_FAIL
@@ -699,6 +864,38 @@ grep -Fxq 'reason=installed_configuration_invalid' <<<"$failure_output" \
   || fail configuration_failure_reason_missing
 [[ ! -e "$home/Documents/Ishikawa" && ! -e "$mock_state/image" ]] \
   || fail configuration_failure_cleanup_incomplete
+
+interruption_plan_path="$test_root/tmp/interruption-installation-plan.json"
+interruption_plan_output="$(create_installation_plan "$interruption_plan_path" 2>&1)" \
+  || fail interruption_plan_failed
+interruption_plan_sha256="$(sha256sum -- "$interruption_plan_path" | awk '{print $1}')"
+export MOCK_APPLICATION_INSTALL_BLOCK=true
+setsid bash "$deploy" apply --plan-file "$interruption_plan_path" \
+  --plan-sha256 "$interruption_plan_sha256" \
+  >"$test_root/interruption.out" 2>&1 &
+interruption_process_id="$!"
+for (( wait_attempt = 0; wait_attempt < 100; wait_attempt += 1 )); do
+  [[ ! -f "$mock_state/application-install-blocked" ]] || break
+  sleep 0.05
+done
+[[ -f "$mock_state/application-install-blocked" ]] \
+  || fail interruption_boundary_not_reached
+kill -TERM -- "-$interruption_process_id"
+set +e
+wait "$interruption_process_id"
+interruption_status="$?"
+set -e
+unset MOCK_APPLICATION_INSTALL_BLOCK
+(( interruption_status == 143 )) || fail interruption_status_invalid
+grep -Fxq 'reason=signal_termination' "$test_root/interruption.out" \
+  || fail interruption_reason_missing
+[[ ! -e "$home/Documents/Ishikawa" && ! -e "$mock_state/image" ]] \
+  || fail interruption_cleanup_incomplete
+for unit in ishikawa-observability-retention.service \
+  ishikawa-observability-retention.timer ishikawa-retrieval-api.service; do
+  [[ ! -e "$home/.config/systemd/user/$unit" ]] \
+    || fail interruption_unit_cleanup_incomplete
+done
 
 python3 -B - "$carry/deployment-package-receipt.json" <<'PY'
 import json
@@ -714,8 +911,9 @@ record["target_inventory"] = "pending"
 path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
 PY
 write_manifest
+candidate_plan_path="$test_root/tmp/candidate-installation-plan.json"
 set +e
-candidate_output="$(bash "$deploy" install 2>&1)"
+candidate_output="$(create_installation_plan "$candidate_plan_path" 2>&1)"
 candidate_status="$?"
 set -e
 (( candidate_status != 0 )) || fail candidate_reported_success
@@ -725,7 +923,7 @@ grep -Fxq 'reason=carry_not_final' <<<"$candidate_output" \
   || fail candidate_preflight_mutated
 
 printf '%s\n' \
-  'verify=pass;review_state_correlation=pass;inventory_command=pass;inventory_preflight=pass;install=pass;configuration=pass;schema=pass' \
-  'start_status_stop=pass;replay_refusal=pass;empty_removal=pass' \
-  'schema_failure_cleanup=pass;failure_cleanup=pass;candidate_refusal_before_mutation=pass'
+  'verify=pass;review_state_correlation=pass;inventory_command=pass;plan=pass;plan_hash_binding=pass;apply=pass' \
+  'configuration_consumers=pass;schema=pass;start_status_stop=pass;exact_replay=pass;drift_refusal=pass' \
+  'empty_removal=pass;schema_failure_cleanup=pass;failure_cleanup=pass;interruption_cleanup=pass;candidate_refusal_before_mutation=pass'
 printf '\nSCRIPT RESULT\nishikawa_deployment_entrypoint_test=pass\n'

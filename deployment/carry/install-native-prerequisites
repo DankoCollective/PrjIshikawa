@@ -7,7 +7,8 @@ set -Eeuo pipefail
 #
 # Mental model:
 #   1. Confirm Ubuntu 26.04 AMD64 and the seven exact carried package versions.
-#   2. Present the carried .deb files to APT as a temporary file-only catalog.
+#   2. Present the carried .deb files to APT as a temporary SHA-256-backed,
+#      file-only catalog.
 #   3. Simulate the seven-package request and refuse removals, downgrades, or
 #      upgrades of anything already installed on Tech.
 #   4. With --apply, install that plan while blocking service auto-start, then
@@ -122,7 +123,7 @@ done
   || fail_with_detail root_operator_forbidden 'Run as the Tech operator, not root.'
 
 for command_name in apt-get awk dpkg dpkg-deb dpkg-query find grep install ln \
-  mktemp python3 readlink rm sort stat sudo systemctl tee; do
+  mktemp python3 readlink rm sha256sum sort stat sudo systemctl tee; do
   command -v "$command_name" >/dev/null \
     || fail_with_detail missing_command "Missing command: $command_name"
 done
@@ -185,11 +186,17 @@ for package_archive_path in "${package_archive_paths[@]}"; do
     "$temporary_runtime_directory/package-repository/${package_archive_path##*/}"
 done
 (
+  # APT requires a strong package hash before it will fetch from the temporary
+  # catalog. This describes the local files; it does not perform transfer
+  # verification or contact a network service.
   for package_archive_path in \
     "$temporary_runtime_directory/package-repository"/*.deb; do
     dpkg-deb -f "$package_archive_path"
-    printf 'Filename: %s\nSize: %s\n\n' \
-      "${package_archive_path##*/}" "$(stat -Lc '%s' "$package_archive_path")"
+    package_archive_sha256="$(sha256sum "$package_archive_path" | awk '{print $1}')"
+    printf 'Filename: %s\nSize: %s\nSHA256: %s\n\n' \
+      "${package_archive_path##*/}" \
+      "$(stat -Lc '%s' "$package_archive_path")" \
+      "$package_archive_sha256"
   done
 ) > "$temporary_runtime_directory/package-repository/Packages"
 printf 'deb [trusted=yes] file:%s ./\n' \

@@ -9,6 +9,7 @@
 | `Ishikawa/` | Canonical product source and tests | Tracked |
 | `docs/operations/ISHIKAWA_V1_3_OPERATING_SURFACE.md` | Accounts, roles, services, commands, paths, and permission inventory | Tracked |
 | `docs/operations/CORPUS_INGESTION_RUNBOOK.md` | Operator catalog, manifest, validation, publication, and verification guide | Tracked |
+| `docs/operations/ISHIKAWA_ORG_LAB_NATIVE_PACKAGE_METHOD.md` | Durable Tech-target native-package capture, qualification, transfer, and offline-install method | Tracked |
 | `docs/releases/ISHIKAWA_V1_3_REPOSITORY_SWEEP.md` | Reviewed repository-wide agreement and validation record | Tracked |
 | `docs/releases/ISHIKAWA_ORG_LAB_CARRY_READINESS_CHECKLIST.md` | Durable decision-review queue and checkable final deployment carry gates | Tracked |
 | `docs/releases/ISHIKAWA_V1_3_1_DEPLOYMENT_PACKAGE_MANIFEST.md` | Classified 26-file corrected v1.3.1 deployment-package contract and exclusion boundary | Tracked |
@@ -37,6 +38,7 @@
 | `deployment/carry/` | Portable verifier, consolidated deployment entrypoint, and operator command sheet | Tracked |
 | `deployment/carry/SECURITY_REVIEW.md` | Portable exact-payload security disposition bound into the package receipt and checksum manifest | Tracked |
 | `deployment/carry/inspect-native-prerequisites` | Portable read-only Tech prerequisite, capacity, path, listener, Docker, and PostgreSQL inventory | Tracked |
+| `deployment/carry/capture-native-prerequisites` | Standalone work-laptop capture of the signed Ubuntu 26.04 AMD64 PostgreSQL 16, pgvector, Psycopg, and transitive `.deb` closure | Tracked |
 | `deployment/assets/stage-v1.3-candidate` | Bounded target-side Script 04 helper | Tracked |
 | `deployment/assets/qualify-v1.3-candidate` | Bounded target-side Script 05 helper | Tracked |
 | `deployment/assets/build-node-next-runtime` | Unnumbered native-host runtime-image builder invoked by Script 07 | Tracked |
@@ -63,6 +65,7 @@
 | `deployment/tests/carry-builder.sh` | Corrected carry assembly, security evidence/refusal, supersession, identity, checksum, and terminology regression | Tracked |
 | `deployment/tests/deployment-entrypoint.sh` | Portable verify, install, configure, database, lifecycle, removal, and cleanup regression | Tracked |
 | `deployment/tests/native-prerequisite-inventory.sh` | Read-only target inventory direct/sudo, host-surface, checksum, package-health, and refusal regression | Tracked |
+| `deployment/tests/native-package-capture.sh` | Standalone native-package capture success, signed-key, repository, pin, direct-hash, preservation, and clean-output regression | Tracked |
 | `qualification/frontier/` | Frozen 60-question gate | Tracked |
 | `qualification/frontier/evaluate-frontier.py` | Exact 60-question target qualification evaluator | Tracked |
 | `deployment/scripts/` | Active operator interfaces | Tracked |

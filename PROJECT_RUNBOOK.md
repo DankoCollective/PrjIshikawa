@@ -180,6 +180,13 @@
     `local/artifacts/ishikawa-deployment-v1.3.1-candidate-current/`. The
     candidate remains non-installable until Tech inventory and independent
     final review authorize stable publication.
+24. After the accepted read-only Tech inventory proves that PostgreSQL 16,
+    pgvector, Psycopg, and related native prerequisites are missing, follow
+    `docs/operations/ISHIKAWA_ORG_LAB_NATIVE_PACKAGE_METHOD.md`. Capture the
+    Ubuntu 26.04 AMD64 closure on the approved internet-connected work laptop
+    with isolated target-specific APT metadata. Do not use the work laptop's
+    normal release metadata, install the packages there, or contact Tech during
+    capture and qualification.
 
 ## Active commands
 
@@ -199,6 +206,7 @@
 - `deployment/scripts/14_assemble-v1.3.1-corrected-deployment-package.sh`
 - `deployment/carry/verify-deployment`
 - `deployment/carry/deploy-ishikawa`
+- `deployment/carry/capture-native-prerequisites`
 
 Script 05 prints a complete `[INPUT REQUIRED]` line before each hidden Gemma
 and Nomic API-key input. It does not log or retain either value. A clean Script

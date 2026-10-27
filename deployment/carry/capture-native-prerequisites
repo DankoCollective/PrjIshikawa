@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 077
+
+PROGRAM_NAME="capture-native-prerequisites"
+TARGET_RELEASE="resolute"
+TARGET_ARCH="amd64"
+PGDG_FINGERPRINT="B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+PGDG_KEY_URL="https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+UBUNTU_KEYRING_SOURCE="${ISHIKAWA_UBUNTU_KEYRING:-/usr/share/keyrings/ubuntu-archive-keyring.gpg}"
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+DEFAULT_OUTPUT="${PWD}/ishikawa-native-prerequisites-resolute-amd64-${RUN_STAMP}"
+OUTPUT_DIR=""
+RESULT_EMITTED=false
+
+DIRECT_SPECS=(
+  "python3-psycopg=3.3.2-1build1"
+  "postgresql-common=293.pgdg26.04+1"
+  "postgresql-client-common=293.pgdg26.04+1"
+  "libpq5=18.6-1.pgdg26.04+2"
+  "postgresql-client-16=16.15-1.pgdg26.04+2"
+  "postgresql-16=16.15-1.pgdg26.04+2"
+  "postgresql-16-pgvector=0.8.7-1.pgdg26.04+1"
+)
+
+declare -A DIRECT_FILES=(
+  [python3-psycopg]="python3-psycopg_3.3.2-1build1_all.deb"
+  [postgresql-common]="postgresql-common_293.pgdg26.04+1_all.deb"
+  [postgresql-client-common]="postgresql-client-common_293.pgdg26.04+1_all.deb"
+  [libpq5]="libpq5_18.6-1.pgdg26.04+2_amd64.deb"
+  [postgresql-client-16]="postgresql-client-16_16.15-1.pgdg26.04+2_amd64.deb"
+  [postgresql-16]="postgresql-16_16.15-1.pgdg26.04+2_amd64.deb"
+  [postgresql-16-pgvector]="postgresql-16-pgvector_0.8.7-1.pgdg26.04+1_amd64.deb"
+)
+
+declare -A DIRECT_HASHES=(
+  [python3-psycopg]="e03bef68d5c5456a801309fb330c2814007f265431f2ba97c0a046805731dc53"
+  [postgresql-common]="4b830ea730e0de1f6d0c80cee8db3d540185765c933c9ad6537372101f6aae92"
+  [postgresql-client-common]="d2ac3e8c35c774fa1e48dd6146b1a5937617496df23f46cf101183dcf51f60c4"
+  [libpq5]="a56bfe4843ae432e7338d0139190397db69a343412e489ae637bfb39c2d6fc30"
+  [postgresql-client-16]="52fd38615ce65bd9b0442a21e611986e0cc7b87e1143e2464668be17fcb77314"
+  [postgresql-16]="029e7af139dafe488a1950531824d61b17d07990879380f459e79b0f15420512"
+  [postgresql-16-pgvector]="9a853bba89e2811d0dfeda853ff94ca6d8e84f01a088327ba8b781d99bc083d7"
+)
+
+usage() {
+  cat <<'USAGE'
+Usage: capture-native-prerequisites [--output DIRECTORY]
+
+Download the complete Ubuntu 26.04 AMD64 PostgreSQL 16, pgvector, Psycopg,
+and transitive native-package closure through isolated signed Ubuntu and PGDG
+APT metadata. Nothing is installed and sudo is not used.
+
+Options:
+  --output DIRECTORY  New output directory. It must not already exist.
+  --help              Show this help.
+USAGE
+}
+
+emit_result() {
+  local value="$1"
+  if [[ "$RESULT_EMITTED" == false ]]; then
+    printf '\nSCRIPT RESULT\n%s=%s\n' "$PROGRAM_NAME" "$value"
+    RESULT_EMITTED=true
+  fi
+}
+
+fail() {
+  local reason="$1"
+  local detail="$2"
+  printf '\nFAILURE DETAIL\nreason=%s\ndetail=%s\n' "$reason" "$detail" >&2
+  emit_result "blocked;reason=${reason}"
+  exit 1
+}
+
+on_error() {
+  local status=$?
+  local line="${BASH_LINENO[0]:-unknown}"
+  trap - ERR
+  printf '\nFAILURE DETAIL\nreason=unexpected_command_failure\nline=%s\nexit_status=%s\n' \
+    "$line" "$status" >&2
+  emit_result "blocked;reason=unexpected_command_failure"
+  exit "$status"
+}
+trap on_error ERR
+
+while (($# > 0)); do
+  case "$1" in
+    --output)
+      (($# >= 2)) || fail "invalid_arguments" "--output requires a directory."
+      OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "invalid_arguments" "Unsupported argument: $1"
+      ;;
+  esac
+done
+
+[[ "${EUID}" -ne 0 ]] \
+  || fail "root_execution_refused" "Run as the ordinary work-laptop user; sudo is not required."
+
+for command_name in \
+  apt-cache apt-get awk cat cp curl date df dpkg-deb find gpg mkdir mv readlink \
+  rm sha256sum sort stat tail tr wc xargs; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || fail "missing_command" "Required command is unavailable: ${command_name}"
+done
+
+[[ -r "$UBUNTU_KEYRING_SOURCE" ]] \
+  || fail "ubuntu_keyring_unavailable" "Ubuntu archive keyring is not readable: ${UBUNTU_KEYRING_SOURCE}"
+
+OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT}"
+if [[ -e "$OUTPUT_DIR" ]]; then
+  fail "output_exists" "Output path already exists; choose a new --output directory: ${OUTPUT_DIR}"
+fi
+
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(readlink -f "$OUTPUT_DIR")"
+APT_ROOT="$OUTPUT_DIR/apt-root"
+DEB_DIR="$OUTPUT_DIR/debs"
+REPORT_DIR="$OUTPUT_DIR/reports"
+METADATA_DIR="$OUTPUT_DIR/repository-metadata"
+
+mkdir -p \
+  "$APT_ROOT/etc/apt/keyrings" \
+  "$APT_ROOT/etc/apt/sources.list.d" \
+  "$APT_ROOT/etc/apt/trusted.gpg.d" \
+  "$APT_ROOT/usr/share/keyrings" \
+  "$APT_ROOT/var/lib/apt/lists/partial" \
+  "$APT_ROOT/var/lib/dpkg" \
+  "$APT_ROOT/var/log/apt" \
+  "$DEB_DIR/partial" \
+  "$REPORT_DIR" \
+  "$METADATA_DIR"
+
+available_kib="$(df -Pk "$OUTPUT_DIR" | awk 'NR == 2 {print $4}')"
+[[ "$available_kib" =~ ^[0-9]+$ ]] \
+  || fail "capacity_unknown" "Could not determine available storage."
+((available_kib >= 1048576)) \
+  || fail "insufficient_capacity" "At least 1 GiB of free storage is required."
+
+: > "$APT_ROOT/var/lib/dpkg/status"
+: > "$APT_ROOT/etc/apt/trusted.gpg"
+cp "$UBUNTU_KEYRING_SOURCE" "$APT_ROOT/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+
+printf '[CAPTURE] output=%s\n' "$OUTPUT_DIR"
+printf '[CAPTURE] target=ubuntu_26.04_resolute_%s\n' "$TARGET_ARCH"
+printf '[CAPTURE] install=false;sudo=false;tech_contact=false\n'
+
+printf '[SIGNATURE] action=download_pgdg_key\n'
+if ! curl --fail --silent --show-error --location \
+  --output "$APT_ROOT/etc/apt/keyrings/postgresql.asc" \
+  "$PGDG_KEY_URL"; then
+  fail "pgdg_key_download_failed" "Could not download the official PGDG signing key."
+fi
+
+observed_fingerprint="$(
+  gpg --batch --show-keys --with-colons \
+    "$APT_ROOT/etc/apt/keyrings/postgresql.asc" \
+    | awk -F: '$1 == "fpr" { print $10; exit }'
+)"
+[[ "$observed_fingerprint" == "$PGDG_FINGERPRINT" ]] \
+  || fail "pgdg_key_mismatch" "Expected ${PGDG_FINGERPRINT}; observed ${observed_fingerprint:-none}."
+printf '[SIGNATURE] pgdg_key=pass;fingerprint=%s\n' "$observed_fingerprint"
+
+cp "$APT_ROOT/etc/apt/keyrings/postgresql.asc" "$METADATA_DIR/postgresql-signing-key.asc"
+cp "$APT_ROOT/usr/share/keyrings/ubuntu-archive-keyring.gpg" \
+  "$METADATA_DIR/ubuntu-archive-keyring.gpg"
+printf '%s\n' "$observed_fingerprint" > "$METADATA_DIR/postgresql-signing-key.fingerprint"
+
+printf '%s\n' \
+  "deb [arch=amd64 signed-by=$APT_ROOT/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu resolute main universe" \
+  "deb [arch=amd64 signed-by=$APT_ROOT/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu resolute-updates main universe" \
+  "deb [arch=amd64 signed-by=$APT_ROOT/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu resolute-security main universe" \
+  "deb [arch=amd64 signed-by=$APT_ROOT/etc/apt/keyrings/postgresql.asc] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+  > "$APT_ROOT/etc/apt/sources.list"
+printf '%s\n' \
+  'deb [arch=amd64 signed-by=ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu resolute main universe' \
+  'deb [arch=amd64 signed-by=ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu resolute-updates main universe' \
+  'deb [arch=amd64 signed-by=ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu resolute-security main universe' \
+  'deb [arch=amd64 signed-by=postgresql-signing-key.asc] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main' \
+  > "$METADATA_DIR/sources.list.record"
+
+APT_OPTIONS=(
+  -o "Dir=$APT_ROOT"
+  -o "Dir::Etc::sourcelist=$APT_ROOT/etc/apt/sources.list"
+  -o "Dir::Etc::sourceparts=$APT_ROOT/etc/apt/sources.list.d"
+  -o "Dir::Etc::trusted=$APT_ROOT/etc/apt/trusted.gpg"
+  -o "Dir::Etc::trustedparts=$APT_ROOT/etc/apt/trusted.gpg.d"
+  -o "Dir::State::lists=$APT_ROOT/var/lib/apt/lists"
+  -o "Dir::State::status=$APT_ROOT/var/lib/dpkg/status"
+  -o "Dir::Cache::archives=$DEB_DIR"
+  -o "Dir::Log=$APT_ROOT/var/log/apt"
+  -o "APT::Architecture=$TARGET_ARCH"
+  -o "APT::Architectures=$TARGET_ARCH"
+  -o "Acquire::Languages=none"
+  -o "Acquire::Retries=3"
+  -o "Debug::NoLocking=1"
+)
+
+printf '[REPOSITORY] action=refresh_signed_target_metadata\n'
+if ! apt-get "${APT_OPTIONS[@]}" update > "$REPORT_DIR/apt-update.txt" 2>&1; then
+  tail -n 80 "$REPORT_DIR/apt-update.txt" >&2 || true
+  fail "repository_update_failed" "Signed Ubuntu or PGDG metadata refresh failed."
+fi
+printf '[REPOSITORY] state=pass;signed_metadata=true\n'
+
+: > "$REPORT_DIR/package-policy.txt"
+for spec in "${DIRECT_SPECS[@]}"; do
+  package_name="${spec%%=*}"
+  package_version="${spec#*=}"
+  apt-cache "${APT_OPTIONS[@]}" policy "$package_name" \
+    >> "$REPORT_DIR/package-policy.txt"
+  printf '\n' >> "$REPORT_DIR/package-policy.txt"
+  if ! apt-cache "${APT_OPTIONS[@]}" show "$spec" >/dev/null 2>&1; then
+    fail "pinned_package_unavailable" "APT cannot resolve ${package_name}=${package_version}."
+  fi
+done
+printf '[RESOLVER] pinned_direct_packages=pass;count=%s\n' "${#DIRECT_SPECS[@]}"
+
+printf '[DOWNLOAD] action=resolve_and_download_complete_closure\n'
+if ! apt-get "${APT_OPTIONS[@]}" \
+  --yes --download-only --no-install-recommends install \
+  "${DIRECT_SPECS[@]}" > "$REPORT_DIR/download-plan.txt" 2>&1; then
+  tail -n 120 "$REPORT_DIR/download-plan.txt" >&2 || true
+  fail "dependency_download_failed" "APT could not download one complete pinned dependency closure."
+fi
+
+deb_count="$(find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' | wc -l | tr -d ' ')"
+[[ "$deb_count" =~ ^[0-9]+$ ]] && ((deb_count >= ${#DIRECT_SPECS[@]})) \
+  || fail "incomplete_download" "Expected at least ${#DIRECT_SPECS[@]} package files; found ${deb_count:-0}."
+
+printf '[VERIFY] action=direct_package_identity_and_hash\n'
+for spec in "${DIRECT_SPECS[@]}"; do
+  package_name="${spec%%=*}"
+  package_version="${spec#*=}"
+  expected_file="${DIRECT_FILES[$package_name]}"
+  expected_hash="${DIRECT_HASHES[$package_name]}"
+  package_path="$DEB_DIR/$expected_file"
+  [[ -f "$package_path" ]] \
+    || fail "direct_package_missing" "Expected downloaded file is absent: ${expected_file}"
+
+  observed_package="$(dpkg-deb -f "$package_path" Package)"
+  observed_version="$(dpkg-deb -f "$package_path" Version)"
+  observed_arch="$(dpkg-deb -f "$package_path" Architecture)"
+  [[ "$observed_package" == "$package_name" && "$observed_version" == "$package_version" ]] \
+    || fail "direct_package_identity_mismatch" "Expected ${spec}; observed ${observed_package}=${observed_version}."
+  [[ "$observed_arch" == "all" || "$observed_arch" == "$TARGET_ARCH" ]] \
+    || fail "direct_package_architecture_mismatch" "${expected_file} has architecture ${observed_arch}."
+
+  if ! printf '%s  %s\n' "$expected_hash" "$package_path" | sha256sum --check --status; then
+    fail "direct_package_hash_mismatch" "Signed-index hash mismatch for ${expected_file}."
+  fi
+done
+printf '[VERIFY] direct_packages=pass;count=%s\n' "${#DIRECT_SPECS[@]}"
+
+manifest="$OUTPUT_DIR/package-manifest.tsv"
+printf 'filename\tpackage\tversion\tarchitecture\tsource\tbytes\tsha256\n' > "$manifest"
+while IFS= read -r -d '' package_path; do
+  filename="${package_path##*/}"
+  package_name="$(dpkg-deb -f "$package_path" Package)"
+  package_version="$(dpkg-deb -f "$package_path" Version)"
+  package_arch="$(dpkg-deb -f "$package_path" Architecture)"
+  package_source="$(dpkg-deb -f "$package_path" Source | tr '\t\n' '  ')"
+  package_bytes="$(stat -c '%s' "$package_path")"
+  package_hash="$(sha256sum "$package_path" | awk '{print $1}')"
+  [[ "$package_arch" == "all" || "$package_arch" == "$TARGET_ARCH" ]] \
+    || fail "closure_architecture_mismatch" "${filename} has architecture ${package_arch}."
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$filename" "$package_name" "$package_version" "$package_arch" \
+    "$package_source" "$package_bytes" "$package_hash" >> "$manifest"
+done < <(find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+
+(
+  cd "$OUTPUT_DIR"
+  find debs -maxdepth 1 -type f -name '*.deb' -print0 \
+    | sort -z \
+    | xargs -0 sha256sum > deb-checksums.sha256
+)
+
+captured_bytes="$(find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -printf '%s\n' \
+  | awk '{total += $1} END {print total + 0}')"
+cat > "$OUTPUT_DIR/capture-summary.env" <<SUMMARY
+capture_status=downloaded_pending_offline_qualification
+target_os=ubuntu
+target_release=resolute
+target_architecture=amd64
+postgresql_major=16
+direct_package_count=${#DIRECT_SPECS[@]}
+captured_package_count=${deb_count}
+captured_package_bytes=${captured_bytes}
+pgdg_signing_fingerprint=${observed_fingerprint}
+sudo_used=false
+package_install_performed=false
+tech_contact_performed=false
+offline_installation_proof=pending
+closure_advisory_review=pending
+license_review=pending
+SUMMARY
+
+mv "$APT_ROOT/var/lib/apt/lists" "$METADATA_DIR/apt-lists"
+rm -rf "$APT_ROOT"
+
+(
+  cd "$OUTPUT_DIR"
+  find . -type f ! -name 'shelf-checksums.sha256' ! -path './apt-root/var/lib/apt/lists/lock' \
+    -print0 | sort -z | xargs -0 sha256sum > shelf-checksums.sha256
+)
+
+printf '[CAPTURE] state=pass;packages=%s;bytes=%s\n' "$deb_count" "$captured_bytes"
+printf '[CAPTURE] shelf=%s\n' "$OUTPUT_DIR"
+printf '[NEXT] offline_installation_proof=pending;advisory_review=pending;license_review=pending\n'
+
+trap - ERR
+emit_result "pass"

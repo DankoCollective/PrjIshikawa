@@ -103,7 +103,9 @@ After capture, use the separate standalone
 verifies the origin shelf and performs the item 7 local-file-only installation
 and operation proof inside a disposable network-disabled Ubuntu 26.04 AMD64
 container. Docker access may be direct or attended through its explicit
-`--sudo-docker` option. The qualification does not contact Tech.
+`--sudo-docker` option. When the option is omitted, the qualifier attempts
+direct Docker access and automatically falls back to one attended sudo
+validation if required. The qualification does not contact Tech.
 
 ## Stop conditions
 

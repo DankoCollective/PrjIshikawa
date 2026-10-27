@@ -1,6 +1,37 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Purpose:
+#   Qualify a captured Ishikawa native-package shelf in disposable Ubuntu
+#   26.04 AMD64 without network access or Tech contact.
+#
+# Mental model:
+#   1. Verify the captured shelf identity before creating qualification output.
+#   2. Select the operator's Docker daemon, automatically using attended sudo
+#      when direct access is unavailable.
+#   3. Resolve the local Ubuntu 26.04 image to an inspected immutable image ID.
+#   4. Simulate and perform installation using only carried absolute .deb paths
+#      with empty APT sources and lists inside a network-disabled container.
+#   5. Prove exact package versions, Psycopg import, PostgreSQL 16 startup,
+#      pgvector operation, package health, and copyright-file inventory.
+#   6. Publish a checksum-bound qualification receipt and the next open gate.
+#
+# Inputs or prerequisites:
+#   - The shelf produced by capture-native-prerequisites.
+#   - A locally present linux/amd64 ubuntu:26.04 image.
+#   - Docker access directly or through attended sudo.
+#
+# Outputs or artifact lane:
+#   - A new qualification-<UTC timestamp>/ directory inside the shelf.
+#   - The exact generated container proof, full retained log, environment
+#     identity, license inventory, checksums, and qualification summary.
+#   - The captured shelf and Tech remain unchanged.
+#
+# Usage:
+#   bash ./qualify-native-prerequisites
+#   bash ./qualify-native-prerequisites --shelf /path/to/shelf
+#   bash ./qualify-native-prerequisites --sudo-docker
+
 umask 077
 
 PROGRAM_NAME="qualify-native-prerequisites"
@@ -29,11 +60,14 @@ pgvector operation in a disposable network-disabled Ubuntu 26.04 container.
 
 Options:
   --shelf DIRECTORY  Captured shelf root. Default: current directory.
-  --sudo-docker      Invoke Docker through attended sudo.
+  --sudo-docker      Require Docker through attended sudo. Without this flag,
+                     direct access is tried first and falls back to sudo.
   --help             Show this help.
 USAGE
 }
 
+# One helper owns the terminal result so no error or signal path can produce a
+# second, conflicting result marker.
 emit_result() {
   local value="$1"
   if [[ "$RESULT_EMITTED" == false ]]; then
@@ -61,6 +95,7 @@ on_error() {
 }
 trap on_error ERR
 
+# Step 1 — Parse the CLI and verify the capture identity before adding reports.
 while (($# > 0)); do
   case "$1" in
     --shelf)
@@ -125,6 +160,8 @@ summary_count="$(awk -F= '$1 == "captured_package_count" {print $2}' "$SHELF_DIR
   || fail "package_count_mismatch" "Summary count ${summary_count:-none} does not match ${deb_count:-none} files."
 printf '[SHELF] state=pass;packages=%s\n' "$deb_count"
 
+# Step 2 — Select one Docker authority. Direct access is preferred, but this
+# work laptop's accepted root-managed daemon is discovered without a flag.
 DOCKER=(docker)
 if [[ "$USE_SUDO_DOCKER" == true ]]; then
   command -v sudo >/dev/null 2>&1 \
@@ -132,15 +169,22 @@ if [[ "$USE_SUDO_DOCKER" == true ]]; then
   printf '[DOCKER] action=attended_sudo_validation\n'
   sudo -v || fail "sudo_validation_failed" "Docker requires attended sudo and validation failed."
   DOCKER=(sudo docker)
-fi
-
-if ! "${DOCKER[@]}" info >/dev/null 2>&1; then
-  if [[ "$USE_SUDO_DOCKER" == true ]]; then
+  if ! "${DOCKER[@]}" info >/dev/null 2>&1; then
     fail "docker_access_failed" "Attended sudo succeeded, but sudo docker cannot contact the Docker daemon."
   fi
-  fail "docker_access_failed" "Docker daemon access failed. Rerun with --sudo-docker when this account requires sudo."
+elif ! docker info >/dev/null 2>&1; then
+  command -v sudo >/dev/null 2>&1 \
+    || fail "docker_access_failed" "Direct Docker access failed and sudo is unavailable."
+  printf '[DOCKER] direct_access=unavailable;fallback=attended_sudo\n'
+  sudo -v || fail "sudo_validation_failed" "Direct Docker access failed and attended sudo validation failed."
+  DOCKER=(sudo docker)
+  if ! "${DOCKER[@]}" info >/dev/null 2>&1; then
+    fail "docker_access_failed" "Neither direct nor attended-sudo Docker can contact the daemon."
+  fi
 fi
 
+# Step 3 — Accept the short or canonical Ubuntu tag, then bind execution to the
+# immutable inspected image ID so a later tag change cannot alter the proof.
 selected_image=""
 for image_candidate in "$DOCKER_IMAGE" "docker.io/library/${DOCKER_IMAGE}"; do
   if "${DOCKER[@]}" image inspect "$image_candidate" >/dev/null 2>&1; then
@@ -158,6 +202,8 @@ image_id="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Id}}')"
 image_digests="$("${DOCKER[@]}" image inspect "$DOCKER_IMAGE" --format '{{join .RepoDigests ","}}')"
 [[ "$image_os" == linux && "$image_arch" == amd64 ]] \
   || fail "qualification_image_wrong" "Expected linux/amd64; observed ${image_os}/${image_arch}."
+[[ "$image_id" == sha256:* ]] \
+  || fail "qualification_image_identity_missing" "Docker did not return an immutable image ID for ${DOCKER_IMAGE}."
 
 RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 QUALIFICATION_DIR="$SHELF_DIR/qualification-${RUN_STAMP}"
@@ -165,9 +211,24 @@ QUALIFICATION_DIR="$SHELF_DIR/qualification-${RUN_STAMP}"
   || fail "qualification_output_exists" "Qualification output already exists: ${QUALIFICATION_DIR}"
 mkdir -p "$QUALIFICATION_DIR"
 
+# Step 4 — Materialize the exact proof program retained beside its output.
 cat > "$QUALIFICATION_DIR/container-proof.sh" <<'CONTAINER'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+
+# Purpose:
+#   Prove local-file-only native-package installation and operation inside one
+#   disposable, network-disabled Ubuntu 26.04 AMD64 container.
+# Mental model:
+#   A. Disable service autostart and every APT repository/list source.
+#   B. Simulate and execute one transaction from the mounted .deb closure.
+#   C. Verify package health, exact pins, and Psycopg import.
+#   D. Initialize disposable PostgreSQL 16 and exercise pgvector 0.8.7.
+#   E. Inventory installed copyright records and emit bounded proof markers.
+# Inputs:
+#   - Read-only /shelf mount containing the captured closure and manifest.
+# Outputs:
+#   - Tagged stdout/stderr retained by the parent qualifier; no durable state.
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -180,6 +241,7 @@ cleanup_postgresql() {
 }
 trap cleanup_postgresql EXIT
 
+# Step A — Make target-side downloading and service autostart unavailable.
 mkdir -p /tmp/empty-apt-sources /tmp/empty-apt-lists/partial
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
 chmod 755 /usr/sbin/policy-rc.d
@@ -196,6 +258,8 @@ APT_OFFLINE=(
   -o APT::Sandbox::User=root
 )
 
+# Step B — Require a zero-repository simulation before the real disposable
+# install. All package candidates are absolute paths on the read-only shelf.
 printf '[OFFLINE] action=simulate;packages=%s\n' "${#package_files[@]}"
 apt-get "${APT_OFFLINE[@]}" --simulate --no-install-recommends install \
   "${package_files[@]}"
@@ -211,6 +275,7 @@ audit_output="$(dpkg --audit)"
 }
 apt-get "${APT_OFFLINE[@]}" check
 
+# Step C — Verify every frozen direct identity and the installed Psycopg API.
 expected_specs=(
   'python3-psycopg=3.3.2-1build1'
   'postgresql-common=293.pgdg26.04+1'
@@ -234,6 +299,8 @@ assert psycopg.__version__ == "3.3.2", psycopg.__version__
 print(f"[PSYCOPG] version={psycopg.__version__};state=pass")
 PY
 
+# Step D — Use an isolated temporary cluster so the proof does not depend on
+# systemd or a package-created default cluster inside the container.
 install -d -o postgres -g postgres -m 0700 /tmp/pgdata
 install -d -o postgres -g postgres -m 0775 /tmp/pgsocket
 su postgres -s /bin/sh -c \
@@ -258,6 +325,8 @@ grep -Fxq '0.8.7' /tmp/pgvector-proof.txt
 grep -Fxq '1' /tmp/pgvector-proof.txt
 printf '[POSTGRESQL] major=16;pgvector=0.8.7;query=pass;state=pass\n'
 
+# Step E — Debian/Ubuntu packages must expose readable copyright material.
+# Hashes make the inventory reviewable without copying all license text.
 license_missing=0
 printf '[LICENSE] action=inventory\n'
 while IFS=$'\t' read -r filename package_name _rest; do
@@ -292,12 +361,13 @@ source_shelf=${SHELF_DIR}
 captured_package_count=${deb_count}
 ENVIRONMENT
 
+# Step 5 — Run the proof in a disposable network-disabled container.
 printf '[QUALIFICATION] action=offline_container_install;network=none\n'
 if ! "${DOCKER[@]}" run --rm \
   --network none \
   --platform linux/amd64 \
   --mount "type=bind,src=$SHELF_DIR,dst=/shelf,readonly" \
-  "$DOCKER_IMAGE" \
+  "$image_id" \
   bash -s < "$QUALIFICATION_DIR/container-proof.sh" \
   > "$QUALIFICATION_DIR/container-proof.log" 2>&1; then
   tail -n 160 "$QUALIFICATION_DIR/container-proof.log" >&2 || true
@@ -320,6 +390,8 @@ grep -Fq '[LICENSE] state=inventory_pass' \
 grep '^\[LICENSE\] package=' "$QUALIFICATION_DIR/container-proof.log" \
   > "$QUALIFICATION_DIR/license-inventory.txt"
 
+# Step 6 — Publish the bounded receipt without claiming the still-pending
+# complete-closure advisory disposition.
 cat > "$QUALIFICATION_DIR/qualification-summary.env" <<SUMMARY
 qualification_status=offline_installation_and_operation_pass
 target_release=resolute

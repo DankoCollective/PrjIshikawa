@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Role:
+#   Executable regression harness for the standalone native-package capture.
+# Mental model:
+#   Build controlled APT/signature/package substitutes, execute the real parent
+#   script, and prove success, refusal, preservation, heartbeat, and signal
+#   behavior without network access or package installation.
+# Inputs:
+#   - The repository capture-native-prerequisites script.
+# Outputs:
+#   - Temporary isolated fixtures under /tmp and one terminal test result.
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 CAPTURE="$REPO_ROOT/deployment/carry/capture-native-prerequisites"
 TEST_ROOT="$(mktemp -d /tmp/ishikawa-native-package-capture.XXXXXX)"
@@ -19,6 +30,8 @@ fail() {
 mkdir -p "$MOCK_BIN"
 printf 'test-keyring\n' > "$TEST_ROOT/ubuntu-archive-keyring.gpg"
 
+# Step 1 — Define deterministic external-boundary substitutes. The capture
+# script itself remains the behavior under test.
 cat > "$MOCK_BIN/curl" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -171,14 +184,17 @@ chmod 755 "$MOCK_BIN"/*
 run_capture() {
   local output="$1"
   shift
-  PATH="$MOCK_BIN:$PATH" \
+  env \
+    PATH="$MOCK_BIN:$PATH" \
     ISHIKAWA_UBUNTU_KEYRING="$TEST_ROOT/ubuntu-archive-keyring.gpg" \
-    "$@" bash "$CAPTURE" --output "$output"
+    "$@" \
+    bash "$CAPTURE" --output "$output"
 }
 
+# Step 2 — Prove the complete success path and published evidence boundary.
 pass_output="$TEST_ROOT/pass"
 pass_log="$TEST_ROOT/pass.log"
-run_capture "$pass_output" env > "$pass_log" 2>&1 \
+run_capture "$pass_output" > "$pass_log" 2>&1 \
   || fail "happy_path_failed"
 grep -Fq 'capture-native-prerequisites=pass' "$pass_log" \
   || fail "happy_path_result_missing"
@@ -191,29 +207,30 @@ grep -Fq 'capture-native-prerequisites=pass' "$pass_log" \
 grep -Fq 'offline_installation_proof=pending' "$pass_output/capture-summary.env" \
   || fail "pending_boundary_missing"
 
+# Step 3 — Exercise each refusal adjacent to trust, resolution, and download.
 existing_log="$TEST_ROOT/existing.log"
-if run_capture "$pass_output" env > "$existing_log" 2>&1; then
+if run_capture "$pass_output" > "$existing_log" 2>&1; then
   fail "existing_output_was_accepted"
 fi
 grep -Fq 'reason=output_exists' "$existing_log" \
   || fail "existing_output_reason_wrong"
 
 bad_key_log="$TEST_ROOT/bad-key.log"
-if run_capture "$TEST_ROOT/bad-key" env MOCK_PGDG_FINGERPRINT=BAD > "$bad_key_log" 2>&1; then
+if run_capture "$TEST_ROOT/bad-key" MOCK_PGDG_FINGERPRINT=BAD > "$bad_key_log" 2>&1; then
   fail "bad_key_was_accepted"
 fi
 grep -Fq 'reason=pgdg_key_mismatch' "$bad_key_log" \
   || fail "bad_key_reason_wrong"
 
 update_log="$TEST_ROOT/update-failure.log"
-if run_capture "$TEST_ROOT/update-failure" env MOCK_APT_UPDATE_FAIL=true > "$update_log" 2>&1; then
+if run_capture "$TEST_ROOT/update-failure" MOCK_APT_UPDATE_FAIL=true > "$update_log" 2>&1; then
   fail "repository_failure_was_accepted"
 fi
 grep -Fq 'reason=repository_update_failed' "$update_log" \
   || fail "repository_failure_reason_wrong"
 
 pin_log="$TEST_ROOT/pin-failure.log"
-if run_capture "$TEST_ROOT/pin-failure" env MOCK_PIN_UNAVAILABLE=true > "$pin_log" 2>&1; then
+if run_capture "$TEST_ROOT/pin-failure" MOCK_PIN_UNAVAILABLE=true > "$pin_log" 2>&1; then
   fail "missing_pin_was_accepted"
 fi
 grep -Fq 'reason=pinned_package_unavailable' "$pin_log" \
@@ -221,7 +238,7 @@ grep -Fq 'reason=pinned_package_unavailable' "$pin_log" \
 
 hash_output="$TEST_ROOT/hash-failure"
 hash_log="$TEST_ROOT/hash-failure.log"
-if run_capture "$hash_output" env MOCK_HASH_FAIL=true > "$hash_log" 2>&1; then
+if run_capture "$hash_output" MOCK_HASH_FAIL=true > "$hash_log" 2>&1; then
   fail "bad_hash_was_accepted"
 fi
 grep -Fq 'reason=direct_package_hash_mismatch' "$hash_log" \

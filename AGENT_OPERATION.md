@@ -37,7 +37,15 @@ of target mutation, or successful cleanup does not reduce the violation.
 - Read `node_nextjs_runtime_image.md` before selecting, changing, packaging,
   or using the shared Node/Next.js container runtime.
 - Read the relevant local docs before changing procedure or evidence.
-- Follow `CODING_STANDARD.md` for script and code file style.
+- Before creating, modifying, reviewing, or handing off any code, script,
+  embedded script, or executable test, read and apply `CODING_STANDARD.md` to
+  that coding artifact. At minimum, keep the file-open Purpose and Mental
+  model clear, define the material steps, and add intent-focused comments that
+  reduce interpretation cost. Apply the standard proportionally: a bounded or
+  throwaway proof script should remain small and reviewable. Do not add new
+  runtime behavior, interfaces, orchestration layers, or test complexity merely
+  to make the artifact look more compliant; discuss any material functional
+  expansion separately when the task does not already require it.
 - Follow `LAB_RUN_PATH_STANDARD.md` for lab script sequencing, local report write-back, remote payload handling, artifact/advisory verification, and reviewed evidence promotion.
 - Treat a stable `<solution-name>-current/` artifact directory as the sole operator handoff source, not as a decorative alias. A replacement build is incomplete until the approved archive and verification files are atomically promoted there and independently checksum-verified. Dated or revision-named outputs are candidates only and must never be reported or transferred as current; preserve displaced bytes under an explicit superseded name.
 - Treat security advisories as implementation gates, not paperwork. For first-class packages, wheels, binaries, source archives, containers, authority-service tools, and dependencies, capture advisory sources, review affectedness, record mitigation or non-applicability, and do not proceed to install/promote with an unmitigated action-required advisory unless the operator explicitly accepts and records the risk.

@@ -16,8 +16,8 @@ umask 077
 #   corrected carry sources, and the complete local deployment test suite.
 #
 # Outputs or artifact lane:
-#   local/artifacts/ishikawa-v1.3.1-tech-current/
-#   local/reports/ishikawa-v1.3.1-final-tech-package/
+#   local/artifacts/ishikawa-v1.3.1-deployment-current/
+#   local/reports/ishikawa-v1.3.1-final-deployment-package/
 #   No lab host, network service, corpus, credential, or database is contacted.
 #
 # Usage:
@@ -30,11 +30,11 @@ readonly carry_source_directory="$repository_root/deployment/carry"
 readonly source_candidate_directory="$repository_root/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current"
 readonly accepted_application_directory="$repository_root/local/artifacts/ishikawa-v1.3.1-candidate-current"
 readonly artifact_parent_directory="$repository_root/local/artifacts"
-readonly stable_handoff_directory="$artifact_parent_directory/ishikawa-v1.3.1-tech-current"
+readonly stable_handoff_directory="$artifact_parent_directory/ishikawa-v1.3.1-deployment-current"
 readonly superseded_directory="$artifact_parent_directory/superseded"
-readonly report_directory="$repository_root/local/reports/ishikawa-v1.3.1-final-tech-package"
-readonly package_directory_name='ishikawa-v1.3.1-tech-amd64'
-readonly archive_file_name='ishikawa-v1.3.1-tech-amd64.tar'
+readonly report_directory="$repository_root/local/reports/ishikawa-v1.3.1-final-deployment-package"
+readonly package_directory_name='ishikawa-v1.3.1-linux-amd64'
+readonly archive_file_name='ishikawa-v1.3.1-linux-amd64.tar'
 readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
 readonly expected_runtime_sha256='b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1'
 
@@ -48,7 +48,7 @@ report_path=''
 usage() { sed -n '5,29p' "${BASH_SOURCE[0]}"; }
 
 emit_script_result() {
-  printf '\nSCRIPT RESULT\nscript_15_final_tech_package=%s\n' "$1"
+  printf '\nSCRIPT RESULT\nscript_15_final_deployment_package=%s\n' "$1"
 }
 
 fail_with_detail() {
@@ -85,9 +85,9 @@ cleanup_temporary_state() {
   for temporary_path in \
     "$assembly_workspace" "$publication_stage" "$qualification_workspace"; do
     if [[ -n "$temporary_path" \
-        && ( "$temporary_path" == "$artifact_parent_directory"/.ishikawa-final-tech.* \
-          || "$temporary_path" == /tmp/ishikawa-final-tech-assembly.* \
-          || "$temporary_path" == /tmp/ishikawa-final-tech-qualification.* ) \
+        && ( "$temporary_path" == "$artifact_parent_directory"/.ishikawa-final-deployment.* \
+          || "$temporary_path" == /tmp/ishikawa-final-deployment-assembly.* \
+          || "$temporary_path" == /tmp/ishikawa-final-deployment-qualification.* ) \
         && -d "$temporary_path" && ! -L "$temporary_path" ]]; then
       rm -rf -- "$temporary_path"
     fi
@@ -144,6 +144,29 @@ bash -n \
   || fail_with_detail source_syntax_invalid \
     'A deployment or qualification script failed shell parsing.' \
     'Correct the canonical source before final assembly.'
+for operator_entrypoint_path in \
+  "$carry_source_directory/deploy-ishikawa" \
+  "$carry_source_directory/inspect-native-prerequisites" \
+  "$carry_source_directory/verify-deployment"; do
+  for required_header in '# Purpose:' '# Mental model:' \
+    '# Inputs or prerequisites:' '# Usage:'; do
+    grep -Fq -- "$required_header" "$operator_entrypoint_path" \
+      || fail_with_detail coding_standard_header_missing \
+        "Required file-open heading is absent from: $operator_entrypoint_path" \
+        'Restore the Purpose, Mental model, inputs, outputs, and usage contract.'
+  done
+  grep -Eq '^# Outputs( or artifact lane)?:' "$operator_entrypoint_path" \
+    || fail_with_detail coding_standard_header_missing \
+      "Required outputs heading is absent from: $operator_entrypoint_path" \
+      'Restore the Purpose, Mental model, inputs, outputs, and usage contract.'
+done
+for required_header in '# Purpose:' '# Mental model:' \
+  '# Inputs or prerequisites:' '# Outputs:'; do
+  grep -Fq -- "$required_header" "$repository_root/deployment/runtime-image/Dockerfile" \
+    || fail_with_detail coding_standard_header_missing \
+      'The carried runtime Dockerfile is missing its file-open coding contract.' \
+      'Restore the Purpose, Mental model, inputs, and outputs comments.'
+done
 bash "$source_candidate_directory/verify-deployment" >/dev/null \
   || fail_with_detail source_candidate_invalid \
     'The Script 14 candidate failed its portable verifier.' \
@@ -177,7 +200,7 @@ fi
 
 mkdir -p -- "$report_directory" "$superseded_directory"
 assembly_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-report_path="$(mktemp "$report_directory/final_tech_package_${assembly_timestamp}_XXXXXX.txt")"
+report_path="$(mktemp "$report_directory/final_deployment_package_${assembly_timestamp}_XXXXXX.txt")"
 emit_report() { printf '[%s] %s\n' "$1" "$2" | tee -a "$report_path"; }
 emit_report READINESS \
   'state=pass;remote_contact=false;target_mutation=false;accepted_payloads_unchanged=true'
@@ -208,7 +231,7 @@ done
 emit_report TEST 'state=pass;mock_lifecycle=true;exact_application_profiles=2;real_validators=true'
 
 current_stage='package_assembly'
-assembly_workspace="$(mktemp -d /tmp/ishikawa-final-tech-assembly.XXXXXX)"
+assembly_workspace="$(mktemp -d /tmp/ishikawa-final-deployment-assembly.XXXXXX)"
 assembled_package_directory="$assembly_workspace/$package_directory_name"
 mkdir -- "$assembled_package_directory"
 while IFS= read -r source_file_name; do
@@ -220,6 +243,8 @@ for replacement_name in README.md SECURITY_REVIEW.md deploy-ishikawa \
   cp -- "$carry_source_directory/$replacement_name" \
     "$assembled_package_directory/$replacement_name"
 done
+cp -- "$repository_root/deployment/runtime-image/Dockerfile" \
+  "$assembled_package_directory/runtime-Dockerfile"
 chmod 0755 \
   "$assembled_package_directory/deploy-ishikawa" \
   "$assembled_package_directory/inspect-native-prerequisites" \
@@ -286,6 +311,69 @@ manifest_path.write_text(
     encoding="utf-8",
 )
 PY
+
+# Reject control-surface, host, and developer terminology after every final
+# package edit. Scan both the outer operator surface and the accepted
+# application archive so a clean outer directory cannot hide a nested leak.
+portability_scan_directory="$assembly_workspace/portability-scan"
+mkdir -- "$portability_scan_directory"
+tar -xzf "$assembled_package_directory/ishikawa-v1.3.1.tar.gz" \
+  -C "$portability_scan_directory"
+python3 -B - "$assembled_package_directory" "$portability_scan_directory" <<'PY' \
+  || fail_with_detail package_portability_scan_failed \
+    'The final package contains a repository, workstream, host, or developer term.' \
+    'Remove every reported term from the fresh-deployment payload and rerun.'
+import re
+import sys
+from pathlib import Path
+
+outer_root = Path(sys.argv[1])
+application_root = Path(sys.argv[2])
+forbidden_patterns = {
+    "repository_prefix": re.compile(r"\bprj[a-z0-9_-]*", re.IGNORECASE),
+    "phase_identifier": re.compile(r"\bphase-[0-9]", re.IGNORECASE),
+    "script_identifier": re.compile(r"\bscript 0[0-9]", re.IGNORECASE),
+    "agent_term": re.compile(r"\bagent\b", re.IGNORECASE),
+    "codex_term": re.compile(r"\bcodex\b", re.IGNORECASE),
+    "danko_term": re.compile(r"\bdanko(?:surface)?\b|\bemceedanko\b", re.IGNORECASE),
+    "lab_term": re.compile(r"\b(?:danko|org)_lab\b", re.IGNORECASE),
+    "target_name": re.compile(r"\btech\b", re.IGNORECASE),
+    "control_term": re.compile(
+        r"\brepository\b|\bworkstream\b|\btest-host\b|\battended-run\b",
+        re.IGNORECASE,
+    ),
+    "local_artifact_path": re.compile(r"local/artifacts|/mnt/[a-z]/", re.IGNORECASE),
+}
+binary_names = {
+    "ishikawa-v1.3.1.tar.gz",
+    "node-next-runtime-amd64.tar",
+}
+findings = []
+for scan_root in (outer_root, application_root):
+    for finding_label, forbidden_pattern in forbidden_patterns.items():
+        if forbidden_pattern.search(scan_root.name):
+            findings.append(f"{finding_label}:root:{scan_root.name}")
+    for scanned_path in sorted(scan_root.rglob("*")):
+        relative_path = scanned_path.relative_to(scan_root).as_posix()
+        for finding_label, forbidden_pattern in forbidden_patterns.items():
+            if forbidden_pattern.search(relative_path):
+                findings.append(f"{finding_label}:path:{relative_path}")
+        if not scanned_path.is_file() or scanned_path.name in binary_names:
+            continue
+        try:
+            text_content = scanned_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for line_number, text_line in enumerate(text_content.splitlines(), start=1):
+            for finding_label, forbidden_pattern in forbidden_patterns.items():
+                if forbidden_pattern.search(text_line):
+                    findings.append(
+                        f"{finding_label}:text:{relative_path}:{line_number}"
+                    )
+if findings:
+    print("\n".join(findings), file=sys.stderr)
+    raise SystemExit(1)
+PY
 (
   cd -- "$assembled_package_directory"
   while IFS= read -r package_file_name; do
@@ -319,7 +407,7 @@ tar --sort=name --format=posix --mtime='UTC 1970-01-01' --owner=0 --group=0 \
   --numeric-owner --pax-option=delete=atime,delete=ctime \
   -cf "$assembled_archive_path" -C "$assembly_workspace" "$package_directory_name"
 assembled_archive_sha256="$(sha256sum -- "$assembled_archive_path" | awk '{print $1}')"
-qualification_workspace="$(mktemp -d /tmp/ishikawa-final-tech-qualification.XXXXXX)"
+qualification_workspace="$(mktemp -d /tmp/ishikawa-final-deployment-qualification.XXXXXX)"
 tar --no-same-owner --no-same-permissions -xf "$assembled_archive_path" \
   -C "$qualification_workspace"
 qualified_package_directory="$qualification_workspace/$package_directory_name"
@@ -353,7 +441,7 @@ emit_report QUALIFICATION \
   "state=pass;archive_sha256=$assembled_archive_sha256;verifier=pass;plan_apply=pass;replay=pass;drift_refusal=pass;cleanup=pass;profiles=2"
 
 current_stage='stable_publication'
-publication_stage="$(mktemp -d "$artifact_parent_directory/.ishikawa-final-tech.XXXXXX")"
+publication_stage="$(mktemp -d "$artifact_parent_directory/.ishikawa-final-deployment.XXXXXX")"
 cp -- "$assembled_archive_path" "$publication_stage/$archive_file_name"
 printf '%s  %s\n' "$assembled_archive_sha256" "$archive_file_name" \
   >"$publication_stage/$archive_file_name.sha256"
@@ -370,7 +458,7 @@ if [[ -e "$stable_handoff_directory" || -L "$stable_handoff_directory" ]]; then
     || fail_with_detail stable_handoff_unsafe \
       'The existing stable handoff path is not a regular directory.' \
       'Inspect the artifact lane before publication.'
-  superseded_path="$superseded_directory/ishikawa-v1.3.1-tech-current-${assembly_timestamp}-$$"
+  superseded_path="$superseded_directory/ishikawa-v1.3.1-deployment-current-${assembly_timestamp}-$$"
   mv -- "$stable_handoff_directory" "$superseded_path"
 fi
 if ! mv -- "$publication_stage" "$stable_handoff_directory"; then

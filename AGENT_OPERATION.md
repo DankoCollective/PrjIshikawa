@@ -46,6 +46,12 @@ of target mutation, or successful cleanup does not reduce the violation.
   runtime behavior, interfaces, orchestration layers, or test complexity merely
   to make the artifact look more compliant; discuss any material functional
   expansion separately when the task does not already require it.
+- For a deployable package, run the proportional file-open coding-standard and
+  portable-terminology checks when source files are selected, repeat them
+  after any package-control edit, and repeat them against the exact extracted
+  final archive. Do not defer the first compliance review until final carry
+  assembly. An explicitly accepted exception is closed unless the operator
+  later reopens it; do not preserve it as an unbounded follow-up item.
 - Follow `LAB_RUN_PATH_STANDARD.md` for lab script sequencing, local report write-back, remote payload handling, artifact/advisory verification, and reviewed evidence promotion.
 - Treat a stable `<solution-name>-current/` artifact directory as the sole operator handoff source, not as a decorative alias. A replacement build is incomplete until the approved archive and verification files are atomically promoted there and independently checksum-verified. Dated or revision-named outputs are candidates only and must never be reported or transferred as current; preserve displaced bytes under an explicit superseded name.
 - Treat security advisories as implementation gates, not paperwork. For first-class packages, wheels, binaries, source archives, containers, authority-service tools, and dependencies, capture advisory sources, review affectedness, record mitigation or non-applicability, and do not proceed to install/promote with an unmitigated action-required advisory unless the operator explicitly accepts and records the risk.

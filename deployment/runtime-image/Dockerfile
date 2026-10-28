@@ -1,4 +1,25 @@
 # syntax=docker/dockerfile:1
+
+# Purpose:
+#   Build one reusable Linux AMD64 Node.js/Next.js runtime image without
+#   embedding Ishikawa application source or generated web state.
+#
+# Mental model:
+#   Resolve the exact production JavaScript dependency set in a temporary
+#   assembly stage, remove package-manager and cache bytes, then flatten the
+#   resulting filesystem into one scratch-based runtime layer. The deployed
+#   application is mounted separately and creates temporary build state at
+#   startup.
+#
+# Inputs or prerequisites:
+#   The pinned Node.js base image, package.json, package-lock.json, and the
+#   checksum-bound npm build-tool archive.
+#
+# Outputs:
+#   An application-free runtime image containing Node.js, Next.js, React, and
+#   the exact production dependency tree. npm, Yarn, Corepack, pnpm, source,
+#   credentials, and generated application state are absent.
+
 FROM --platform=linux/amd64 node:24.22.1-bookworm-slim@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae AS assemble
 
 ENV NEXT_TELEMETRY_DISABLED=1 \

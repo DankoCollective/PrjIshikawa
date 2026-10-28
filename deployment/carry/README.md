@@ -12,12 +12,14 @@ classified intended modes, and installation materializes them on the native
 target filesystem.
 
 `deployment-package-receipt.json` must say `deployment_ready` before planning,
-apply, or schema initialization is permitted. Renaming or copying an assembled
-candidate does not satisfy the final-package gate.
+apply, or schema initialization is permitted. Copying package files without
+their matching manifest, checksums, and deployment-ready receipt does not
+satisfy the final-package gate.
 
 `SECURITY_REVIEW.md` records the completed exact-payload vulnerability
-disposition. The assembled candidate remains non-installable until destination
-inventory, independent review, and stable-handoff publication are complete.
+disposition. This deployment-ready package still requires successful
+destination preflight and operator review of the generated installation plan
+before apply is permitted.
 
 ## Requirements and boundaries
 
@@ -98,7 +100,7 @@ bash ./deploy-ishikawa apply \
   --plan-sha256 "$PLAN_SHA256"
 ```
 
-The installation root is always `$HOME/Documents/Ishikawa`. The selected Tech
+The installation root is always `$HOME/Documents/Ishikawa`. The default
 loopback ports are web `3384`, Retrieval API `8384`, PostgreSQL `5432`, Gemma
 `8000`, and Nomic `8001`. The plan may instead select the supported forwarded
 model ports `18000` and `18001`. Apply atomically writes the selected endpoints

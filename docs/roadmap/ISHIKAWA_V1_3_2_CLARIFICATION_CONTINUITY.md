@@ -158,11 +158,13 @@ that expanded text can extend below the currently visible part of the rail and
 can therefore appear unavailable even though the outer citation list remains
 scrollable.
 
-Ishikawa v1.3.2 should investigate the least surprising accessible behavior
-for long citation excerpts. The correction may use a bounded independently
-scrollable excerpt region, deliberate outer-rail scrolling that keeps the
-expanded card and its remaining text visibly reachable, or another tested
-interaction. It must not silently clip returned citation text.
+Ishikawa v1.3.2 must give each long expanded citation card a bounded,
+independently scrollable cited-section region with a persistent visible
+scrollbar affordance. The card displays the complete cited structural section
+when the API can return that section within its exact excerpt boundary; it is
+not the full reconstructed document. `View full document` remains the separate
+control for loading the complete reconstructed document. No returned citation
+text may be silently clipped.
 
 Qualification must prove that:
 
@@ -225,6 +227,27 @@ The update contract should:
 
 The concrete update format and harness remain a separate design/freeze item.
 This investigation authorizes neither implementation nor target mutation.
+
+## External corpus source-root configuration
+
+The accepted v1.3.1 installed workflow fixes the corpus source root to
+`$HOME/Documents/Ishikawa/corpus/source`. For the org-lab v1.3.1 baseline, the
+operator explicitly accepts this defect and will copy only approved PDF
+sources into that installed directory so the carry can proceed without
+changing the accepted application bytes.
+
+This workaround does not close the defect. Ishikawa v1.3.2 must provide one
+explicit, validated external source-root selection that is honored consistently
+by configuration generation, catalog and manifest generation, ingestion,
+inventory validation, diagnostics, update preservation, and removal/cleanup
+boundaries. The configured source root must not require copying, moving,
+flattening, symlinking, or bind-mounting an operator's authoritative corpus
+into the application tree.
+
+Qualification must prove both an external flat PDF directory and an external
+nested PDF tree, reject symlinks and inventory mismatches, and preserve exact
+relative `source_path` values from `corpus_metadata.csv` through the generated
+manifest and ingestion receipt.
 
 ## Diagnostic follow-up
 

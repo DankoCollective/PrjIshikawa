@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 # Purpose:
-#   Atomically apply the final cumulative v1.3.1 black-corpus correction.
+#   Atomically apply the cumulative Ishikawa v1.3.1 correction.
 # Mental model:
 #   Trust one checksum-bound update manifest, accept only enumerated installed
 #   identities, retain every pre-update byte, publish all replacements, and
@@ -15,7 +15,7 @@ umask 077
 readonly mode="${1:-}"
 readonly bundle_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly ishikawa_root="${ISHIKAWA_ROOT:-$HOME/Documents/Ishikawa}"
-readonly state_root="$ishikawa_root/state/updates/v1.3.1-black-corpus-final"
+readonly state_root="$ishikawa_root/state/updates/v1.3.1-cumulative-update"
 readonly backup_root="$state_root/pre-update"
 readonly receipt="$state_root/receipt.txt"
 readonly manifest="$bundle_root/UPDATE_MANIFEST.tsv"
@@ -26,7 +26,7 @@ readonly expected_verifier_sha256='__VERIFIER_SHA256__'
 rollback_needed=false
 
 result() {
-  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_update=%s\n' "$1"
+  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_cumulative_update=%s\n' "$1"
 }
 
 block() {
@@ -182,7 +182,7 @@ if ! verify_final; then
 fi
 
 {
-  printf 'update=v1.3.1-black-corpus-final\n'
+  printf 'update=v1.3.1-cumulative-update\n'
   printf 'applied_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'manifest_sha256=%s\n' "$expected_manifest_sha256"
   while IFS=$'\t' read -r relative _mode _accepted final_sha; do

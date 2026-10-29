@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused proof for the final cumulative v1.3.1 black-corpus update."""
+"""Focused proof for the cumulative Ishikawa v1.3.1 update."""
 
 from __future__ import annotations
 
@@ -160,7 +160,7 @@ def main() -> int:
     if _safe_runtime_reason(error) != expected:
         raise AssertionError("installed ingestion hid the failed stage")
 
-    print("black_corpus_final_update_verification=pass")
+    print("ishikawa_v1_3_1_cumulative_update_verification=pass")
     return 0
 
 

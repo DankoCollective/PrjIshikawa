@@ -15,10 +15,11 @@ readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../../.." && pwd -P)"
 readonly source_root="$repo_root/Ishikawa"
 readonly output_directory="${1:-}"
-readonly archive_name='ishikawa-v1.3.1-black-corpus-final-update.tar.gz'
+readonly update_name='ishikawa-v1.3.1-cumulative-update'
+readonly archive_name="$update_name.tar.gz"
 
 fail() {
-  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_assembly=blocked;reason=%s\n' "$1" >&2
+  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_cumulative_update_assembly=blocked;reason=%s\n' "$1" >&2
   exit 1
 }
 
@@ -41,7 +42,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-bundle="$workspace/ishikawa-v1.3.1-black-corpus-final-update"
+bundle="$workspace/$update_name"
 mkdir -p -- "$bundle/payload/scripts" "$bundle/payload/application/python/ishikawa"
 install -m 0644 -- "$script_dir/README.md" "$bundle/README.md"
 install -m 0644 -- "$script_dir/verify-update.py" "$bundle/verify-update.py"
@@ -88,7 +89,7 @@ chmod 0755 "$bundle/apply-update"
 temporary_archive="$workspace/$archive_name"
 tar --sort=name --mtime='UTC 2026-10-28' --owner=0 --group=0 --numeric-owner \
   -czf "$temporary_archive" -C "$workspace" \
-  ishikawa-v1.3.1-black-corpus-final-update
+  "$update_name"
 install -m 0644 -- "$temporary_archive" "$output_directory/$archive_name"
 (
   cd -- "$output_directory"
@@ -99,4 +100,4 @@ install -m 0644 -- "$temporary_archive" "$output_directory/$archive_name"
 printf '%s\n' \
   "archive=$output_directory/$archive_name" \
   "archive_sha256=$(sha256sum -- "$output_directory/$archive_name" | awk '{print $1}')"
-printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_assembly=pass\n'
+printf '\nSCRIPT RESULT\nishikawa_v1_3_1_cumulative_update_assembly=pass\n'

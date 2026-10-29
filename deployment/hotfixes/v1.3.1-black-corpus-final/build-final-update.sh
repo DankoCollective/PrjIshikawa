@@ -12,10 +12,10 @@ umask 077
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../../.." && pwd -P)"
-readonly artifact_root="$repo_root/local/artifacts/ishikawa-v1.3.1-black-corpus-final-current"
+readonly artifact_root="$repo_root/local/artifacts/ishikawa-v1.3.1-cumulative-update-current"
 
 fail() {
-  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_build=blocked;reason=%s\n' "$1" >&2
+  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_cumulative_update_build=blocked;reason=%s\n' "$1" >&2
   exit 1
 }
 
@@ -45,7 +45,7 @@ cleanup() {
 }
 trap cleanup EXIT
 bash "$script_dir/assemble-update.sh" "$temporary_artifact"
-archive_name='ishikawa-v1.3.1-black-corpus-final-update.tar.gz'
+archive_name='ishikawa-v1.3.1-cumulative-update.tar.gz'
 [[ -f "$temporary_artifact/$archive_name" \
    && -f "$temporary_artifact/$archive_name.sha256" ]] || fail final_archive_missing
 
@@ -63,4 +63,4 @@ printf '%s\n' \
   'update_lifecycle=pass' \
   "archive=$artifact_root/$archive_name" \
   "archive_sha256=$(sha256sum -- "$artifact_root/$archive_name" | awk '{print $1}')"
-printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_build=pass\n'
+printf '\nSCRIPT RESULT\nishikawa_v1_3_1_cumulative_update_build=pass\n'

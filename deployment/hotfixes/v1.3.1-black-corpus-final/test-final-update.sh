@@ -13,12 +13,12 @@ umask 077
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../../.." && pwd -P)"
-readonly accepted_outer="$repo_root/local/artifacts/ishikawa-v1.3.1-deployment-current/ishikawa-v1.3.1-linux-amd64.tar"
+readonly accepted_application_archive="$repo_root/local/artifacts/ishikawa-v1.3.1-candidate-current/ishikawa-v1.3.1.tar.gz"
 readonly prior_update="$repo_root/deployment/hotfixes/v1.3.1-black-corpus-compatibility"
 root="$(mktemp -d /tmp/ishikawa-final-update-test.XXXXXX)"
 
 fail() {
-  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_update_test=blocked;reason=%s\n' "$1" >&2
+  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_cumulative_update_test=blocked;reason=%s\n' "$1" >&2
   exit 1
 }
 
@@ -34,22 +34,26 @@ trap cleanup EXIT
 for command_name in bash cp find install mkdir mktemp python3 sha256sum tar; do
   command -v "$command_name" >/dev/null 2>&1 || fail required_command_missing
 done
-[[ -f "$accepted_outer" && ! -L "$accepted_outer" ]] || fail accepted_archive_missing
+[[ -f "$accepted_application_archive" && ! -L "$accepted_application_archive" ]] \
+  || fail accepted_archive_missing
 
-mkdir -p -- "$root/assembly" "$root/outer" "$root/application"
-bash "$script_dir/assemble-update.sh" "$root/assembly" >"$root/assemble.out"
-archive="$root/assembly/ishikawa-v1.3.1-black-corpus-final-update.tar.gz"
+mkdir -p -- "$root/assembly" "$root/application"
+bash "$script_dir/assemble-update.sh" "$root/assembly" >"$root/assemble.out" \
+  || fail update_assembly_failed
+archive="$root/assembly/ishikawa-v1.3.1-cumulative-update.tar.gz"
 [[ -f "$archive" ]] || fail update_archive_missing
-(cd -- "$root/assembly" && sha256sum --check --strict "${archive##*/}.sha256" >/dev/null)
-tar -xzf "$archive" -C "$root"
-bundle="$root/ishikawa-v1.3.1-black-corpus-final-update"
-(cd -- "$bundle" && sha256sum --check --strict SHA256SUMS >/dev/null)
-bash -n "$bundle/apply-update"
-python3 -m py_compile "$bundle/verify-update.py"
+(cd -- "$root/assembly" && sha256sum --check --strict "${archive##*/}.sha256" >/dev/null) \
+  || fail adjacent_checksum_failed
+tar -xzf "$archive" -C "$root" || fail update_extraction_failed
+bundle="$root/ishikawa-v1.3.1-cumulative-update"
+(cd -- "$bundle" && sha256sum --check --strict SHA256SUMS >/dev/null) \
+  || fail internal_checksum_failed
+bash -n "$bundle/apply-update" || fail apply_script_syntax_failed
+python3 -m py_compile "$bundle/verify-update.py" \
+  || fail verifier_compile_failed
 
-tar -xf "$accepted_outer" -C "$root/outer"
-outer_root="$root/outer/ishikawa-v1.3.1-linux-amd64"
-tar -xzf "$outer_root/ishikawa-v1.3.1.tar.gz" -C "$root/application"
+tar -xzf "$accepted_application_archive" -C "$root/application" \
+  || fail accepted_archive_extraction_failed
 accepted_payload="$root/application/ishikawa-v1.3.1/application/payload"
 [[ -d "$accepted_payload" && ! -L "$accepted_payload" ]] || fail accepted_payload_missing
 
@@ -70,11 +74,14 @@ manifest_digest_for_root() {
 pristine="$root/pristine/Ishikawa"
 install_fixture "$pristine"
 ISHIKAWA_ROOT="$pristine" bash "$bundle/apply-update" --apply >"$root/pristine-first.out"
-grep -Fxq 'ishikawa_v1_3_1_black_corpus_final_update=pass' "$root/pristine-first.out"
-grep -Fq 'change=applied' "$root/pristine-first.out"
+grep -Fxq 'ishikawa_v1_3_1_cumulative_update=pass' "$root/pristine-first.out" \
+  || fail pristine_result_marker_missing
+grep -Fq 'change=applied' "$root/pristine-first.out" \
+  || fail pristine_apply_not_reported
 pristine_final="$(manifest_digest_for_root "$pristine")"
 ISHIKAWA_ROOT="$pristine" bash "$bundle/apply-update" --apply >"$root/pristine-second.out"
-grep -Fq 'change=already_applied' "$root/pristine-second.out"
+grep -Fq 'change=already_applied' "$root/pristine-second.out" \
+  || fail idempotent_result_missing
 [[ "$(manifest_digest_for_root "$pristine")" == "$pristine_final" ]] \
   || fail idempotent_rerun_changed_files
 
@@ -88,7 +95,8 @@ install -m 0644 -- "$prior_update/payload/document_control.py" \
 install -m 0644 -- "$prior_update/payload/document_footer.py" \
   "$prior/application/python/ishikawa/document_footer.py"
 ISHIKAWA_ROOT="$prior" bash "$bundle/apply-update" --apply >"$root/prior.out"
-grep -Fxq 'ishikawa_v1_3_1_black_corpus_final_update=pass' "$root/prior.out"
+grep -Fxq 'ishikawa_v1_3_1_cumulative_update=pass' "$root/prior.out" \
+  || fail prior_update_result_marker_missing
 
 # An unknown installed byte is refused before any target is changed.
 altered="$root/altered/Ishikawa"
@@ -100,7 +108,8 @@ ISHIKAWA_ROOT="$altered" bash "$bundle/apply-update" --apply >"$root/altered.out
 altered_status=$?
 set -e
 (( altered_status != 0 )) || fail altered_target_was_accepted
-grep -Fq 'reason=target_identity_mismatch' "$root/altered.out"
+grep -Fq 'reason=target_identity_mismatch' "$root/altered.out" \
+  || fail altered_target_reason_missing
 [[ "$(manifest_digest_for_root "$altered")" == "$altered_before" ]] \
   || fail altered_refusal_changed_files
 
@@ -126,7 +135,8 @@ PATH="$root/bin:$PATH" ISHIKAWA_TEST_REAL_PYTHON3="$real_python3" \
 rollback_status=$?
 set -e
 (( rollback_status != 0 )) || fail verifier_failure_was_accepted
-grep -Fq 'reason=replacement_verification_failed' "$root/rollback.out"
+grep -Fq 'reason=replacement_verification_failed' "$root/rollback.out" \
+  || fail rollback_reason_missing
 [[ "$(manifest_digest_for_root "$rollback")" == "$rollback_before" ]] \
   || fail verifier_failure_did_not_restore_all_files
 
@@ -136,4 +146,4 @@ printf '%s\n' \
   'idempotent_rerun=pass' \
   'altered_target_refusal=pass' \
   'all_file_rollback=pass'
-printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_update_test=pass\n'
+printf '\nSCRIPT RESULT\nishikawa_v1_3_1_cumulative_update_test=pass\n'

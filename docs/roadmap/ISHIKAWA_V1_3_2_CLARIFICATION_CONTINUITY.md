@@ -106,6 +106,40 @@ because another item passes independently.
     Require the credentials needed by PostgreSQL, accept them through a clear
     attended hidden prompt or approved secret provider, and leave password
     strength and lifecycle decisions to the operator or deployment authority.
+21. **Capability-based native prerequisites:** keep target package origin and
+    advisory qualification in deployment, but validate runtime dependencies
+    through real capability canaries. Application code must not contain one-host
+    package revision allowlists that contradict supported deployment targets.
+22. **Versioned artifact-profile registry:** replace duplicated or hardcoded
+    extraction, normalization, embedding, and packaging method identities with
+    one validated registry consumed by production, qualification, and release
+    tooling. A stale profile or digest must fail before expensive work.
+23. **Self-contained release test inventory:** bind the exact discovered tests
+    and deployment harnesses to the release artifact. Eliminate hidden or
+    undiscovered test files, copied newer test trees paired with historical
+    hardcoded counts, and release claims that cannot be reproduced from the
+    carried bytes.
+24. **Single-carry release invariant:** every cumulative correction accepted
+    before release publication must be rolled into the application archive and
+    rebound through the SBOM, source manifest, security review, receipt,
+    package manifest, and outer checksum. A fresh deployment must require one
+    outer archive and its adjacent checksum—not an archive plus hotfixes.
+25. **Complete configuration-drift coverage:** lifecycle drift detection must
+    include every runtime-affecting YAML/profile, installed service/container
+    state, and generated endpoint consumer. Recovery must be bounded when the
+    managed process exists but its local state marker is missing or damaged.
+26. **Capacity-bound execution and actionable heartbeat:** derive extraction,
+    document-stage, model, and batch bounds from a documented capacity model;
+    expose active stage and elapsed time; and distinguish a slow operation from
+    a failed or unavailable dependency without losing the originating reason.
+27. **Active-path and supersession registry:** designate current, superseded,
+    and historical installers, qualifiers, promotion scripts, validators, and
+    package builders in one authoritative record. Superseded paths may remain
+    as evidence but cannot be selected accidentally as release interfaces.
+28. **Exact-artifact update and rollback:** update qualification must exercise
+    pristine, partial, idempotent, unknown-byte refusal, forced post-publication
+    failure, and exact rollback. An update may alter only its enumerated files
+    and may not overwrite unrecognized target state.
 
 Explicitly deferred work is not silently included in v1.3.2: multilingual
 English/Spanish document variants remain post-v1.3.2, and detailed
@@ -925,3 +959,36 @@ not become permanent product contracts. Ishikawa v1.3.2 must:
 The v1.3.2 gate must prove these requirements in one consolidated run. A
 successful source-tree unit suite, a historical receipt, or a focused hotfix
 verifier is not sufficient on its own.
+
+## Audit-residual disposition
+
+The 2026-10-28 v1.3.1 end-to-end audit separated immediate release corrections
+from permanent product work. The seven-file cumulative v1.3.1 correction fixes
+only the bounded Poppler capability, extraction retention, timeout, credential
+transport, generic header/footer fallback, page-furniture, and failed-stage
+propagation defects needed for the Tech Demo. It does not close any permanent
+item in this register.
+
+The following audit findings therefore remain mandatory v1.3.2 scope and may
+not be lost when the release is decomposed into implementation tasks:
+
+- spreadsheet-safe metadata intake and all-error preflight;
+- one document identity contract across every consumer;
+- explicit external corpus source roots;
+- OCR/mixed-scan detection and quarantine;
+- policy, SOP, and manual family profiles plus nested hierarchy;
+- clarification continuity and corpus-backed choices;
+- independently scrollable complete cited sections;
+- operator-owned credential policy;
+- one canonical administrative interface and correct schema-before-ingestion
+  ordering;
+- capability-based dependency canaries and platform-neutral validation;
+- one profile registry, complete configuration drift coverage, and precise
+  stage diagnostics;
+- self-contained discovered tests and whole-path release qualification;
+- explicit current/superseded path selection;
+- exact update/rollback proof; and
+- one final carry archive with every accepted correction already incorporated.
+
+Detailed administrative-form handling and multilingual English/Spanish
+variants remain explicitly deferred beyond v1.3.2 unless separately approved.

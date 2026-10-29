@@ -14,6 +14,7 @@
 | `docs/releases/ISHIKAWA_ORG_LAB_CARRY_READINESS_CHECKLIST.md` | Durable decision-review queue and checkable final deployment carry gates | Tracked |
 | `docs/releases/ISHIKAWA_V1_3_1_DEPLOYMENT_PACKAGE_MANIFEST.md` | Classified 26-file corrected v1.3.1 deployment-package contract and exclusion boundary | Tracked |
 | `docs/releases/ISHIKAWA_V1_3_1_END_TO_END_AUDIT.md` | Complete v1.3.1 black-corpus path audit, cumulative-update identity, executable evidence, supersession boundary, and v1.3.2 follow-up | Tracked |
+| `.github/agents/deployment-review.agent.md` | Workspace custom agent for evidence-first exact-artifact deployment, release, lifecycle, stale-control, rollback, and operator-path review | Tracked |
 | `docs/roadmap/ISHIKAWA_V1_3_2_CLARIFICATION_CONTINUITY.md` | v1.3.2 investigation and qualification boundary for clarification continuity, visible UI release identity, and citation-excerpt overflow | Tracked |
 | `deployment/evidence/ISHIKAWA_V1_3_EMCEEDANKO_QUALIFICATION.md` | Content-free EmceeDanko disposable qualification receipt | Tracked |
 | `deployment/evidence/ISHIKAWA_V1_3_EMCEEDANKO_UI_ACCEPTANCE.md` | Content-free operator UI-acceptance receipt for the exact v1.3 baseline | Tracked |

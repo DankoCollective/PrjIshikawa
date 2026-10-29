@@ -312,6 +312,14 @@ if application_sbom.get("bomFormat") != "CycloneDX":
 component = application_sbom.get("metadata", {}).get("component", {})
 if component.get("name") != "Ishikawa" or component.get("version") != "1.3.1":
     raise SystemExit(1)
+application_hashes = {
+    item.get("content")
+    for item in component.get("hashes", [])
+    if item.get("alg") == "SHA-256"
+}
+single_carry_rollup = receipt.get("single_carry_rollup") is True
+if single_carry_rollup and application_hashes != {digest(application_path)}:
+    raise SystemExit(1)
 if application_license.get("schema") != "ishikawa.application-license.v1":
     raise SystemExit(1)
 if application_license.get("application_license") != "Apache-2.0":
@@ -330,6 +338,14 @@ expected_application_release = {
 }
 if any(application_release.get(key) != value for key, value in expected_application_release.items()):
     raise SystemExit(1)
+update_sha = application_release.get("cumulative_update_sha256", "")
+if single_carry_rollup:
+    if application_release.get("post_update_native_test_count") != 506:
+        raise SystemExit(1)
+    if application_release.get("post_update_deployment_harness_count") != 17:
+        raise SystemExit(1)
+    if re.fullmatch(r"[0-9a-f]{64}", update_sha) is None:
+        raise SystemExit(1)
 for field in (
     "promotion_acceptance_sha256", "promotion_receipt_sha256",
     "qualification_acceptance_sha256", "qualification_receipt_sha256",
@@ -355,6 +371,27 @@ expected_receipt = {
 }
 if any(receipt.get(key) != value for key, value in expected_receipt.items()):
     raise SystemExit(1)
+if single_carry_rollup:
+    if receipt.get("cumulative_update_sha256") != update_sha:
+        raise SystemExit(1)
+    if digest(Path(application_release_path).parent / "ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS") != application_release.get("source_manifest_sha256"):
+        raise SystemExit(1)
+    security_review = security_review_path.read_text(encoding="utf-8")
+    if digest(application_path) not in security_review or update_sha not in security_review:
+        raise SystemExit(1)
+    with tarfile.open(application_path, "r:gz") as archive:
+        member = archive.extractfile("ishikawa-v1.3.1/release.json")
+        if member is None:
+            raise SystemExit(1)
+        internal_release = json.load(member)
+    if internal_release.get("source_manifest_sha256") != application_release.get("source_manifest_sha256"):
+        raise SystemExit(1)
+    if internal_release.get("cumulative_update_sha256") != update_sha:
+        raise SystemExit(1)
+    if internal_release.get("post_update_native_test_count") != 506:
+        raise SystemExit(1)
+    if internal_release.get("post_update_deployment_harness_count") != 17:
+        raise SystemExit(1)
 review_states = {
     "assembled_pending_security_inventory_and_independent_review": {
         "independent_final_review": "pending",

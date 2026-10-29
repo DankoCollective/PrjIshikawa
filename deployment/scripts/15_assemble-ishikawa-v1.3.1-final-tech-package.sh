@@ -6,10 +6,12 @@ umask 077
 #   Assemble and qualify the final Ishikawa v1.3.1 AMD64 deployment archive.
 #
 # Mental model:
-#   Preserve the accepted application and runtime-image bytes, replace only the
-#   reviewed outer deployment controls, mark the package deployment-ready,
-#   regenerate its complete manifest, and qualify the exact final tar bytes in
-#   a clean extraction before atomically publishing the stable handoff.
+#   Preserve the accepted application as the exact ancestor, apply the one
+#   audited cumulative seven-file correction while assembling a replacement
+#   application archive, preserve the runtime-image bytes, regenerate every
+#   dependent identity, and qualify the exact final tar bytes in a clean
+#   extraction before atomically publishing the stable handoff. The emitted
+#   outer archive is the only Tech carry; no standalone hotfix is required.
 #
 # Inputs or prerequisites:
 #   The verified Script 14 candidate, accepted application/runtime identities,
@@ -29,6 +31,8 @@ readonly repository_root="$(cd -- "$script_directory/../.." && pwd -P)"
 readonly carry_source_directory="$repository_root/deployment/carry"
 readonly source_candidate_directory="$repository_root/local/artifacts/ishikawa-deployment-v1.3.1-candidate-current"
 readonly accepted_application_directory="$repository_root/local/artifacts/ishikawa-v1.3.1-candidate-current"
+readonly cumulative_update_directory="$repository_root/local/artifacts/ishikawa-v1.3.1-black-corpus-final-current"
+readonly cumulative_update_archive="$cumulative_update_directory/ishikawa-v1.3.1-black-corpus-final-update.tar.gz"
 readonly artifact_parent_directory="$repository_root/local/artifacts"
 readonly stable_handoff_directory="$artifact_parent_directory/ishikawa-v1.3.1-deployment-current"
 readonly superseded_directory="$artifact_parent_directory/superseded"
@@ -37,6 +41,7 @@ readonly package_directory_name='ishikawa-v1.3.1-linux-amd64'
 readonly archive_file_name='ishikawa-v1.3.1-linux-amd64.tar'
 readonly expected_application_sha256='2dbf08b9e15fb4436e54ce492f2ad430129e794d33a1a45cdc6abf1a7b0b5f69'
 readonly expected_runtime_sha256='b92dd71eb155493d7e331e85c92566eee113ed4c8f0eda605c1c3dd951b836e1'
+readonly expected_cumulative_update_sha256='821338d38d364a0c3864d5379a5b53b37d75a6110b3cb9661c25c373fe06fd73'
 
 execution_mode=''
 current_stage='argument_validation'
@@ -121,12 +126,19 @@ done
 for required_path in \
   "$source_candidate_directory" \
   "$accepted_application_directory" \
+  "$cumulative_update_directory" \
   "$carry_source_directory"; do
   [[ -d "$required_path" && ! -L "$required_path" ]] \
     || fail_with_detail source_directory_missing \
       "Required source directory is missing or unsafe: $required_path" \
       'Restore the reviewed local handoff and rerun.'
 done
+[[ -f "$cumulative_update_archive" && ! -L "$cumulative_update_archive" \
+   && "$(sha256sum -- "$cumulative_update_archive" | awk '{print $1}')" \
+      == "$expected_cumulative_update_sha256" ]] \
+  || fail_with_detail cumulative_update_identity_mismatch \
+    'The one accepted cumulative seven-file correction is missing or changed.' \
+    'Restore the exact audited cumulative update before final assembly.'
 for carry_file_name in README.md SECURITY_REVIEW.md deploy-ishikawa \
   inspect-native-prerequisites verify-deployment; do
   [[ -f "$carry_source_directory/$carry_file_name" \
@@ -191,7 +203,8 @@ runtime_sha256="$(sha256sum -- "$source_candidate_directory/node-next-runtime-am
 if [[ "$execution_mode" == --validate-only ]]; then
   printf '%s\n' \
     'source_candidate=pass;carry_sources=pass;syntax=pass' \
-    "application_sha256=$application_sha256" \
+    "accepted_ancestor_application_sha256=$application_sha256" \
+    "cumulative_update_sha256=$expected_cumulative_update_sha256" \
     "runtime_sha256=$runtime_sha256" \
     'remote_contact=false;target_mutation=false'
   emit_script_result ready
@@ -203,7 +216,7 @@ assembly_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="$(mktemp "$report_directory/final_deployment_package_${assembly_timestamp}_XXXXXX.txt")"
 emit_report() { printf '[%s] %s\n' "$1" "$2" | tee -a "$report_path"; }
 emit_report READINESS \
-  'state=pass;remote_contact=false;target_mutation=false;accepted_payloads_unchanged=true'
+  'state=pass;remote_contact=false;target_mutation=false;accepted_ancestor_preserved=true;single_carry_rollup=true'
 
 current_stage='installer_qualification'
 emit_report TEST 'state=start;scope=inventory_plan_apply_configuration_replay_drift_cleanup_interruption'
@@ -238,6 +251,147 @@ while IFS= read -r source_file_name; do
   cp -- "$source_candidate_directory/$source_file_name" \
     "$assembled_package_directory/$source_file_name"
 done < <(find "$source_candidate_directory" -maxdepth 1 -type f -printf '%f\n' | sort)
+
+# Roll the exact audited cumulative correction into a new deterministic
+# application archive. The original accepted application is used only as the
+# exact ancestor. The update payload is verified independently, exactly seven
+# paths are admitted, all dependent checksums are regenerated, and no update
+# state or standalone hotfix is included in the resulting application.
+rollup_root="$assembly_workspace/application-rollup"
+update_root="$assembly_workspace/cumulative-update"
+mkdir -- "$rollup_root" "$update_root"
+tar --no-same-owner --no-same-permissions -xzf \
+  "$source_candidate_directory/ishikawa-v1.3.1.tar.gz" -C "$rollup_root"
+tar --no-same-owner --no-same-permissions -xzf \
+  "$cumulative_update_archive" -C "$update_root"
+rolled_application_root="$rollup_root/ishikawa-v1.3.1"
+extracted_update_root="$update_root/ishikawa-v1.3.1-black-corpus-final-update"
+[[ -d "$rolled_application_root" && ! -L "$rolled_application_root" \
+   && -d "$extracted_update_root" && ! -L "$extracted_update_root" ]] \
+  || fail_with_detail rollup_layout_invalid \
+    'The accepted application or cumulative update has an unexpected layout.' \
+    'Restore the exact accepted artifacts and rerun.'
+(
+  cd -- "$extracted_update_root"
+  sha256sum --check --strict SHA256SUMS >/dev/null
+) || fail_with_detail cumulative_update_verification_failed \
+  'The cumulative update failed its internal checksum inventory.' \
+  'Discard the update copy and restore the exact audited archive.'
+
+python3 -B - "$rolled_application_root" "$extracted_update_root" \
+  "$assembled_package_directory/ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS" <<'PY' \
+  || fail_with_detail application_rollup_failed \
+    'The accepted ancestor and cumulative correction could not be rolled into one application.' \
+    'Inspect the exact ancestor/update identities and do not publish a partial package.'
+import hashlib
+import os
+import shutil
+import stat
+import sys
+from pathlib import Path, PurePosixPath
+
+application_root = Path(sys.argv[1])
+update_root = Path(sys.argv[2])
+source_manifest_path = Path(sys.argv[3])
+manifest_path = update_root / "UPDATE_MANIFEST.tsv"
+
+rows = []
+for line in manifest_path.read_text(encoding="utf-8").splitlines():
+    if not line or line.startswith("#"):
+        continue
+    fields = line.split("\t")
+    if len(fields) != 4:
+        raise SystemExit(1)
+    relative, mode_text, _accepted, expected_sha = fields
+    relative_path = PurePosixPath(relative)
+    if (
+        relative_path.is_absolute()
+        or ".." in relative_path.parts
+        or mode_text not in {"0644", "0755"}
+        or len(expected_sha) != 64
+    ):
+        raise SystemExit(1)
+    rows.append((relative_path, mode_text, expected_sha))
+if len(rows) != 7 or len({str(row[0]) for row in rows}) != 7:
+    raise SystemExit(1)
+
+source_lines = source_manifest_path.read_text(encoding="utf-8").splitlines()
+source_records = {}
+for line in source_lines:
+    digest, separator, relative = line.partition("  ")
+    if not separator or len(digest) != 64:
+        raise SystemExit(1)
+    source_records[relative] = digest
+
+for relative, mode_text, expected_sha in rows:
+    payload = update_root / "payload" / Path(*relative.parts)
+    target = application_root / "application" / "payload" / Path(*relative.parts)
+    if not payload.is_file() or payload.is_symlink() or not target.is_file() or target.is_symlink():
+        raise SystemExit(1)
+    observed_sha = hashlib.sha256(payload.read_bytes()).hexdigest()
+    if observed_sha != expected_sha:
+        raise SystemExit(1)
+    temporary = target.with_name(target.name + ".rollup")
+    shutil.copyfile(payload, temporary)
+    os.chmod(temporary, int(mode_text, 8))
+    os.replace(temporary, target)
+    source_key = "Ishikawa/" + str(relative)
+    if source_key not in source_records:
+        raise SystemExit(1)
+    source_records[source_key] = expected_sha
+
+source_manifest_path.write_text(
+    "".join(f"{source_records[name]}  {name}\n" for name in sorted(source_records)),
+    encoding="utf-8",
+)
+PY
+
+source_manifest_sha256="$(sha256sum -- \
+  "$assembled_package_directory/ISHIKAWA_V1_3_1_SOURCE_SHA256SUMS" | awk '{print $1}')"
+python3 -B - "$rolled_application_root/release.json" "$source_manifest_sha256" \
+  "$expected_cumulative_update_sha256" <<'PY' \
+  || fail_with_detail rolled_release_record_failed \
+    'The rolled application release record could not be updated.' \
+    'Stop and inspect the rollup workspace.'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+record = json.loads(path.read_text(encoding="utf-8"))
+record["source_manifest_sha256"] = sys.argv[2]
+record["cumulative_update_sha256"] = sys.argv[3]
+record["post_update_native_test_count"] = 506
+record["post_update_deployment_harness_count"] = 17
+path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+(
+  cd -- "$rolled_application_root/application"
+  while IFS= read -r relative; do sha256sum -- "$relative"; done \
+    < <(find . -type f ! -name SHA256SUMS -printf '%P\n' | sort) >SHA256SUMS
+  sha256sum --check --strict SHA256SUMS >/dev/null
+)
+(
+  cd -- "$rolled_application_root"
+  while IFS= read -r relative; do sha256sum -- "$relative"; done \
+    < <(find . -type f ! -path './SHA256SUMS' -printf '%P\n' | sort) >SHA256SUMS
+  sha256sum --check --strict SHA256SUMS >/dev/null
+  bash ./verify-ishikawa-release >/dev/null
+)
+rolled_application_archive="$assembly_workspace/ishikawa-v1.3.1.tar.gz"
+tar --sort=name --format=posix --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+  --numeric-owner --pax-option=delete=atime,delete=ctime \
+  -czf "$rolled_application_archive" -C "$rollup_root" ishikawa-v1.3.1
+rolled_application_sha256="$(sha256sum -- "$rolled_application_archive" | awk '{print $1}')"
+[[ "$rolled_application_sha256" != "$expected_application_sha256" ]] \
+  || fail_with_detail rollup_not_materialized \
+    'The final application archive still has the uncorrected ancestor identity.' \
+    'Stop publication; the cumulative correction was not incorporated.'
+cp -- "$rolled_application_archive" \
+  "$assembled_package_directory/ishikawa-v1.3.1.tar.gz"
+printf '%s  %s\n' "$rolled_application_sha256" 'ishikawa-v1.3.1.tar.gz' \
+  >"$assembled_package_directory/ishikawa-v1.3.1.tar.gz.sha256"
+
 for replacement_name in README.md SECURITY_REVIEW.md deploy-ishikawa \
   inspect-native-prerequisites verify-deployment; do
   cp -- "$carry_source_directory/$replacement_name" \
@@ -252,6 +406,66 @@ chmod 0755 \
 find "$assembled_package_directory" -maxdepth 1 -type f \
   ! -name deploy-ishikawa ! -name inspect-native-prerequisites \
   ! -name verify-deployment -exec chmod 0644 {} +
+
+# Rebind every outer identity to the rolled application. Historic base
+# qualification fields remain intact; the new fields identify the cumulative
+# correction and its whole-path audit without pretending the base archive was
+# unchanged.
+python3 -B - "$assembled_package_directory" "$rolled_application_sha256" \
+  "$source_manifest_sha256" "$expected_cumulative_update_sha256" <<'PY' \
+  || fail_with_detail outer_identity_rebinding_failed \
+    'The final package identities could not be rebound to the rolled application.' \
+    'Stop publication and inspect the assembly workspace.'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+application_sha, source_manifest_sha, update_sha = sys.argv[2:]
+
+release_path = root / "application-release.json"
+release = json.loads(release_path.read_text(encoding="utf-8"))
+release.update({
+    "application_archive_sha256": application_sha,
+    "source_manifest_sha256": source_manifest_sha,
+    "cumulative_update_sha256": update_sha,
+    "post_update_native_test_count": 506,
+    "post_update_deployment_harness_count": 17,
+})
+release_path.write_text(json.dumps(release, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+
+sbom_path = root / "application-sbom.cdx.json"
+sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+component = sbom["metadata"]["component"]
+component["hashes"] = [{"alg": "SHA-256", "content": application_sha}]
+component["bom-ref"] = "pkg:generic/ishikawa@1.3.1?sha256=" + application_sha
+sbom["serialNumber"] = "urn:uuid:" + "-".join((application_sha[:8], application_sha[8:12], application_sha[12:16], application_sha[16:20], application_sha[20:32]))
+sbom_path.write_text(json.dumps(sbom, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+
+security_path = root / "SECURITY_REVIEW.md"
+security = security_path.read_text(encoding="utf-8")
+security = re.sub(r"(?<=application archive SHA-256\n  `)[0-9a-f]{64}(?=`;)", application_sha, security, count=1)
+security += (
+    "\nThe final application archive also incorporates cumulative update SHA-256\n"
+    f"`{update_sha}`. Its seven changed paths passed 506 discovered application\n"
+    "tests, 17 deployment/lifecycle harnesses, exact rollback qualification,\n"
+    "fresh extraction, and complete portable-package verification. No standalone\n"
+    "hotfix is required or accepted with this final package.\n"
+)
+security_path.write_text(security, encoding="utf-8")
+
+receipt_path = root / "deployment-package-receipt.json"
+receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+receipt.update({
+    "application_archive_sha256": application_sha,
+    "cumulative_update_sha256": update_sha,
+    "security_review_sha256": hashlib.sha256(security_path.read_bytes()).hexdigest(),
+    "single_carry_rollup": True,
+})
+receipt_path.write_text(json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
 
 python3 -B - "$assembled_package_directory/deployment-package-receipt.json" <<'PY' \
   || fail_with_detail final_receipt_generation_failed \
@@ -389,17 +603,17 @@ bash "$assembled_package_directory/verify-deployment" >/dev/null \
     'The assembled deployment-ready package failed portable verification.' \
     'Review the final package identity before publication.'
 [[ "$(sha256sum -- "$assembled_package_directory/ishikawa-v1.3.1.tar.gz" | awk '{print $1}')" \
-    == "$expected_application_sha256" ]] \
-  || fail_with_detail final_application_identity_changed \
-    'Final assembly changed the accepted application bytes.' \
-    'Stop publication and restore the accepted archive.'
+    == "$rolled_application_sha256" ]] \
+  || fail_with_detail final_application_rollup_changed \
+    'Final assembly changed the rolled application bytes.' \
+    'Stop publication and restore the exact assembled archive.'
 [[ "$(sha256sum -- "$assembled_package_directory/node-next-runtime-amd64.tar" | awk '{print $1}')" \
     == "$expected_runtime_sha256" ]] \
   || fail_with_detail final_runtime_identity_changed \
     'Final assembly changed the accepted runtime-image bytes.' \
     'Stop publication and restore the accepted archive.'
 emit_report ASSEMBLY \
-  'state=pass;release_state=deployment_ready;native_prerequisites=preinstalled;primary_payloads_unchanged=true'
+  "state=pass;release_state=deployment_ready;native_prerequisites=preinstalled;accepted_ancestor_sha256=$expected_application_sha256;rolled_application_sha256=$rolled_application_sha256;cumulative_update_sha256=$expected_cumulative_update_sha256;standalone_hotfix_required=false"
 
 current_stage='archive_qualification'
 assembled_archive_path="$assembly_workspace/$archive_file_name"
@@ -478,5 +692,5 @@ publication_stage=''
 emit_report PUBLISH \
   "state=pass;archive=$stable_handoff_directory/$archive_file_name;sha256=$assembled_archive_sha256"
 emit_report SUMMARY \
-  "state=pass;report=$report_path;application_sha256=$application_sha256;runtime_sha256=$runtime_sha256;next=transfer_final_archive_and_checksum"
+  "state=pass;report=$report_path;application_sha256=$rolled_application_sha256;runtime_sha256=$runtime_sha256;cumulative_update_rolled_in=true;standalone_hotfix_required=false;next=transfer_only_final_archive_and_checksum"
 emit_script_result pass | tee -a "$report_path"

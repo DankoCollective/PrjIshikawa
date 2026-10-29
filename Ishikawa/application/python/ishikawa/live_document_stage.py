@@ -132,7 +132,7 @@ class NativeLiveDocumentArtifactStage:
     dependencies: IngestionDependencyPolicy
     credential_provider: ProtectedEnvironmentValue
     process_runner: StageProcessRunner = native_stage_process
-    timeout_seconds: int = 3600
+    timeout_seconds: int = 7200
 
     def __post_init__(self) -> None:
         if (

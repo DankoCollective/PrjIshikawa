@@ -29,7 +29,7 @@ from .canonical import canonical_json_bytes, file_sha256
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_CREDENTIAL_BYTES = 1024
 MAX_DIAGNOSTIC_BYTES = 1024 * 1024
-PIPELINE_TIMEOUT_SECONDS = 3600
+PIPELINE_TIMEOUT_SECONDS = 7200
 NOMIC_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -178,10 +178,20 @@ def _read_credential() -> bytearray:
         value.extend(block)
     if value.endswith(b"\n"):
         value.pop()
-    if not 32 <= len(value) <= MAX_CREDENTIAL_BYTES or b"\n" in value or b"\r" in value:
+    if not _credential_is_valid(value):
         _wipe(value)
         _fail("credential_format_invalid")
     return value
+
+
+def _credential_is_valid(value: bytes | bytearray) -> bool:
+    """Validate transport safety without imposing a product password policy."""
+
+    return (
+        1 <= len(value) <= MAX_CREDENTIAL_BYTES
+        and b"\n" not in value
+        and b"\r" not in value
+    )
 
 
 def _wipe(value: bytearray) -> None:

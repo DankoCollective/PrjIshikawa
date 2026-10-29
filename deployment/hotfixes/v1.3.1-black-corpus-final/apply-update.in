@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Purpose:
+#   Atomically apply the final cumulative v1.3.1 black-corpus correction.
+# Mental model:
+#   Trust one checksum-bound update manifest, accept only enumerated installed
+#   identities, retain every pre-update byte, publish all replacements, and
+#   roll all replacements back if focused verification fails.
+# Usage:
+#   bash ./apply-update --apply
+#   ISHIKAWA_ROOT=/alternate/path bash ./apply-update --apply
+
+readonly mode="${1:-}"
+readonly bundle_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly ishikawa_root="${ISHIKAWA_ROOT:-$HOME/Documents/Ishikawa}"
+readonly state_root="$ishikawa_root/state/updates/v1.3.1-black-corpus-final"
+readonly backup_root="$state_root/pre-update"
+readonly receipt="$state_root/receipt.txt"
+readonly manifest="$bundle_root/UPDATE_MANIFEST.tsv"
+readonly verifier="$bundle_root/verify-update.py"
+readonly expected_manifest_sha256='__MANIFEST_SHA256__'
+readonly expected_verifier_sha256='__VERIFIER_SHA256__'
+
+rollback_needed=false
+
+result() {
+  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_final_update=%s\n' "$1"
+}
+
+block() {
+  printf '%s\n' 'FAILURE DETAIL' "reason=$1" "detail=$2" \
+    "operator_action=$3" >&2
+  result blocked >&2
+  exit 1
+}
+
+digest() { sha256sum -- "$1" | awk '{print $1}'; }
+
+accepted_digest() {
+  local observed="$1" accepted_values="$2" candidate
+  IFS=',' read -r -a candidates <<<"$accepted_values"
+  for candidate in "${candidates[@]}"; do
+    [[ "$observed" != "$candidate" ]] || return 0
+  done
+  return 1
+}
+
+publish() {
+  local payload="$1" target="$2" file_mode="$3" temporary
+  temporary="$target.update.$$"
+  install -m "$file_mode" -- "$payload" "$temporary"
+  mv -f -- "$temporary" "$target"
+}
+
+manifest_rows() {
+  awk -F '\t' 'NF == 4 && $1 !~ /^#/ {print}' "$manifest"
+}
+
+verify_final() {
+  local relative file_mode accepted_values final_sha target
+  while IFS=$'\t' read -r relative file_mode accepted_values final_sha; do
+    target="$ishikawa_root/$relative"
+    [[ -f "$target" && ! -L "$target" ]] || return 1
+    [[ "$(digest "$target")" == "$final_sha" ]] || return 1
+  done < <(manifest_rows)
+  python3 "$ishikawa_root/scripts/capture-pdf-extraction-observations.py" \
+    --self-test >/dev/null || return 1
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ishikawa_root/application/python" \
+    python3 "$verifier" >/dev/null || return 1
+}
+
+rollback() {
+  local relative file_mode _accepted _final target backup
+  while IFS=$'\t' read -r relative file_mode _accepted _final; do
+    target="$ishikawa_root/$relative"
+    backup="$backup_root/$relative"
+    [[ -f "$backup" && ! -L "$backup" ]] || return 1
+    publish "$backup" "$target" "$file_mode"
+  done < <(manifest_rows)
+}
+
+rollback_on_exit() {
+  local status=$?
+  trap - EXIT
+  if [[ "$rollback_needed" == true ]]; then
+    rollback || status=1
+  fi
+  exit "$status"
+}
+trap rollback_on_exit EXIT
+
+[[ "$mode" == '--apply' ]] \
+  || block supported_mode_required 'Use exactly --apply.' 'Rerun with --apply.'
+for command_name in awk chmod date dirname install mkdir mv python3 sha256sum; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || block required_command_missing "Required command is unavailable: $command_name." \
+      'Restore the named command and rerun the update.'
+done
+[[ -d "$ishikawa_root" && ! -L "$ishikawa_root" ]] \
+  || block installation_root_unsafe \
+    'The Ishikawa installation root is missing or unsafe.' \
+    'Use the canonical regular installation directory.'
+[[ -f "$manifest" && ! -L "$manifest" \
+   && "$(digest "$manifest")" == "$expected_manifest_sha256" ]] \
+  || block update_manifest_identity_mismatch \
+    'The update manifest is missing or changed.' \
+    'Discard this extraction and use the final accepted archive.'
+[[ -f "$verifier" && ! -L "$verifier" \
+   && "$(digest "$verifier")" == "$expected_verifier_sha256" ]] \
+  || block verifier_identity_mismatch \
+    'The focused verifier is missing or changed.' \
+    'Discard this extraction and use the final accepted archive.'
+
+row_count=0
+all_final=true
+while IFS=$'\t' read -r relative file_mode accepted_values final_sha; do
+  row_count=$((row_count + 1))
+  target="$ishikawa_root/$relative"
+  payload="$bundle_root/payload/$relative"
+  [[ "$relative" != /* && "$relative" != *'..'* \
+     && "$file_mode" =~ ^0(644|755)$ \
+     && "$final_sha" =~ ^[0-9a-f]{64}$ ]] \
+    || block update_manifest_invalid \
+      'The checksum-bound update manifest contains an invalid row.' \
+      'Discard this extraction and use the final accepted archive.'
+  [[ -f "$target" && ! -L "$target" && -f "$payload" && ! -L "$payload" ]] \
+    || block update_file_unsafe \
+      'An installed target or update payload is missing or unsafe.' \
+      'Restore v1.3.1 or re-extract the final update.'
+  [[ "$(digest "$payload")" == "$final_sha" ]] \
+    || block payload_identity_mismatch \
+      'A payload checksum differs from the accepted update manifest.' \
+      'Discard this extraction and use the final accepted archive.'
+  current_sha="$(digest "$target")"
+  accepted_digest "$current_sha" "$accepted_values" \
+    || block target_identity_mismatch \
+      "Installed target is not an accepted v1.3.1 state: $relative." \
+      'Do not overwrite it; preserve and reconcile the installed identity.'
+  [[ "$current_sha" == "$final_sha" ]] || all_final=false
+done < <(manifest_rows)
+[[ "$row_count" == 7 ]] \
+  || block update_manifest_invalid \
+    'The update manifest does not enumerate exactly seven targets.' \
+    'Discard this extraction and use the final accepted archive.'
+
+if [[ "$all_final" == true ]]; then
+  verify_final \
+    || block installed_verification_failed \
+      'The already-installed final update failed focused verification.' \
+      'Preserve the installation and retained update state for review.'
+  printf '%s\n' '[UPDATE] state=pass;change=already_applied;verification=pass'
+  result pass
+  exit 0
+fi
+
+while IFS=$'\t' read -r relative file_mode _accepted _final; do
+  target="$ishikawa_root/$relative"
+  backup="$backup_root/$relative"
+  mkdir -p -- "$(dirname -- "$backup")"
+  current_sha="$(digest "$target")"
+  if [[ -e "$backup" || -L "$backup" ]]; then
+    [[ -f "$backup" && ! -L "$backup" \
+       && "$(digest "$backup")" == "$current_sha" ]] \
+      || block rollback_identity_mismatch \
+        'A retained rollback file differs from the current pre-update state.' \
+        'Preserve the state directory and reconcile it before retrying.'
+  else
+    install -m "$file_mode" -- "$target" "$backup"
+  fi
+done < <(manifest_rows)
+
+rollback_needed=true
+while IFS=$'\t' read -r relative file_mode _accepted _final; do
+  publish "$bundle_root/payload/$relative" "$ishikawa_root/$relative" "$file_mode"
+done < <(manifest_rows)
+if ! verify_final; then
+  block replacement_verification_failed \
+    'The cumulative correction failed verification and every target was restored.' \
+    'Retain this result and do not rerun ingestion.'
+fi
+
+{
+  printf 'update=v1.3.1-black-corpus-final\n'
+  printf 'applied_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'manifest_sha256=%s\n' "$expected_manifest_sha256"
+  while IFS=$'\t' read -r relative _mode _accepted final_sha; do
+    printf 'installed=%s|%s\n' "$relative" "$final_sha"
+  done < <(manifest_rows)
+  printf 'verification=pass\n'
+} >"$receipt"
+chmod 0600 "$receipt"
+rollback_needed=false
+
+printf '%s\n' '[UPDATE] state=pass;change=applied;verification=pass' "receipt=$receipt"
+result pass

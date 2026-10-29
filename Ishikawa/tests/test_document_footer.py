@@ -87,6 +87,18 @@ class DocumentFooterTests(unittest.TestCase):
         # generic recurring-furniture path instead of blocking normalization.
         self.assertIsNone(extract_document_footer((_page(1, total=2), unrelated)))
 
+    def test_complete_footer_removes_only_proven_component_lines(self):
+        page = _page(1, total=1)
+        unrelated = _Line("p0001-l0099", "Approval instructions remain authoritative.", 54.0, 754.0)
+        footer = extract_document_footer((_Page(1, page.lines + (unrelated,)),))
+        self.assertIsNotNone(footer)
+        self.assertNotIn(unrelated.line_id, footer["line_ids"])
+        self.assertIn("p0001-l0003", footer["line_ids"])
+
+    def test_blank_page_disables_specialized_profile_without_failure(self):
+        blank = _Page(2, ())
+        self.assertIsNone(extract_document_footer((_page(1, total=2), blank)))
+
 
 if __name__ == "__main__":
     unittest.main()

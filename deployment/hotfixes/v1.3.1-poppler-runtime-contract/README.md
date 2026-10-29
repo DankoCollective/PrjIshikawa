@@ -1,4 +1,9 @@
-# Ishikawa v1.3.1 Poppler Runtime-Contract Hotfix
+# SUPERSEDED — Ishikawa v1.3.1 Poppler Runtime-Contract Hotfix
+
+Do not build, carry, or apply this archive. It was incomplete and is retained
+only as historical evidence. It is superseded by
+`../v1.3.1-black-corpus-final/` and the exact candidate identified in
+`docs/releases/ISHIKAWA_V1_3_1_END_TO_END_AUDIT.md`.
 
 ## Purpose
 

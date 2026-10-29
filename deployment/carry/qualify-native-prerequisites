@@ -154,8 +154,12 @@ fi
 
 "${DOCKER_COMMAND[@]}" info >/dev/null 2>&1 \
   || fail "docker_access_failed" "The selected Docker command cannot contact the local daemon."
-"${DOCKER_COMMAND[@]}" image inspect "$DOCKER_IMAGE" >/dev/null 2>&1 \
-  || fail "qualification_image_missing" "ubuntu:26.04 is not present in the local Docker daemon."
+if ! "${DOCKER_COMMAND[@]}" image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+  DOCKER_IMAGE="docker.io/library/ubuntu:26.04"
+  "${DOCKER_COMMAND[@]}" image inspect "$DOCKER_IMAGE" >/dev/null 2>&1 \
+    || fail "qualification_image_missing" \
+      "Neither ubuntu:26.04 nor docker.io/library/ubuntu:26.04 is present in the local Docker daemon."
+fi
 
 image_operating_system="$("${DOCKER_COMMAND[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Os}}')"
 image_architecture="$("${DOCKER_COMMAND[@]}" image inspect "$DOCKER_IMAGE" --format '{{.Architecture}}')"
@@ -164,7 +168,7 @@ image_identifier="$("${DOCKER_COMMAND[@]}" image inspect "$DOCKER_IMAGE" --forma
   || fail "qualification_image_wrong" "Expected linux/amd64; observed ${image_operating_system}/${image_architecture}."
 [[ "$image_identifier" == sha256:* ]] \
   || fail "qualification_image_identity_missing" "Docker returned no immutable image identity."
-printf '[DOCKER] state=pass;image=ubuntu:26.04;platform=linux/amd64\n'
+printf '[DOCKER] state=pass;image=%s;platform=linux/amd64\n' "$DOCKER_IMAGE"
 
 # Step 3 — Write the exact proof program that the container executes by path.
 run_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"

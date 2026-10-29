@@ -264,7 +264,7 @@ def _furniture_signatures(pages: tuple[SourcePage, ...]) -> set[str]:
             in_margin = line.y_min <= page.height * 0.15 or line.y_max >= page.height * 0.85
             if not in_margin:
                 continue
-            normalized = re.sub(r"(?i)(\bpage\s+)\d+\s*$", r"\1{page}", line.text)
+            normalized = _normalized_furniture_text(line.text)
             band = round(line.y_center / 4)
             signature = f"{band}:{normalized}"
             occurrences.setdefault(signature, set()).add(page.number)
@@ -272,8 +272,19 @@ def _furniture_signatures(pages: tuple[SourcePage, ...]) -> set[str]:
 
 
 def _line_furniture_signature(line: SourceLine) -> str:
-    normalized = re.sub(r"(?i)(\bpage\s+)\d+\s*$", r"\1{page}", line.text)
+    normalized = _normalized_furniture_text(line.text)
     return f"{round(line.y_center / 4)}:{normalized}"
+
+
+def _normalized_furniture_text(text: str) -> str:
+    """Normalize changing page counters without changing surrounding text."""
+
+    with_total = re.sub(
+        r"(?i)(\bpage\s+)\d+(\s+of\s+)\d+\s*$",
+        r"\1{page}\2{pages}",
+        text,
+    )
+    return re.sub(r"(?i)(\bpage\s+)\d+\s*$", r"\1{page}", with_total)
 
 
 def _detect_tables(page: SourcePage, excluded: set[str]) -> list[list[list[SourceLine]]]:

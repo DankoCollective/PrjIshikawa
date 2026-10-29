@@ -881,7 +881,47 @@ Ishikawa v1.3.2 must:
 6. qualify every supported target platform through the same end-to-end canary
    rather than expanding a source-code allowlist for each host release.
 
-The bounded v1.3.1 Tech hotfix changes only this extractor contract. It preserves
-the accepted application, schema, ingestion manifest, corpus data, and model
-interfaces and is distributed as a checksum-bound, idempotent one-file update
-with an original-file backup and receipt.
+The first bounded v1.3.1 Tech hotfix changed only this extractor contract. It
+was superseded before acceptance by the single cumulative black-corpus update
+described in the v1.3.1 end-to-end audit. No standalone Poppler, header, or
+footer archive is an accepted carry artifact.
+
+## Mandatory v1.3.2 end-to-end ingestion and release correction
+
+The cumulative v1.3.1 audit found additional cross-stage assumptions that must
+not become permanent product contracts. Ishikawa v1.3.2 must:
+
+1. size extraction retention from the actual document inventory and retain one
+   authoritative extraction result plus repeatability evidence, rather than
+   archiving two complete extraction trees per document;
+2. derive document-stage and batch timeouts from a documented capacity model,
+   expose the selected bounds in diagnostics, and test a full supported batch;
+3. treat credentials as protected transport values and impose only
+   externally-authorized password rules;
+4. preserve safe, stage-specific ingestion failures through every wrapper
+   instead of collapsing them to `runtime_failure`;
+5. make specialized header and footer profiles opt-in on complete evidence,
+   fall back to generic furniture normalization for incomplete or unknown
+   profiles, remove only lines proven to be profile components, and continue
+   to fail closed on complete conflicting identity evidence;
+6. normalize recurring `Page N` and `Page N of M` furniture without treating
+   either form as citable body prose;
+7. bind the complete discovered test inventory into every release artifact and
+   execute tests shipped with or checksum-bound to that artifact; a historical
+   script must not copy a newer repository test tree and then require an old
+   hardcoded module or test count;
+8. identify active, superseded, and historical deployment paths explicitly.
+   Superseded qualification, promotion, package, and hotfix paths must not be
+   presented as current operator interfaces;
+9. include every runtime-affecting YAML/profile in lifecycle drift detection
+   and provide bounded state recovery when a managed service or container
+   exists but its local state record is absent or damaged;
+10. replace hardcoded artifact-method profile digests with one versioned,
+    validated profile registry shared by production and qualification; and
+11. qualify one changed document through extraction, normalization, chunking,
+    embedding, atomic PostgreSQL publication, retrieval, reconstruction, and
+    citation display using the exact installed bytes before release acceptance.
+
+The v1.3.2 gate must prove these requirements in one consolidated run. A
+successful source-tree unit suite, a historical receipt, or a focused hotfix
+verifier is not sufficient on its own.

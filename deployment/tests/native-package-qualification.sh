@@ -68,26 +68,33 @@ fi
 if [[ "$action" == run ]]; then
   interactive=false
   network_mode=""
+  shelf_mount=""
   previous_argument=""
   for argument in "$@"; do
     [[ "$argument" != --interactive && "$argument" != -i ]] || interactive=true
     if [[ "$previous_argument" == --network ]]; then
       network_mode="$argument"
     fi
+    if [[ "$previous_argument" == --mount ]]; then
+      shelf_mount="$argument"
+    fi
     previous_argument="$argument"
   done
-  [[ "$interactive" == true ]] || {
-    printf 'container stdin was not attached\n' >&2
+  [[ "$interactive" == false ]] || {
+    printf 'container unexpectedly requested interactive stdin\n' >&2
     exit 97
   }
-  proof_payload="$(cat)"
-  grep -Fq "[OFFLINE] state=pass;network_mode=none;source_lists=empty" <<< "$proof_payload" || {
-    printf 'container proof payload was empty or wrong\n' >&2
+  [[ "$shelf_mount" == type=bind,src=*,dst=/shelf,readonly ]] || {
+    printf 'container did not receive the read-only shelf mount\n' >&2
     exit 98
   }
   [[ "$network_mode" == none ]] || {
     printf 'container was not configured with --network none\n' >&2
     exit 99
+  }
+  [[ "${*: -2:1}" == bash && "${*: -1}" == /shelf/qualification-*/container-proof.sh ]] || {
+    printf 'container did not execute the mounted proof program\n' >&2
+    exit 96
   }
   [[ "${MOCK_CONTAINER_FAIL:-false}" != true ]] || {
     printf 'mock container failure\n' >&2
@@ -98,7 +105,7 @@ if [[ "$action" == run ]]; then
     '[POSTGRESQL] major=16;pgvector=0.8.7;listen_addresses=empty;query=pass;state=pass' \
     '[LICENSE] package=python3-psycopg;copyright_sha256=mock' \
     '[LICENSE] state=inventory_pass' \
-    '[OFFLINE] state=pass;network_mode=none;source_lists=empty'
+    '[QUALIFICATION] state=pass;network_mode=none;apt_sources=empty'
   exit 0
 fi
 exit 2

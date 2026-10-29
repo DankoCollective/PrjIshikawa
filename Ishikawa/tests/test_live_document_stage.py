@@ -122,6 +122,16 @@ class LiveDocumentStageTests(unittest.TestCase):
                 ProtectedEnvironmentValue("ISHIKAWA_NOMIC_API_KEY", {}),
             )
 
+    def test_default_timeout_covers_one_complete_real_corpus_stage(self):
+        stage = NativeLiveDocumentArtifactStage(
+            self.executable.resolve(),
+            self.dependencies,
+            ProtectedEnvironmentValue(
+                "ISHIKAWA_NOMIC_API_KEY", {"ISHIKAWA_NOMIC_API_KEY": "secret"}
+            ),
+        )
+        self.assertEqual(stage.timeout_seconds, 7200)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import resource
+import shutil
 import socket
 import subprocess
 import tarfile
@@ -361,6 +362,11 @@ def capture_document(source: Path, entry: dict[str, Any], raw_dir: Path) -> dict
             "layout_token_count": len(layout_text.split()),
             "page": index,
         })
+    # Repeat extraction is a proof step, not downstream source evidence.  The
+    # hashes above prove equality; retaining the duplicate files doubles the
+    # batch archive and can reject a valid multi-document corpus after all
+    # extraction work has completed.
+    shutil.rmtree(repeat_dir)
     return {
         "doc_id": entry["doc_id"],
         "durations": durations,

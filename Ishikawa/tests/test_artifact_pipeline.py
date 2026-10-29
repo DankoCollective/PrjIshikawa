@@ -9,6 +9,7 @@ from ishikawa.artifact_pipeline import (
     ArtifactPipelineError,
     NOMIC_MODEL,
     PipelineLayout,
+    _credential_is_valid,
     run_artifact_pipeline,
 )
 from ishikawa.canonical import canonical_json_bytes, file_sha256
@@ -174,6 +175,14 @@ class ArtifactPipelineTests(unittest.TestCase):
                 layout=self.layout,
                 runner=rejected,
             )
+
+    def test_credential_transport_has_no_private_strength_policy(self):
+        self.assertTrue(_credential_is_valid(b"x"))
+        self.assertTrue(_credential_is_valid(b"x" * 1024))
+        self.assertFalse(_credential_is_valid(b""))
+        self.assertFalse(_credential_is_valid(b"x\n"))
+        self.assertFalse(_credential_is_valid(b"x\r"))
+        self.assertFalse(_credential_is_valid(b"x" * 1025))
 
 
 if __name__ == "__main__":

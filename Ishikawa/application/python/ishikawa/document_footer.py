@@ -35,7 +35,12 @@ def extract_document_footer(pages: Sequence[Any]) -> dict[str, Any] | None:
     furniture normalizer instead of being treated as malformed content.
     """
 
-    eligible = [page for page in pages if not getattr(page, "blank", False)]
+    # A blank page cannot prove the all-pages footer profile.  Leave the whole
+    # document to generic furniture handling instead of constructing a
+    # structurally incomplete footer record.
+    if any(getattr(page, "blank", False) for page in pages):
+        return None
+    eligible = list(pages)
     if not eligible:
         return None
     occurrences: list[dict[str, Any]] = []
@@ -59,6 +64,28 @@ def extract_document_footer(pages: Sequence[Any]) -> dict[str, Any] | None:
             continue
         if left is None or right is None or page_match is None or len(policies) != 1:
             continue
+        component_lines = [
+            line
+            for line in margin
+            if (
+                _LEFT_ORG.search(_clean(line.text)) is not None
+                or _RIGHT_ORG.search(_clean(line.text)) is not None
+                or _PAGE.search(_clean(line.text)) is not None
+                or _POLICY.search(_clean(line.text)) is not None
+                or _DATE.search(_clean(line.text)) is not None
+            )
+        ]
+        # Required components must be attributable to exact source lines.  A
+        # match created only by joining unrelated margin lines is not proof of
+        # this footer profile.
+        component_text = _clean(" ".join(line.text for line in component_lines))
+        if (
+            _LEFT_ORG.search(component_text) is None
+            or _RIGHT_ORG.search(component_text) is None
+            or _PAGE.search(component_text) is None
+            or len(set(_POLICY.findall(component_text))) != 1
+        ):
+            continue
         occurrences.append({
             "page": int(page.number),
             "page_number": int(page_match.group(1)),
@@ -67,7 +94,7 @@ def extract_document_footer(pages: Sequence[Any]) -> dict[str, Any] | None:
             "organization_abbreviation_right": right.group(1).upper(),
             "policy_number": policies[0],
             "dates": sorted(set(_DATE.findall(combined))),
-            "line_ids": sorted(line.line_id for line in margin),
+            "line_ids": sorted(line.line_id for line in component_lines),
         })
     if not occurrences:
         return None

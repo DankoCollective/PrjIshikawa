@@ -14,6 +14,7 @@ from ishikawa.installed_ingestion import (
     InstalledIngestionLayout,
     execute_installed_ingestion,
 )
+from ishikawa.live_document_stage import LiveDocumentStageError
 
 
 class _Runtime:
@@ -147,6 +148,34 @@ class InstalledIngestionTests(unittest.TestCase):
         self.assertEqual(
             output.getvalue().splitlines()[-1],
             "[INGEST] state=blocked;exit_code=130;reason=interrupted",
+        )
+
+    def test_safe_nested_stage_reason_reaches_operator_boundary(self):
+        class FailingRuntime:
+            @staticmethod
+            def execute(_mode, *, output):
+                raise LiveDocumentStageError(
+                    "stage_process_normalization_document_footer_page_count_conflict"
+                )
+
+        output = io.StringIO()
+        status = execute_installed_ingestion(
+            ("--publish", "--manifest", "batch-001.yaml"),
+            product_root=self.root.resolve(),
+            output=output,
+            runtime_factory=lambda *_args: FailingRuntime(),
+        )
+        reason = (
+            "live_document_stage_"
+            "stage_process_normalization_document_footer_page_count_conflict"
+        )
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            output.getvalue().splitlines()[-2:],
+            [
+                f"[INGEST] state=blocked;exit_code=1;reason={reason}",
+                f"ishikawa_ingest=blocked;reason={reason}",
+            ],
         )
 
     def test_unknown_or_secret_bearing_arguments_fail_before_runtime(self):

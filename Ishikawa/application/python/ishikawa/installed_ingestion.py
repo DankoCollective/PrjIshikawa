@@ -22,6 +22,7 @@ from typing import Any, TextIO
 from .canonical import file_sha256
 from .document_producer import ProducerArtifactBundle
 from .ingestion_runtime import ConfiguredIngestionRuntime, assemble_configured_ingestion_runtime
+from .ingestion_command import _safe_runtime_reason
 from .live_document_stage import NativeLiveDocumentArtifactStageFactory
 from .operator_ingestion import OperatorIngestionPaths
 
@@ -290,9 +291,10 @@ def execute_installed_ingestion(
         except KeyboardInterrupt:
             milestones.finish(130, reason="interrupted")
             return 130
-        except Exception:
-            milestones.finish(1, reason="runtime_failure")
-            output.write("ishikawa_ingest=blocked;reason=runtime_failure\n")
+        except Exception as error:
+            reason = _safe_runtime_reason(error)
+            milestones.finish(1, reason=reason)
+            output.write(f"ishikawa_ingest=blocked;reason={reason}\n")
             output.flush()
             return 1
         milestones.finish(exit_code)

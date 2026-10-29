@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Purpose:
+#   Apply the cumulative Ishikawa v1.3.1 black-corpus compatibility correction.
+# Mental model:
+#   Accept an exact original or previously hotfixed v1.3.1 state, preserve it,
+#   publish all three final files together, and roll all three back if focused
+#   verification fails. Corpus, database, configuration, services, and secrets
+#   are outside this operation.
+# Usage:
+#   bash ./apply-hotfix --apply
+#   ISHIKAWA_ROOT=/alternate/path bash ./apply-hotfix --apply
+
+readonly mode="${1:-}"
+readonly bundle_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly ishikawa_root="${ISHIKAWA_ROOT:-$HOME/Documents/Ishikawa}"
+readonly state_root="$ishikawa_root/state/hotfixes/v1.3.1-black-corpus-compatibility"
+readonly receipt="$state_root/receipt.txt"
+readonly verifier="$bundle_root/verify-hotfix.py"
+
+readonly capture_relative='scripts/capture-pdf-extraction-observations.py'
+readonly footer_relative='application/python/ishikawa/document_footer.py'
+readonly control_relative='application/python/ishikawa/document_control.py'
+readonly capture_target="$ishikawa_root/$capture_relative"
+readonly footer_target="$ishikawa_root/$footer_relative"
+readonly control_target="$ishikawa_root/$control_relative"
+readonly capture_payload="$bundle_root/payload/capture-pdf-extraction-observations.py"
+readonly footer_payload="$bundle_root/payload/document_footer.py"
+readonly control_payload="$bundle_root/payload/document_control.py"
+
+readonly capture_original_sha256='2d0cd7552ce76bc5bc4f8a26902b25dab62daf52e58ae2a3bfdffee9e7165356'
+readonly capture_final_sha256='85d884e319072d3b43c78e02115cdad6e2a0f50f53748c849ab1d3b7a7b58341'
+readonly footer_original_sha256='113350e53490e6984f4f05289be6f5d2bfb463f172f064ba94eee96db8825c58'
+readonly footer_final_sha256='58c7fd2ed773e8e68fa0d5c97e32928e2540f473312d0849e9304165c00a7119'
+readonly control_original_sha256='fa596dbcb7a17883076de4ccb0470216e0ec7e8e253f127f5613aac678783b99'
+readonly control_final_sha256='2da688f87edf3acdd39214720fe9e42c18259899121e59a95c95cbb93326e9f8'
+readonly verifier_sha256='87a9579d753b98735782ca953bed73c4045dbd65bbde6b5866adc3a8f3c62819'
+
+result() {
+  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_black_corpus_compatibility_hotfix=%s\n' "$1"
+}
+
+block() {
+  printf '%s\n' 'FAILURE DETAIL' "reason=$1" "detail=$2" "operator_action=$3" >&2
+  result blocked >&2
+  exit 1
+}
+
+digest() { sha256sum -- "$1" | awk '{print $1}'; }
+
+accepted() {
+  [[ "$1" == "$2" || "$1" == "$3" ]]
+}
+
+verify_final() {
+  [[ "$(digest "$capture_target")" == "$capture_final_sha256" ]] || return 1
+  [[ "$(digest "$footer_target")" == "$footer_final_sha256" ]] || return 1
+  [[ "$(digest "$control_target")" == "$control_final_sha256" ]] || return 1
+  python3 "$capture_target" --self-test >/dev/null || return 1
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ishikawa_root/application/python" \
+    python3 "$verifier" >/dev/null || return 1
+}
+
+publish() {
+  local payload="$1" target="$2" mode_value="$3" temporary
+  temporary="$target.hotfix.$$"
+  install -m "$mode_value" -- "$payload" "$temporary"
+  mv -f -- "$temporary" "$target"
+}
+
+rollback() {
+  publish "$state_root/pre-hotfix/$capture_relative" "$capture_target" 0755
+  publish "$state_root/pre-hotfix/$footer_relative" "$footer_target" 0644
+  publish "$state_root/pre-hotfix/$control_relative" "$control_target" 0644
+}
+
+rollback_needed=false
+rollback_on_exit() {
+  local status=$?
+  trap - EXIT
+  if [[ "$rollback_needed" == true ]]; then
+    rollback || status=1
+  fi
+  exit "$status"
+}
+trap rollback_on_exit EXIT
+
+[[ "$mode" == '--apply' ]] \
+  || block supported_mode_required 'Use exactly --apply.' 'Rerun with --apply.'
+for command_name in awk chmod date install mkdir mv python3 sha256sum; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || block required_command_missing "Required command is unavailable: $command_name." \
+      'Restore the named command and rerun the hotfix.'
+done
+[[ -d "$ishikawa_root" && ! -L "$ishikawa_root" ]] \
+  || block installation_root_unsafe 'The Ishikawa installation root is missing or unsafe.' \
+    'Use the canonical regular installation directory.'
+
+while IFS='|' read -r target payload expected_payload; do
+  [[ -f "$target" && ! -L "$target" && -f "$payload" && ! -L "$payload" ]] \
+    || block hotfix_file_unsafe 'An installed target or payload is missing or unsafe.' \
+      'Restore v1.3.1 or re-extract the cumulative hotfix.'
+  [[ "$(digest "$payload")" == "$expected_payload" ]] \
+    || block payload_identity_mismatch 'A payload checksum differs from the accepted hotfix.' \
+      'Discard this extraction and use the final cumulative archive.'
+done <<EOF
+$capture_target|$capture_payload|$capture_final_sha256
+$footer_target|$footer_payload|$footer_final_sha256
+$control_target|$control_payload|$control_final_sha256
+EOF
+[[ -f "$verifier" && ! -L "$verifier" && "$(digest "$verifier")" == "$verifier_sha256" ]] \
+  || block verifier_identity_mismatch 'The focused verifier is missing or changed.' \
+    'Discard this extraction and use the final cumulative archive.'
+
+capture_current="$(digest "$capture_target")"
+footer_current="$(digest "$footer_target")"
+control_current="$(digest "$control_target")"
+accepted "$capture_current" "$capture_original_sha256" "$capture_final_sha256" \
+  || block target_identity_mismatch 'The extractor is not an accepted v1.3.1 state.' \
+    'Do not overwrite it; reconcile the installed identity.'
+accepted "$footer_current" "$footer_original_sha256" "$footer_final_sha256" \
+  || block target_identity_mismatch 'The footer recognizer is not an accepted v1.3.1 state.' \
+    'Do not overwrite it; reconcile the installed identity.'
+accepted "$control_current" "$control_original_sha256" "$control_final_sha256" \
+  || block target_identity_mismatch 'The header recognizer is not an accepted v1.3.1 state.' \
+    'Do not overwrite it; reconcile the installed identity.'
+
+if [[ "$capture_current" == "$capture_final_sha256" \
+   && "$footer_current" == "$footer_final_sha256" \
+   && "$control_current" == "$control_final_sha256" ]]; then
+  verify_final \
+    || block installed_verification_failed 'The installed correction failed verification.' \
+      'Preserve the installation and retained hotfix state for review.'
+  printf '%s\n' '[HOTFIX] state=pass;change=already_applied;verification=pass'
+  result pass
+  exit 0
+fi
+
+mkdir -p -- "$state_root/pre-hotfix/scripts" \
+  "$state_root/pre-hotfix/application/python/ishikawa"
+while IFS='|' read -r relative target mode_value current; do
+  backup="$state_root/pre-hotfix/$relative"
+  if [[ -e "$backup" || -L "$backup" ]]; then
+    [[ -f "$backup" && ! -L "$backup" && "$(digest "$backup")" == "$current" ]] \
+      || block rollback_identity_mismatch 'A rollback file differs from the pre-hotfix state.' \
+        'Preserve the state directory and reconcile it before retrying.'
+  else
+    install -m "$mode_value" -- "$target" "$backup"
+  fi
+done <<EOF
+$capture_relative|$capture_target|0755|$capture_current
+$footer_relative|$footer_target|0644|$footer_current
+$control_relative|$control_target|0644|$control_current
+EOF
+
+rollback_needed=true
+publish "$capture_payload" "$capture_target" 0755
+publish "$footer_payload" "$footer_target" 0644
+publish "$control_payload" "$control_target" 0644
+if ! verify_final; then
+  block replacement_verification_failed \
+    'The cumulative correction failed verification and every target was restored.' \
+    'Retain this result and do not rerun ingestion.'
+fi
+
+{
+  printf 'hotfix=v1.3.1-black-corpus-compatibility\n'
+  printf 'applied_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'capture_pre_hotfix_sha256=%s\n' "$capture_current"
+  printf 'capture_installed_sha256=%s\n' "$capture_final_sha256"
+  printf 'footer_pre_hotfix_sha256=%s\n' "$footer_current"
+  printf 'footer_installed_sha256=%s\n' "$footer_final_sha256"
+  printf 'control_pre_hotfix_sha256=%s\n' "$control_current"
+  printf 'control_installed_sha256=%s\n' "$control_final_sha256"
+  printf 'verification=pass\n'
+} >"$receipt"
+chmod 0600 "$receipt"
+rollback_needed=false
+
+printf '%s\n' '[HOTFIX] state=pass;change=applied;verification=pass' "receipt=$receipt"
+result pass

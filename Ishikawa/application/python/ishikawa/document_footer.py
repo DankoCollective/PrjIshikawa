@@ -26,18 +26,19 @@ def _clean(value: str) -> str:
 
 
 def extract_document_footer(pages: Sequence[Any]) -> dict[str, Any] | None:
-    """Recognize a complete footer on every nonblank page.
+    """Recognize a complete footer on every nonblank page when one is proven.
 
     The recognized shape is intentionally narrow: left organization
     abbreviation plus ``Policy``, one supported policy identifier, ``Page N of
     M``, and a right-side ``For ORG Use Only`` statement in the bottom margin.
+    A partial or document-specific footer is left to the generic recurring-
+    furniture normalizer instead of being treated as malformed content.
     """
 
     eligible = [page for page in pages if not getattr(page, "blank", False)]
     if not eligible:
         return None
     occurrences: list[dict[str, Any]] = []
-    partial = False
     for page in eligible:
         height = float(getattr(page, "height", 0.0))
         if height <= 0:
@@ -57,7 +58,6 @@ def extract_document_footer(pages: Sequence[Any]) -> dict[str, Any] | None:
         if recognized_parts == 0:
             continue
         if left is None or right is None or page_match is None or len(policies) != 1:
-            partial = True
             continue
         occurrences.append({
             "page": int(page.number),
@@ -69,10 +69,10 @@ def extract_document_footer(pages: Sequence[Any]) -> dict[str, Any] | None:
             "dates": sorted(set(_DATE.findall(combined))),
             "line_ids": sorted(line.line_id for line in margin),
         })
-    if not occurrences and not partial:
+    if not occurrences:
         return None
-    if partial or len(occurrences) != len(eligible):
-        raise DocumentFooterError("document_footer_incomplete")
+    if len(occurrences) != len(eligible):
+        return None
 
     organizations = {
         (item["organization_abbreviation_left"], item["organization_abbreviation_right"])

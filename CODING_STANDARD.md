@@ -228,6 +228,253 @@
 - Every packaged file must have an installation or runtime purpose and must be accounted for by the package manifest and checksum inventory. Unclassified or unused files must block package acceptance
 - Qualify the package from a clean supported baseline and prove that it reaches the accepted final target without post-install repair or mutation steps
 
+## Operator Contract And Anti-Footgun Standard
+
+- Operator-facing input is a product interface. Treat filenames, paths, CSV,
+  YAML, identifiers, credentials, ports, manifests, and command location with
+  the same design and test discipline as an API.
+- Impose a restriction only when a documented downstream or external contract
+  requires it. Record the requirement and test the complete downstream path.
+  Do not require lowercase, a particular first character, a minimum password
+  length, renamed official files, punctuation removal, or a fixed identifier
+  grammar merely because it simplifies one validator.
+- Preserve official source filenames and operator-visible identity exactly.
+  When a safe internal key is needed, derive it deterministically and keep it
+  separate from the source filename. Do not make the operator maintain two
+  filename-like identities by hand.
+- One logical field must have one shared contract and one shared validation
+  implementation across configuration creation, schema validation, database
+  persistence, relationship processing, retrieval, routing, citation display,
+  update tooling, and operator documentation. A value accepted at the first
+  boundary must not be rejected by a later consumer.
+- Validate an input through every downstream consumer before expensive work or
+  mutation begins. A local regex or parser test is not sufficient proof of an
+  end-to-end identifier, path, or configuration contract.
+- Support ordinary input produced by the documented tools. For spreadsheet CSV
+  this includes UTF-8 with or without BOM and LF or CRLF. For source paths this
+  includes safe spaces, uppercase characters, and ordinary punctuation. Reject
+  genuinely unsafe input precisely; normalize benign representation details in
+  code instead of making an operator repair hidden bytes manually.
+- Validate the complete operator input in one pass and report every safe
+  discovered problem together. Include stage, row or object, field, a safe
+  value or digest, the exact expected rule, and one corrective action. Do not
+  emit only `invalid`, `unsafe`, or `runtime_failure` when the implementation
+  knows the specific condition.
+- A supported workflow must not require the operator to hand-edit generated
+  YAML, remove encoding markers, derive internal identifiers, rename official
+  documents, remember an artifact-build directory, or glue implementation
+  scripts together. Provide a canonical entrypoint, template, generator, or
+  atomic transaction for that work.
+- Password presence may be required. Password length, composition, equality,
+  or rotation rules require an external authority, reviewed security standard,
+  or explicit frozen decision. Do not invent application-local complexity
+  rules and then reject an otherwise valid database or service credential.
+- Hidden-input prompts must print and flush before reading. Distinguish every
+  required credential by role. Never make an operator infer which password an
+  unlabeled or invisible prompt expects.
+- All shell path expansions and filenames must be quoted. Test the real command
+  with safe spaces and uppercase characters rather than assuming quoting is
+  correct from source review alone.
+
+## Installation Ordering And Administrative Surface Standard
+
+- Define the installation and first-use workflow as an explicit state machine.
+  Each stage must state its prerequisites, mutation boundary, pass marker,
+  durable receipt, rollback behavior, and exact next eligible stage.
+- A successful application copy does not imply database, schema, role, corpus,
+  model, service, or UI readiness. Never direct the operator into a dependent
+  stage without proving the prerequisite stage's retained pass result.
+- Before publishing or running a product, the canonical administrative surface
+  must be installed with the product. Routine administration must not require
+  returning to an unpacked carry directory, repository checkout, builder tree,
+  temporary directory, or undocumented external helper.
+- Prefer one discoverable administrative entrypoint with explicit actions such
+  as `status`, `preflight`, `install-schema`, `ingest`, `start`, `stop`, and
+  `rollback`. If separate accepted actions remain, the entrypoint and runbook
+  must report the exact next action; the operator must not reconstruct order
+  from memory.
+- An orchestrator may coordinate existing stages, but it must not conceal their
+  individual pass markers, errors, or receipts. Conversely, do not force the
+  operator to become the orchestrator for an undocumented sequence.
+- Preflight every condition that can be checked safely before mutation or long
+  work: installation root, source root, configuration consumers, ports,
+  services, database and roles, schema version, credentials, package and tool
+  availability, writable runtime paths, model endpoints, input inventory, and
+  cleanup capacity.
+- A rerun after a blocked stage must be intentional. Detect accepted existing
+  state, distinguish it from drift, and either reuse it safely or stop with one
+  exact recovery action. `Already active`, `already installed`, or `already
+  applied` is not automatically a failure.
+- Configuration selected once must be rendered atomically to every consumer.
+  Test that installed YAML, service definitions, endpoint sheets, containers,
+  scripts, and health probes contain the same selected values and contain no
+  stale defaults.
+
+## Platform Dependency And Runtime Canary Standard
+
+- Separate deployment provenance policy from application runtime capability.
+  Deployment may qualify exact package origin, revision, architecture, license,
+  and advisory status. Application code should validate the capability it
+  consumes unless an exact revision is itself an external compatibility
+  requirement.
+- Do not encode one development host's distribution package revision as a
+  universal application contract. If multiple qualified platforms provide a
+  compatible tool, record the exact installed identity and prove its behavior
+  with a real canary.
+- Every native tool, database extension, container runtime, GPU bridge, image,
+  generated build directory, and model endpoint that can block first use needs
+  a target-shaped preflight. Presence or version output alone is insufficient
+  when a small functional canary is feasible.
+- A functional canary must exercise the operation the application actually
+  needs. Examples include extracting a representative PDF, opening the exact
+  PostgreSQL extension, starting the container with its real UID/GID and
+  writable mounts, performing an authenticated embedding request, and proving
+  a generated Next.js build/start path.
+- Verify coupled tools as a coherent set. Detect and report mixed versions,
+  missing executables, incompatible architecture, wrong model identity,
+  unwritable generated-state paths, and stale service configuration separately.
+- Keep source and immutable runtime inputs read-only. Identify every required
+  writable generated path explicitly and prove it under the exact target
+  identity and hardening options before stopping or replacing an accepted
+  service.
+- Runtime dependency failures discovered during corpus extraction, embedding,
+  model generation, or service startup are preflight defects when the same
+  condition could have been detected earlier.
+
+## Exact-Artifact And Target-Shaped Qualification Standard
+
+- Syntax checks, static review, unit tests, and successful builds are necessary
+  but never sufficient qualification for an installer, deployment package,
+  ingestion workflow, service launcher, update bundle, or operator script.
+- Test the exact extracted final bytes, not only the repository source tree.
+  Record the archive identity and ensure the tested bytes are the bytes named
+  for carry or installation.
+- Test from the installed layout with the intended user, group, HOME, working
+  directory, read-only mounts, writable state, ports, configuration paths,
+  database state, and service manager. A source-tree test does not prove the
+  installed product.
+- The minimum proportional ladder for a changed deployment path is:
+  focused unit tests; executable integration test; freshly extracted artifact
+  verification; clean-install or update proof; rerun/idempotence proof;
+  interruption/failure cleanup proof; and one target-shaped functional canary.
+  Omit a rung only when it cannot exercise the changed behavior and record why.
+- Test both success and realistic failure conditions. The release matrix must
+  include, where applicable: BOM and CRLF input, spaces and uppercase paths,
+  malformed headers, missing files, duplicate identities, inactive services,
+  missing database or role, wrong credential, schema mismatch, occupied port,
+  mixed native-tool versions, unwritable runtime state, stale configuration,
+  interrupted execution, and a safe rerun.
+- Test the full workflow's first run. A test that starts from a warm database,
+  precreated roles, an already-built UI, cached generated files, or a manually
+  repaired target does not prove fresh installation.
+- Run real first-party application validators inside mocks and test harnesses.
+  Do not replace the actual parser, schema validator, router, or lifecycle
+  command with a permissive stub and then claim the package passed.
+- Compare repository source, package manifest, extracted archive, and installed
+  files. Unexpected omissions, transformed files, mode drift, or extra files
+  are release blockers.
+- A bounded hotfix or update must verify the exact supported ancestor, retain a
+  recoverable backup or transactional rollback, apply atomically, self-test,
+  emit a receipt, and prove idempotence. It must refuse an unknown or drifted
+  target instead of overwriting it.
+
+## Workflow Continuity And Variable-Content UI Standard
+
+- A clarification question is a commitment that the system can consume the
+  answer and continue the original intent. Test the complete multi-turn route,
+  not only that a clarification string was generated.
+- Preserve the unresolved intent and accepted prior context across clarification
+  turns. A follow-up must not be reclassified as an unrelated standalone query
+  merely because it is short.
+- Do not ask the operator for a category, identifier, department, source, or
+  selection that routing or retrieval cannot resolve on the next turn. When no
+  supported continuation exists, state the limitation directly instead of
+  creating a dead end.
+- Test explicit titles, identifiers, departments and aliases, exhaustive
+  `all/everything` intent, misspelling recovery, repeated questions, and short
+  clarification replies against the installed package.
+- Any UI region that displays variable document or diagnostic content must
+  prove overflow behavior at realistic maximums. Text must not be silently
+  clipped. A citation excerpt or reconstructed section needs an accessible
+  scroll or expansion path, while full-document viewing remains a separate
+  deliberate action.
+- Human UI acceptance must exercise first turn, multi-turn clarification,
+  citation selection, complete cited-section viewing, full-document viewing,
+  long content, empty/error states, and keyboard/scroll behavior before a UI
+  release is promoted.
+
+## Comprehensive Failure Review And Stop-Ship Standard
+
+- When a test or operator run exposes one defect, inspect the complete stage,
+  sibling branches, cleanup path, downstream consumers, and the next likely
+  gate before returning another command. Do not patch only the first exception
+  and make the operator discover the next deterministic blocker.
+- A correction is not ready for operator execution until the agent has reviewed
+  every changed branch and run the strongest safe local end-to-end proof
+  available. Time pressure may reduce unrelated regression scope; it does not
+  justify skipping proof of the changed path.
+- One qualification run should collect all safely discoverable preflight
+  failures before blocking. Fail fast before mutation, but do not hide sibling
+  input or prerequisite errors that can be reported without unsafe work.
+- The following conditions are mandatory stop-ship findings:
+  - two components enforce different rules for the same field or identity;
+  - an operator must manually repair generated files or hidden encodings;
+  - a fresh install depends on undocumented preexisting state;
+  - routine operation depends on a builder, carry, or repository directory;
+  - a known error is collapsed into a generic reason code;
+  - application code hardcodes an unqualified host-specific dependency revision;
+  - tests use different bytes, paths, identities, configuration, or state from
+    the deliverable;
+  - the accepted artifact requires a post-install repair before first use;
+  - cleanup, rollback, rerun, or interruption behavior is unproved; or
+  - an expected operator workflow ends in a clarification or UI dead end.
+- Do not waive a stop-ship finding implicitly because the target is a demo,
+  because a workaround exists, or because significant time has already been
+  spent. A waiver must be explicit, bounded, recorded, and paired with the
+  exact risk and permanent correction.
+- Never describe a package as ready, accepted, qualified, or current when a
+  required gate is blocked, inferred, run against different bytes, or awaiting
+  operator repair.
+
+## Mandatory Pre-Deployment Review
+
+Before naming any package ready for deployment, the responsible agent must
+review and record all of the following in one release report or checklist:
+
+1. **Artifact identity:** final archive, manifest, internal checksums, adjacent
+   checksum, provenance, advisory disposition, and no unclassified files.
+2. **Configuration coherence:** every consumer receives the selected paths,
+   ports, endpoints, database values, runtime modes, and writable-state paths;
+   stale defaults are absent.
+3. **Operator inputs:** realistic supported files and tools are exercised,
+   including encoding, line-ending, path, identifier, and credential cases.
+4. **Prerequisite order:** application, native dependencies, database, roles,
+   schema, corpus configuration, ingestion, services, and UI advance only after
+   their prior retained gate passes.
+5. **Target runtime:** exact OS/architecture assumptions, package provenance,
+   installed tool coherence, container/GPU bridge when used, filesystem
+   permissions, ports, and authenticated external endpoints pass functional
+   canaries.
+6. **Installed-layout proof:** fresh extraction, installation, first start,
+   readiness, stop, restart, rerun, failure cleanup, rollback, and removal are
+   tested from the actual installed layout.
+7. **Application behavior:** authoritative validators, database access,
+   ingestion or data path, routing/retrieval, citation or response proof, and
+   relevant UI flows are exercised without permissive mocks.
+8. **Diagnostics:** each expected failure has a distinct safe reason, useful
+   detail, one operator action, nonzero status, retained report, and standalone
+   final result.
+9. **Operator ergonomics:** the documented workflow uses canonical installed
+   commands, requires no source edits or hidden manual conversions, displays
+   prompts before input, and identifies the next action after each stage.
+10. **Exact-byte reconciliation:** the extracted and installed deliverable is
+    independently compared with the accepted package and the test evidence
+    names the same identity.
+
+Any unchecked item must be marked not applicable with a concrete reason or
+must block deployment. Silence, assumption, prior success on another host, or
+an operator workaround is not evidence.
+
 ## OpenBao Record Context Standard
 - When a script creates or mutates a real OpenBao KV v2 secret record, it must attach non-secret OpenBao-native context metadata unless the relevant decision list explicitly freezes a narrower exception
 - Use KV `custom_metadata` for operator-readable context such as purpose, consumer, owner, policy posture, rotation expectation, recovery note, evidence pointer, and a context schema version

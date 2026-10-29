@@ -52,6 +52,16 @@ of target mutation, or successful cleanup does not reduce the violation.
   final archive. Do not defer the first compliance review until final carry
   assembly. An explicitly accepted exception is closed unless the operator
   later reopens it; do not preserve it as an unbounded follow-up item.
+- Before describing any installer, update, deployment package, ingestion path,
+  service launcher, or UI release as ready, complete the `Mandatory
+  Pre-Deployment Review` in `CODING_STANDARD.md` against the exact extracted
+  artifact and installed layout. Also apply its Operator Contract,
+  Installation Ordering, Platform Dependency, Exact-Artifact, Workflow
+  Continuity, and Stop-Ship sections. A syntax check, build, source-tree unit
+  suite, prior-host pass, or operator workaround cannot substitute for those
+  gates. Review the entire failed stage and downstream consumers before
+  returning a corrected operator command; do not patch and expose blockers one
+  at a time when they can be discovered safely in one local run.
 - Follow `LAB_RUN_PATH_STANDARD.md` for lab script sequencing, local report write-back, remote payload handling, artifact/advisory verification, and reviewed evidence promotion.
 - Treat a stable `<solution-name>-current/` artifact directory as the sole operator handoff source, not as a decorative alias. A replacement build is incomplete until the approved archive and verification files are atomically promoted there and independently checksum-verified. Dated or revision-named outputs are candidates only and must never be reported or transferred as current; preserve displaced bytes under an explicit superseded name.
 - Treat security advisories as implementation gates, not paperwork. For first-class packages, wheels, binaries, source archives, containers, authority-service tools, and dependencies, capture advisory sources, review affectedness, record mitigation or non-applicability, and do not proceed to install/promote with an unmitigated action-required advisory unless the operator explicitly accepts and records the risk.
@@ -69,6 +79,32 @@ of target mutation, or successful cleanup does not reduce the violation.
 - Do not store secrets, tokens, private/personal account identifiers, raw vector dumps, or screenshots with private values.
 - Prefer small, targeted changes over broad rewrites.
 - When a runtime choice changes, record the decision in the repository's authoritative decision list under `docs/decisions/`.
+
+## Fresh-Install Database Ordering Gate
+
+For a fresh Ishikawa installation, application publication and database
+initialization are separate packaged stages. A successful
+`ishikawa_deployment_apply=pass` proves the application installation only; it
+does not prove that `rag_catalog`, schema v5, pgvector, or the database roles
+exist.
+
+Before directing an operator to create a corpus catalog or manifest, validate
+an ingestion configuration, extract or embed documents, or publish an
+ingestion run, the agent must confirm a retained standalone result of:
+
+```text
+SCRIPT RESULT
+ishikawa_deployment_install_schema=pass
+```
+
+If that result is absent on a fresh installation, the next stage is the
+existing packaged `deploy-ishikawa install-schema` action. Do not ask the
+operator to create roles, databases, extensions, or schema objects by hand.
+Do not invent a glue script, merge the existing packaged actions, or redesign
+the v1.3.2 process merely to enforce this order. Give the operator one existing
+packaged action at a time, state what its pass marker proves, review that result,
+and advance only after it passes. An `ishikawa_ingestion_config=ready` result
+does not satisfy or replace the database-initialization gate.
 
 ## Controlled Package Capture And Import Gate
 

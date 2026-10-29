@@ -75,6 +75,18 @@ def _header_page(page: int, label: str, department: str) -> _Page:
     return _Page(page, tuple(lines))
 
 
+def _header_page_with_empty_department(page: int = 1) -> _Page:
+    page_value = _header_page(page, "Department:", "Information Technology")
+    lines = tuple(
+        _Line(line.line_id, "Department:", line.x_min, line.y_min, line.font_height)
+        if line.text == "Department:"
+        else line
+        for line in page_value.lines
+        if line.text != "Information Technology"
+    )
+    return _Page(page, lines)
+
+
 def _unit():
     return {
         "unit_id": "1" * 64,
@@ -184,6 +196,11 @@ class DocumentControlTests(unittest.TestCase):
             _Page(1, (_Line("p0001-l0000", "I. Purpose", 40, 40),)),
             _header_page(2, "Department:", "Information Technology"),
         )))
+
+    def test_complete_labels_with_empty_department_use_generic_fallback(self):
+        self.assertIsNone(
+            extract_document_control_header((_header_page_with_empty_department(),))
+        )
 
     def test_one_header_candidate_and_body_filters_avoid_metadata_duplication(self):
         header = extract_document_control_header((

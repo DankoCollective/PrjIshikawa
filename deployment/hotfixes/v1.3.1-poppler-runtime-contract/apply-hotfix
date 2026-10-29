@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Purpose:
+#   Apply the bounded Ishikawa v1.3.1 Poppler runtime-contract correction.
+#
+# Mental model:
+#   Verify the exact accepted v1.3.1 extractor, preserve one rollback copy,
+#   atomically publish the corrected extractor, and prove its built-in self-test.
+#   No corpus, configuration, database, service, or credential is read or changed.
+#
+# Usage:
+#   bash ./apply-hotfix --apply
+#   ISHIKAWA_ROOT=/alternate/path bash ./apply-hotfix --apply
+
+readonly mode="${1:-}"
+readonly bundle_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly ishikawa_root="${ISHIKAWA_ROOT:-$HOME/Documents/Ishikawa}"
+readonly relative_target='scripts/capture-pdf-extraction-observations.py'
+readonly target="$ishikawa_root/$relative_target"
+readonly replacement="$bundle_root/payload/capture-pdf-extraction-observations.py"
+readonly state_root="$ishikawa_root/state/hotfixes/v1.3.1-poppler-runtime-contract"
+readonly backup="$state_root/capture-pdf-extraction-observations.py.original"
+readonly receipt="$state_root/receipt.txt"
+readonly expected_original_sha256='2d0cd7552ce76bc5bc4f8a26902b25dab62daf52e58ae2a3bfdffee9e7165356'
+readonly expected_replacement_sha256='85d884e319072d3b43c78e02115cdad6e2a0f50f53748c849ab1d3b7a7b58341'
+
+result() {
+  printf '\nSCRIPT RESULT\nishikawa_v1_3_1_poppler_hotfix=%s\n' "$1"
+}
+
+block() {
+  printf '%s\n' \
+    'FAILURE DETAIL' \
+    "reason=$1" \
+    "detail=$2" \
+    "operator_action=$3" >&2
+  result blocked >&2
+  exit 1
+}
+
+[[ "$mode" == '--apply' ]] \
+  || block supported_mode_required 'Use exactly --apply.' 'Rerun this command with --apply.'
+
+for command_name in awk chmod date install mkdir mv python3 rm sha256sum; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || block required_command_missing "Required command is unavailable: $command_name." \
+      'Restore the named command and rerun the hotfix.'
+done
+
+[[ -d "$ishikawa_root" && ! -L "$ishikawa_root" ]] \
+  || block installation_root_unsafe 'The selected Ishikawa installation root is missing or unsafe.' \
+    'Set ISHIKAWA_ROOT only to the canonical regular installation directory.'
+[[ -f "$target" && ! -L "$target" ]] \
+  || block target_file_unsafe 'The installed extractor is missing or unsafe.' \
+    'Restore the accepted v1.3.1 installation before applying this hotfix.'
+[[ -f "$replacement" && ! -L "$replacement" ]] \
+  || block payload_file_unsafe 'The hotfix payload is missing or unsafe.' \
+    'Re-extract the checksum-verified hotfix archive.'
+
+replacement_sha256="$(sha256sum -- "$replacement" | awk '{print $1}')"
+[[ "$replacement_sha256" == "$expected_replacement_sha256" ]] \
+  || block payload_identity_mismatch 'The replacement extractor checksum is not the accepted hotfix identity.' \
+    'Discard this extraction and verify the original hotfix archive again.'
+
+current_sha256="$(sha256sum -- "$target" | awk '{print $1}')"
+if [[ "$current_sha256" == "$expected_replacement_sha256" ]]; then
+  python3 "$target" --self-test >/dev/null \
+    || block installed_self_test_failed 'The already-applied extractor failed its self-test.' \
+      'Preserve the installation and review the retained hotfix state before retrying.'
+  printf '%s\n' '[HOTFIX] state=pass;change=already_applied;self_test=pass'
+  result pass
+  exit 0
+fi
+[[ "$current_sha256" == "$expected_original_sha256" ]] \
+  || block target_identity_mismatch 'The installed extractor is neither the accepted original nor this hotfix.' \
+    'Do not overwrite it; reconcile the installed application identity first.'
+
+mkdir -p -- "$state_root"
+if [[ -e "$backup" || -L "$backup" ]]; then
+  backup_sha256="$(sha256sum -- "$backup" 2>/dev/null | awk '{print $1}')"
+  [[ -f "$backup" && ! -L "$backup" && "$backup_sha256" == "$expected_original_sha256" ]] \
+    || block rollback_identity_mismatch 'The existing rollback file is not the accepted original.' \
+      'Preserve the state directory and reconcile it before retrying.'
+else
+  install -m 0755 -- "$target" "$backup"
+fi
+
+temporary_target="$target.hotfix.$$"
+cleanup() { rm -f -- "$temporary_target"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+install -m 0755 -- "$replacement" "$temporary_target"
+mv -f -- "$temporary_target" "$target"
+
+if ! python3 "$target" --self-test >/dev/null; then
+  install -m 0755 -- "$backup" "$temporary_target"
+  mv -f -- "$temporary_target" "$target"
+  block replacement_self_test_failed 'The replacement failed its self-test and the original was restored.' \
+    'Retain the terminal result and do not rerun ingestion.'
+fi
+
+installed_sha256="$(sha256sum -- "$target" | awk '{print $1}')"
+[[ "$installed_sha256" == "$expected_replacement_sha256" ]] \
+  || block publication_identity_mismatch 'The installed hotfix identity changed after publication.' \
+    'Preserve the installation and review filesystem integrity.'
+
+{
+  printf 'hotfix=v1.3.1-poppler-runtime-contract\n'
+  printf 'applied_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'original_sha256=%s\n' "$expected_original_sha256"
+  printf 'installed_sha256=%s\n' "$installed_sha256"
+  printf 'self_test=pass\n'
+} >"$receipt"
+chmod 0600 "$receipt"
+
+printf '%s\n' \
+  '[HOTFIX] state=pass;change=applied;self_test=pass' \
+  "receipt=$receipt"
+result pass

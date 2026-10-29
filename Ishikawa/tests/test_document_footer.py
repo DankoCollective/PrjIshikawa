@@ -70,7 +70,7 @@ class DocumentFooterTests(unittest.TestCase):
         with self.assertRaisesRegex(DocumentFooterError, "document_footer_policy_conflict"):
             extract_document_footer((_page(1), _page(2, policy="99 TST 2002"), _page(3)))
 
-    def test_partial_footer_fails_closed_and_unrelated_margin_is_ignored(self):
+    def test_partial_footer_uses_generic_fallback_and_unrelated_margin_is_ignored(self):
         unrelated = _Page(1, (
             _Line("p0001-l0000", "I. Body", 54.0, 120.0),
             _Line("p0001-l0001", "ordinary note", 54.0, 730.0),
@@ -80,8 +80,12 @@ class DocumentFooterTests(unittest.TestCase):
             _Line("p0001-l0000", "SEO Policy", 54.0, 730.0),
             _Line("p0001-l0001", "99 TST 2001", 116.0, 730.0),
         ))
-        with self.assertRaisesRegex(DocumentFooterError, "document_footer_incomplete"):
-            extract_document_footer((partial,))
+        self.assertIsNone(extract_document_footer((partial,)))
+
+        # A document-specific or incompletely extracted footer on only one
+        # page is not a proven control-footer profile. Preserve it for the
+        # generic recurring-furniture path instead of blocking normalization.
+        self.assertIsNone(extract_document_footer((_page(1, total=2), unrelated)))
 
 
 if __name__ == "__main__":

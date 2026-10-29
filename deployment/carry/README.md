@@ -124,9 +124,18 @@ that attempt created. It never changes the database during installation.
 
 ## Database and protected corpus
 
-After application installation, obtain distinct ingestion and retrieval
-passwords through the approved secret-delivery path. A shell can accept them
-without terminal echo:
+Application apply does not initialize PostgreSQL. On every fresh installation,
+database initialization is the required next packaged stage. Do not create
+corpus metadata, generate a catalog or manifest, or start ingestion until this
+stage ends with:
+
+```text
+SCRIPT RESULT
+ishikawa_deployment_install_schema=pass
+```
+
+Obtain distinct ingestion and retrieval passwords through the approved
+secret-delivery path. A shell can accept them without terminal echo:
 
 ```bash
 read -rsp 'Ingestion database password: ' ISHIKAWA_POSTGRESQL_INGEST_PASSWORD
@@ -146,6 +155,11 @@ canonical schema v5. It starts the boot-disabled PostgreSQL cluster only when
 needed and returns it to its prior stopped state. On failure it removes only
 the roles and database marked as created by that attempt. It never writes a
 password to the package, command line, report, or output.
+
+This is an existing packaged action, not an operator-assembled chain. Run and
+review it as its own stage. Do not substitute manual SQL or a new glue wrapper.
+Once its pass marker is retained, continue with the installed corpus tooling
+below.
 
 Inside the protected environment, place approved PDFs under the installed
 `corpus/source` tree and fill `config/corpus_metadata.csv` with the required

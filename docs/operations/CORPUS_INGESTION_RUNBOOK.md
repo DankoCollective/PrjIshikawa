@@ -17,6 +17,33 @@ new disposable database and private application copy. Script 06 likewise
 generates both for the first isolated durable v1.3 cluster, then requires their
 exact installed bytes on every attended reuse.
 
+## Fresh-install entry gate
+
+On a fresh installation, do not begin corpus preparation or ingestion after
+application installation alone. The required packaged order is:
+
+1. `deploy-ishikawa apply` passes and installs the application.
+2. `deploy-ishikawa install-schema` passes and initializes the empty database,
+   pgvector, schema v5, and the `rag_owner`, `rag_ingest`, and `rag_retrieval`
+   roles.
+3. Only then create or review corpus metadata, the document catalog, and the
+   pending manifest; validate and publish ingestion afterward.
+
+The retained database-stage result must be:
+
+```text
+SCRIPT RESULT
+ishikawa_deployment_install_schema=pass
+```
+
+An `ishikawa_ingestion_config=ready` result proves only that the corpus
+configuration was generated; it does not prove database initialization. Do
+not compensate for a missing schema-stage result with manual SQL, an ad hoc
+wrapper, or a newly invented orchestrator. Run the existing packaged action,
+review its result, and continue this runbook. An established installation with
+a separately proven compatible schema-v5 database does not rerun clean
+initialization.
+
 ## 1. Confirm the installation and dependencies
 
 Use the canonical Tech installation:
@@ -26,8 +53,9 @@ cd "$HOME/Documents/Ishikawa"
 ```
 
 Before ingestion, confirm that PostgreSQL 16 with pgvector is available, the
-schema-v5 database and roles have been installed, the configured Nomic endpoint
-is reachable, and `scripts/ishikawa-ingest` is executable. Review
+schema-v5 database and roles have been installed with the fresh-install gate
+above (or separately proven on an established installation), the configured
+Nomic endpoint is reachable, and `scripts/ishikawa-ingest` is executable. Review
 `config/deployment.yaml` and `config/ingestion_dependencies.yaml`; do not put
 credentials in either file.
 

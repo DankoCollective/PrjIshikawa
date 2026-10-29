@@ -293,7 +293,11 @@ def extract_document_control_header(pages: Sequence[Any]) -> dict[str, Any] | No
         )
     department = canonical_values["department"]
     if not isinstance(department, str) or not department:
-        raise DocumentControlError("document_control_department_missing")
+        # A complete-looking table with an empty or image-only department
+        # cell is not enough evidence for the specialized control-header
+        # profile. Leave it to generic structural normalization instead of
+        # blocking the entire document before chunking.
+        return None
 
     result = {
         "schema_version": HEADER_SCHEMA_VERSION,

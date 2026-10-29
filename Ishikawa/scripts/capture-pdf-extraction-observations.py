@@ -20,13 +20,6 @@ from typing import Any
 
 
 EXPECTED_PACKAGE = "poppler-utils"
-EXPECTED_PACKAGE_VERSIONS = frozenset(
-    {
-        "24.02.0-1ubuntu9.10",
-        "24.02.0-1ubuntu9.11",
-    }
-)
-EXPECTED_TOOL_VERSION = "24.02.0"
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_RESULT_BYTES = 128 * 1024 * 1024
 COMMAND_TIMEOUT_SECONDS = 60
@@ -129,7 +122,7 @@ def package_version() -> str:
     if (
         len(fields) != 2
         or fields[0] != "install ok installed"
-        or fields[1] not in EXPECTED_PACKAGE_VERSIONS
+        or not re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", fields[1])
     ):
         raise CaptureError("unexpected_poppler_package")
     return fields[1]
@@ -141,9 +134,14 @@ def tool_version(executable: str) -> str:
     if not match:
         raise CaptureError("poppler_tool_version_unavailable")
     version = match.group(1).decode("ascii")
-    if version != EXPECTED_TOOL_VERSION:
-        raise CaptureError("unexpected_poppler_tool_version")
     return version
+
+
+def require_matching_tool_versions(pdfinfo_version: str, pdftotext_version: str) -> None:
+    """Require one coherent Poppler toolset without encoding a host package revision."""
+
+    if pdfinfo_version != pdftotext_version:
+        raise CaptureError("poppler_tool_version_mismatch")
 
 
 def validate_source_manifest(
@@ -449,6 +447,7 @@ def main() -> int:
     package = package_version()
     pdfinfo_version = tool_version("/usr/bin/pdfinfo")
     pdftotext_version = tool_version("/usr/bin/pdftotext")
+    require_matching_tool_versions(pdfinfo_version, pdftotext_version)
     output_dir.mkdir(mode=0o700)
     raw_dir = output_dir / "raw"
     raw_dir.mkdir(mode=0o700)
